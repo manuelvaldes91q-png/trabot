@@ -59,7 +59,9 @@ const STATE_FILE = path.join(__dirname, 'bot-state.json');
 
 function saveState() {
   try {
-    fs.writeFileSync(STATE_FILE, JSON.stringify({ SIM, watchItems, logs, monitorOn, monitorInterval, mode, appConfig }));
+    const tmp = STATE_FILE + '.tmp';
+    fs.writeFileSync(tmp, JSON.stringify({ SIM, watchItems, logs, monitorOn, monitorInterval, mode, appConfig }));
+    fs.renameSync(tmp, STATE_FILE);
   } catch (e) {
     console.error("Error guardando estado:", e);
   }
@@ -370,10 +372,14 @@ async function startServer() {
     app.use(vite.middlewares);
   } else {
     // Producción: Servir archivos estáticos de /dist o / si no existe
-    app.use(express.static(path.join(__dirname, "dist")));
-    app.get('*', (req, res) => {
-      res.sendFile(path.join(__dirname, 'dist', 'index.html'));
-    });
+    const distPath = path.join(__dirname, "dist");
+    if (fs.existsSync(distPath)) {
+      app.use(express.static(distPath));
+      app.get('*', (req, res) => res.sendFile(path.join(distPath, 'index.html')));
+    } else {
+      app.use(express.static(__dirname));
+      app.get('*', (req, res) => res.sendFile(path.join(__dirname, 'index.html')));
+    }
   }
 
   app.listen(PORT, "0.0.0.0", () => {
