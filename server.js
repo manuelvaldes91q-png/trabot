@@ -378,7 +378,7 @@ async function startServer() {
 
   app.listen(PORT, "0.0.0.0", () => {
     console.log(`🚀 SERVIDOR VPS INICIADO 24/7 en puerto ${PORT}`);
-    console.log(`📂 Panel de control accesible vía IP pública:3000 o enlace generado.`);
+    console.log(`📂 Panel de control accesible vía IP pública:${PORT} o enlace generado.`);
   });
 }
 

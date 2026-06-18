@@ -1034,7 +1034,8 @@ function addToWatch(){
     headers: { 'Content-Type': 'application/json' },
     body: JSON.stringify({ action: 'addWatch', payload: toAdd })
   }).then(() => {
-    document.getElementById('addForm').style.display='none';
+    const afPanel = document.getElementById('addFormPanel');
+    if(afPanel) afPanel.remove();
     showFlash('buy','✅ Agregado al VPS',`${selData.symbol} monitorizado desde el servidor`);
   });
 }
