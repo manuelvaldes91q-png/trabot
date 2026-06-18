@@ -436,7 +436,7 @@ function changeRunMode() {
   myFetch('/api/action', {
     method: 'POST', headers:{'Content-Type':'application/json'}, body: JSON.stringify({action: 'setMode', payload: {mode: m}})
   });
-  document.getElementById('dBalText').textContent = m === 'real' ? 'USDT (Real MEXC)' : 'USDT';
+  document.getElementById('dBalS').textContent = m === 'real' ? 'USDT (Real MEXC)' : 'disponible';
 }
 function toggleSound(){
   soundOn=!soundOn;
@@ -610,6 +610,25 @@ async function initServerState(){
       if(data.watchItems && Array.isArray(data.watchItems)){
         watchItems = data.watchItems.map(w=>({...w, klines1h:[], klines1d:[], orders:w.orders||[]}));
       }
+      
+      monitorOn = data.monitorOn || false;
+      cycleN = data.cycleN || 0;
+      if (data.mode) {
+        document.getElementById('modeSel').value = data.mode;
+        document.getElementById('dBalS').textContent = data.mode === 'real' ? 'USDT (Real MEXC)' : 'disponible';
+      }
+      
+      const bStart = document.getElementById('btnStart');
+      const bStop = document.getElementById('btnStop');
+      const dot = document.getElementById('dot');
+      const stat = document.getElementById('hstat');
+      if (monitorOn) {
+        dot.classList.add('on');
+        bStart.style.display='none';
+        bStop.style.display='';
+        stat.innerHTML=`Ciclo ${cycleN} · ${watchItems.length} monedas <span style="color:var(--g)">(VPS Activo)</span>`;
+      }
+
       if(watchItems.length>0){
         addLog(`📂 Datos y estado restaurados desde el VPS: ${watchItems.length} monedas`, 'info');
         renderWatchList(); updateDash();
@@ -1206,7 +1225,7 @@ setInterval(async () => {
     SIM = data.SIM || SIM;
     if(data.mode) {
       document.getElementById('modeSel').value = data.mode;
-      document.getElementById('dBalText').textContent = data.mode === 'real' ? 'USDT (Real MEXC)' : 'USDT';
+      document.getElementById('dBalS').textContent = data.mode === 'real' ? 'USDT (Real MEXC)' : 'disponible';
     }
     watchItems = data.watchItems || watchItems;
     cycleN = data.cycleN || cycleN;
@@ -1246,7 +1265,10 @@ setInterval(async () => {
     }
     document.getElementById('cycleN').textContent=cycleN;
     document.getElementById('htime').textContent=new Date().toLocaleTimeString('es',{hour:'2-digit',minute:'2-digit',second:'2-digit'});
-  } catch(e) {}
+  } catch(e) {
+    console.error('Interval error:', e);
+    // document.getElementById('logbody').innerHTML = '<div style="color:red">Error en monitor: ' + e.message + '</div>';
+  }
 }, 2000);
 
 // ══════════════════════════════════════════════════════════
