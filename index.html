@@ -381,6 +381,7 @@ let authToken = localStorage.getItem('dh_pwd') || '';
 async function myFetch(url, opts = {}) {
   if (!opts.headers) opts.headers = {};
   if (opts.method === 'POST' && !opts.headers['Content-Type']) opts.headers['Content-Type'] = 'application/json';
+  if (!opts.cache) opts.cache = 'no-store';
   opts.headers['Authorization'] = 'Bearer ' + authToken;
   const res = await fetch(url, opts);
   if (res.status === 401) {
@@ -605,9 +606,9 @@ async function initServerState(){
     const res = await myFetch('/api/state');
     if(res.ok){
       const data = await res.json();
-      if(data.sim) Object.assign(SIM, data.sim);
-      if(data.watch && Array.isArray(data.watch)){
-        watchItems = data.watch.map(w=>({...w, klines1h:[], klines1d:[], orders:w.orders||[]}));
+      if(data.SIM) Object.assign(SIM, data.SIM);
+      if(data.watchItems && Array.isArray(data.watchItems)){
+        watchItems = data.watchItems.map(w=>({...w, klines1h:[], klines1d:[], orders:w.orders||[]}));
       }
       if(watchItems.length>0){
         addLog(`📂 Datos y estado restaurados desde el VPS: ${watchItems.length} monedas`, 'info');

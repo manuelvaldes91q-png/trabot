@@ -238,6 +238,9 @@ app.post('/api/login', (req, res) => {
   else res.status(401).json({error: 'Invalid password'});
 });
 app.get('/api/state', (req, res) => {
+  res.setHeader('Cache-Control', 'no-store, no-cache, must-revalidate, proxy-revalidate');
+  res.setHeader('Pragma', 'no-cache');
+  res.setHeader('Expires', '0');
   res.json({ SIM, watchItems, logs, monitorOn, monitorInterval, cycleN, mode });
 });
 
