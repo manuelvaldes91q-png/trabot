@@ -196,12 +196,42 @@ async function runCycle() {
           w.slPrice = null; w.tp1Price = null; w.tp2Price = null;
           addLog(`❌ SL ${w.symbol}: $${fpZ(cp,cp)} · P&L $${pnl.toFixed(2)} (${pnlP.toFixed(1)}%)`, 'sl_');
           
+          watchItems.splice(wi, 1);
+          wi--;
         } else if (w.tp1Price && cp >= w.tp1Price && !w.tp1Hit) {
+          const pnl = inv * pnlP / 100;
+          const realOk = await mxRealOrder(w.symbol, 'SELL', inv + pnl, cp);
+          if (realOk) {
+            if(mode!=='real') SIM.balance += inv + pnl;
+            SIM.pnl += pnl; 
+            SIM.wins++;
+          } else continue;
+          SIM.trades.push({ symbol: w.symbol, avgEntry: avg, exit: cp, pnl, pnlPct: pnlP.toFixed(2), at: Date.now() });
+          
+          w.orders.forEach(o => { if (o.status === 'pending') o.status = 'cancelled'; });
           w.tp1Hit = true;
-          addLog(`🎯 TP1 ${w.symbol}: $${fpZ(cp,cp)} +${pnlP.toFixed(1)}%`, 'tp');
+          w.slPrice = null; w.tp1Price = null; w.tp2Price = null;
+          addLog(`🎯 TP1 CERRADO ${w.symbol}: $${fpZ(cp,cp)} · P&L $${pnl.toFixed(2)} (+${pnlP.toFixed(1)}%)`, 'tp');
+          
+          watchItems.splice(wi, 1);
+          wi--;
         } else if (w.tp2Price && cp >= w.tp2Price && !w.tp2Hit) {
+          const pnl = inv * pnlP / 100;
+          const realOk = await mxRealOrder(w.symbol, 'SELL', inv + pnl, cp);
+          if (realOk) {
+            if(mode!=='real') SIM.balance += inv + pnl;
+            SIM.pnl += pnl; 
+            SIM.wins++;
+          } else continue;
+          SIM.trades.push({ symbol: w.symbol, avgEntry: avg, exit: cp, pnl, pnlPct: pnlP.toFixed(2), at: Date.now() });
+          
+          w.orders.forEach(o => { if (o.status === 'pending') o.status = 'cancelled'; });
           w.tp2Hit = true;
-          addLog(`🚀 TP2 ${w.symbol}: $${fpZ(cp,cp)} +${pnlP.toFixed(1)}%`, 'tp');
+          w.slPrice = null; w.tp1Price = null; w.tp2Price = null;
+          addLog(`🚀 TP2 CERRADO ${w.symbol}: $${fpZ(cp,cp)} · P&L $${pnl.toFixed(2)} (+${pnlP.toFixed(1)}%)`, 'tp');
+          
+          watchItems.splice(wi, 1);
+          wi--;
         }
       }
     } catch (e) {
