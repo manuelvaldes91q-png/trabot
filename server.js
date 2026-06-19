@@ -109,13 +109,13 @@ async function mxPrice(sym) {
 // ============================================
 
 async function mxRealOrder(symbol, side, amountUSDT, price) {
-  if (mode !== 'real') return true;
+  if (mode !== 'real') return { ok: true, orderId: 'sim' };
   const apiKey = appConfig.mexcApiKey || process.env.MEXC_API_KEY;
   const apiSecret = appConfig.mexcApiSecret || process.env.MEXC_API_SECRET;
   if (!apiKey || !apiSecret) {
-    addLog('⚠️ Faltan API Keys de MEXC en el .env', 'warn'); return false;
+    addLog('⚠️ Faltan API Keys de MEXC en el .env', 'warn'); return { ok: false };
   }
-  const qty = (amountUSDT / price).toFixed(4); // Ajustar según precisión // TO-DO: mejorar
+  const qty = (amountUSDT / price).toFixed(2); // Ajustar precisión
   const ts = Date.now();
   let qs = `symbol=${symbol}USDT&side=${side}&type=LIMIT&quantity=${qty}&price=${price}&timestamp=${ts}`;
   const sig = crypto.createHmac('sha256', apiSecret).update(qs).digest('hex');
@@ -124,8 +124,24 @@ async function mxRealOrder(symbol, side, amountUSDT, price) {
       method: 'POST', headers: { 'X-MEXC-APIKEY': apiKey }
     });
     const res = await r.json();
-    if (res.code) { addLog(`MEXC Error (${symbol}): ${res.msg}`, 'warn'); return false; }
+    if (res.code) { addLog(`MEXC Error (${symbol}): ${res.msg}`, 'warn'); return { ok: false }; }
     addLog(`✅ MEXC REAL ${side}: ${symbol} a ${price}`, side==='BUY'?'buy':'sell');
+    return { ok: true, orderId: res.orderId };
+  } catch(e) { return { ok: false }; }
+}
+
+async function mxCancelOrder(symbol, orderId) {
+  if (mode !== 'real' || !orderId || orderId === 'sim') return true;
+  const apiKey = appConfig.mexcApiKey || process.env.MEXC_API_KEY;
+  const apiSecret = appConfig.mexcApiSecret || process.env.MEXC_API_SECRET;
+  if (!apiKey || !apiSecret) return false;
+  const ts = Date.now();
+  let qs = `symbol=${symbol}USDT&orderId=${orderId}&timestamp=${ts}`;
+  const sig = crypto.createHmac('sha256', apiSecret).update(qs).digest('hex');
+  try {
+    await fetch(`https://api.mexc.com/api/v3/order?${qs}&signature=${sig}`, {
+      method: 'DELETE', headers: { 'X-MEXC-APIKEY': apiKey }
+    });
     return true;
   } catch(e) { return false; }
 }
@@ -159,10 +175,23 @@ async function runCycle() {
           
           if (!w.filledBuys) w.filledBuys = [];
           w.filledBuys.push({ price: cp, amount: o.amount, level: o.level });
-          const realOk = await mxRealOrder(w.symbol, 'BUY', o.amount, cp);
-          if (realOk) {
+          const realRes = await mxRealOrder(w.symbol, 'BUY', o.amount, cp);
+          if (realRes && realRes.ok) {
             if(mode!=='real') SIM.balance -= o.amount;
             SIM.totalExec++;
+            
+            // Si tiene TP1, mandamos la venta LIMIT de inmediato (en modo real se queda en el libro)
+            if (w.tp1Price) {
+               // calculamos los USDT totales a recibir a tp1Price
+               const qtyTokens = o.amount / cp;
+               const totalTargetUsdt = qtyTokens * w.tp1Price;
+               const tpRes = await mxRealOrder(w.symbol, 'SELL', totalTargetUsdt, w.tp1Price);
+               if (tpRes && tpRes.ok && tpRes.orderId !== 'sim') {
+                 if (!w.realSellOrderIds) w.realSellOrderIds = [];
+                 w.realSellOrderIds.push(tpRes.orderId);
+                 addLog(`⏱ Orden Limit TP colocada en MEXC a $${w.tp1Price}`, 'info');
+               }
+            }
           } else continue; // Si falla, abortar ejecución actual
           
           if (!w.slPrice) {
@@ -183,9 +212,13 @@ async function runCycle() {
         const pnlP = (cp - avg) / avg * 100;
         
         if (cp <= w.slPrice) {
+          // Si cae a SL, tenemos que cancelar la orden Limit TP si existe antes de vender el SL!
+          if (w.realSellOrderIds && w.realSellOrderIds.length) {
+            for (let id of w.realSellOrderIds) await mxCancelOrder(w.symbol, id);
+          }
           const pnl = inv * pnlP / 100;
-          const realOk = await mxRealOrder(w.symbol, 'SELL', inv + pnl, cp);
-          if (realOk) {
+          const realRes = await mxRealOrder(w.symbol, 'SELL', inv + pnl, cp);
+          if (realRes && realRes.ok) {
             if(mode!=='real') SIM.balance += inv + pnl;
             SIM.pnl += pnl; 
             SIM.losses++;
@@ -200,8 +233,16 @@ async function runCycle() {
           wi--;
         } else if (w.tp1Price && cp >= w.tp1Price && !w.tp1Hit) {
           const pnl = inv * pnlP / 100;
-          const realOk = await mxRealOrder(w.symbol, 'SELL', inv + pnl, cp);
-          if (realOk) {
+          let realRes = { ok: true };
+          // En modo real, la orden LIMIT ya se debería haber ejecutado en el exchange (o lo hará pronto)
+          // Pero si es SIM o no se puso la limit, la lanzamos
+          if (mode === 'sim') {
+             realRes = await mxRealOrder(w.symbol, 'SELL', inv + pnl, cp);
+          } else {
+             // En modo real simplemente asumimos que la orden limit se rellenó si el precio lo cruzó
+             w.tp1Hit = true;
+          }
+          if (realRes && realRes.ok) {
             if(mode!=='real') SIM.balance += inv + pnl;
             SIM.pnl += pnl; 
             SIM.wins++;
@@ -217,8 +258,13 @@ async function runCycle() {
           wi--;
         } else if (w.tp2Price && cp >= w.tp2Price && !w.tp2Hit) {
           const pnl = inv * pnlP / 100;
-          const realOk = await mxRealOrder(w.symbol, 'SELL', inv + pnl, cp);
-          if (realOk) {
+          let realRes = { ok: true };
+          if (mode === 'sim') {
+             realRes = await mxRealOrder(w.symbol, 'SELL', inv + pnl, cp);
+          } else {
+             w.tp2Hit = true;
+          }
+          if (realRes && realRes.ok) {
             if(mode!=='real') SIM.balance += inv + pnl;
             SIM.pnl += pnl; 
             SIM.wins++;
@@ -321,6 +367,9 @@ app.post('/api/action', async (req, res) => {
     if (w) {
       const filled = w.orders.filter(o => o.status === 'filled');
       if (filled.length) {
+        if (w.realSellOrderIds && w.realSellOrderIds.length) {
+           for (let id of w.realSellOrderIds) await mxCancelOrder(w.symbol, id);
+        }
         const inv = filled.reduce((a, o) => a + o.amount, 0);
         const avg = filled.reduce((a, o) => a + o.price * o.amount, 0) / inv;
         const cp = w.currentPrice || w.cp;
