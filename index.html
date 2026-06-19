@@ -673,6 +673,11 @@ async function openConfigModal() {
         <input type="text" id="cfgTgChat" class="inp" placeholder="-100xxxxxxx" style="width:100%">
       </div>
       
+      <div style="margin-bottom:10px">
+        <div style="font-size:10px;color:var(--t2);margin-bottom:4px">Contraseña del Panel Web</div>
+        <input type="password" id="cfgAppPwd" class="inp" placeholder="Dejar en blanco para mantener la actual" style="width:100%">
+      </div>
+      
       <div style="display:flex;gap:10px;justify-content:flex-end">
         <button class="btn btn-d" onclick="this.parentElement.parentElement.parentElement.remove()">Cancelar</button>
         <button class="btn btn-b" id="btnSaveCfg">Guardar Settings</button>
@@ -692,15 +697,25 @@ async function openConfigModal() {
   
   document.getElementById('btnSaveCfg').onclick = async () => {
     try {
+      const payload = {
+        mexcApiKey: document.getElementById('cfgMexcKey').value.trim(),
+        mexcApiSecret: document.getElementById('cfgMexcSecret').value.trim(),
+        tgBotToken: document.getElementById('cfgTgToken').value.trim(),
+        tgChatId: document.getElementById('cfgTgChat').value.trim()
+      };
+      
+      const newPwd = document.getElementById('cfgAppPwd').value.trim();
+      if(newPwd) payload.appPassword = newPwd;
+      
       await myFetch('/api/config', {
         method: 'POST',
-        body: JSON.stringify({
-          mexcApiKey: document.getElementById('cfgMexcKey').value.trim(),
-          mexcApiSecret: document.getElementById('cfgMexcSecret').value.trim(),
-          tgBotToken: document.getElementById('cfgTgToken').value.trim(),
-          tgChatId: document.getElementById('cfgTgChat').value.trim()
-        })
+        body: JSON.stringify(payload)
       });
+      
+      if(newPwd) {
+        localStorage.setItem('vpsToken', newPwd);
+        alert('Contraseña actualizada correctamente. Iniciarás sesión con la nueva.');
+      }
       alert('✅ Configuración guardada en el servidor');
       p.remove();
     } catch(e) {

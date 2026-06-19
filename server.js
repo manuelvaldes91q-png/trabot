@@ -301,16 +301,17 @@ startLoop();
 // ============================================
 // API ENDPOINTS PARA LA INTERFAZ WEB
 // ============================================
-const APP_PWD = process.env.APP_PASSWORD || 'admin123';
 app.use('/api', (req, res, next) => {
   if (req.path === '/login') return next();
+  const pwd = appConfig.appPassword || process.env.APP_PASSWORD || 'admin123';
   const auth = req.headers.authorization;
-  if (auth !== `Bearer ${APP_PWD}`) return res.status(401).json({error: 'Unauthorized'});
+  if (auth !== `Bearer ${pwd}`) return res.status(401).json({error: 'Unauthorized'});
   next();
 });
 
 app.post('/api/login', (req, res) => {
-  if (req.body.password === APP_PWD) res.json({status: 'ok', token: APP_PWD});
+  const pwd = appConfig.appPassword || process.env.APP_PASSWORD || 'admin123';
+  if (req.body.password === pwd) res.json({status: 'ok', token: pwd});
   else res.status(401).json({error: 'Invalid password'});
 });
 app.get('/api/state', (req, res) => {
@@ -326,11 +327,12 @@ app.get('/api/config', (req, res) => {
 });
 
 app.post('/api/config', (req, res) => {
-  const { mexcApiKey, mexcApiSecret, tgBotToken, tgChatId } = req.body;
+  const { mexcApiKey, mexcApiSecret, tgBotToken, tgChatId, appPassword } = req.body;
   if(mexcApiKey !== undefined) appConfig.mexcApiKey = mexcApiKey;
   if(mexcApiSecret !== undefined) appConfig.mexcApiSecret = mexcApiSecret;
   if(tgBotToken !== undefined) appConfig.tgBotToken = tgBotToken;
   if(tgChatId !== undefined) appConfig.tgChatId = tgChatId;
+  if(appPassword !== undefined) appConfig.appPassword = appPassword;
   saveState();
   res.json({ status: 'ok', config: appConfig });
 });
