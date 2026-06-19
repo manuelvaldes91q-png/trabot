@@ -348,6 +348,12 @@ app.post('/api/action', async (req, res) => {
     monitorInterval = payload.interval || 15;
     addLog(`🚀 Monitor VPS activo — ${monitorInterval}s`, 'info');
     startLoop();
+
+  } else if (action === 'updateInterval') {
+    monitorInterval = payload.interval || 15;
+    if (monitorOn) {
+      startLoop(); // Restart loop with new interval
+    }
     
   } else if (action === 'stop') {
     monitorOn = false;
