@@ -860,10 +860,11 @@ function renderScanResults(){
     const t1d=d.trend1d||{label:'—',emoji:'🟡',score:0,bull:false};
     const zzColor=zz.cycles>=3?'var(--g)':zz.cycles>=2?'var(--y)':'var(--t2)';
     const zzIcon=zz.higherHighs&&zz.higherLows?'📈':zz.higherLows?'📊':'〰️';
+    const isWatched = watchItems.some(w => w.symbol === d.symbol);
     return `<div class="rcard ${trendCls} ${selScan===d.symbol?'sel':''}" onclick="selectScan('${d.symbol}')">
       <!-- FILA 1: Símbolo + cambio -->
       <div class="rc-top">
-        <span class="rc-sym">${d.symbol}</span>
+        <span class="rc-sym" style="display:flex;align-items:center">${d.symbol} ${isWatched ? '<span class="watch-badge" style="font-size:9px;color:var(--b);background:rgba(0,226,255,0.15);padding:2px 4px;border-radius:3px;margin-left:8px;font-weight:600;letter-spacing:0">✔️ ACTIVA</span>' : ''}</span>
         <span style="font-family:var(--mono);font-size:10px;font-weight:700;color:${d.chg>=0?'var(--g)':'var(--r)'}">${d.chg>=0?'+':''}${d.chg.toFixed(1)}% 24h</span>
       </div>
       <!-- FILA 2: Precio + Tendencia 1H -->
@@ -1247,6 +1248,18 @@ setInterval(async () => {
     }
     watchItems = data.watchItems || watchItems;
     cycleN = data.cycleN || cycleN;
+    
+    // update scan badges
+    document.querySelectorAll('.rc-sym').forEach(el => {
+      const sym = el.childNodes[0].textContent.trim();
+      const isWatched = watchItems.some(w => w.symbol === sym);
+      const hasBadge = el.querySelector('.watch-badge');
+      if (isWatched && !hasBadge) {
+         el.innerHTML = sym + ' <span class="watch-badge" style="font-size:9px;color:var(--b);background:rgba(0,226,255,0.15);padding:2px 4px;border-radius:3px;margin-left:8px;font-weight:600;letter-spacing:0">✔️ ACTIVA</span>';
+      } else if (!isWatched && hasBadge) {
+         el.innerHTML = sym;
+      }
+    });
     
     // Validar si hubo cambios en los logs que ameriten notificación flash/pantalla
     const newLogs = data.logs || [];
