@@ -337,6 +337,20 @@ app.post('/api/config', (req, res) => {
   res.json({ status: 'ok', config: appConfig });
 });
 
+app.get('/api/mexc/*', async (req, res) => {
+  try {
+    const endpoint = req.params[0];
+    const qs = new URLSearchParams(req.query).toString();
+    const url = `https://api.mexc.com/api/v3/${endpoint}${qs ? '?' + qs : ''}`;
+    const r = await fetch(url);
+    if (!r.ok) return res.status(r.status).json({error: `MEXC err: ${r.statusText}`});
+    const data = await r.json();
+    res.json(data);
+  } catch (err) {
+    res.status(500).json({error: err.message});
+  }
+});
+
 app.post('/api/action', async (req, res) => {
   const { action, payload } = req.body;
   

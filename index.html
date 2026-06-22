@@ -468,14 +468,23 @@ function pushNotif(title,body){
 const PX=[u=>`https://corsproxy.io/?${encodeURIComponent(u)}`,u=>`https://api.allorigins.win/raw?url=${encodeURIComponent(u)}`,u=>`https://thingproxy.freeboard.io/fetch/${u}`,u=>u];
 let pxi=0;
 async function pf(url,ms=10000){
-  for(let i=0;i<PX.length;i++){const idx=(pxi+i)%PX.length;try{const c=new AbortController();const t=setTimeout(()=>c.abort(),ms);const r=await fetch(PX[idx](url),{signal:c.signal});clearTimeout(t);if(!r.ok)continue;const d=JSON.parse(await r.text());pxi=idx;return d;}catch{continue;}}
-  throw new Error('Sin conexión');
+  try {
+    const c=new AbortController();
+    const t=setTimeout(()=>c.abort(),ms);
+    const r=await myFetch('/api/mexc/' + url, {signal:c.signal});
+    clearTimeout(t);
+    if(!r.ok) throw new Error('Proxy error');
+    return await r.json();
+  } catch(e) {
+    console.error('pf error', e);
+    throw new Error('Sin conexión');
+  }
 }
-async function mxTickers(){const d=await pf('https://api.mexc.com/api/v3/ticker/24hr',18000);if(Array.isArray(d))return d;throw new Error('MEXC no disponible');}
-async function mxKlines(sym,iv,lim=120){const im={m15:'15m',m30:'30m',h1:'60m',h4:'4h',d1:'1d'};try{const d=await pf(`https://api.mexc.com/api/v3/klines?symbol=${sym}&interval=${im[iv]||'60m'}&limit=${lim}`,9000);if(Array.isArray(d))return d.map(k=>[Math.floor(+k[0]/1000),+k[1],+k[2],+k[3],+k[4],+k[5]]);return[];}catch{return[];}}
-async function mxDepth(sym,lim=200){try{const d=await pf(`https://api.mexc.com/api/v3/depth?symbol=${sym}&limit=${lim}`,7000);if(d?.bids)return d;return null;}catch{return null;}}
-async function mxPrice(sym){try{const d=await pf(`https://api.mexc.com/api/v3/ticker/price?symbol=${sym}USDT`,4000);return+d.price||0;}catch{return 0;}}
-async function mxTicker24h(sym){try{return await pf(`https://api.mexc.com/api/v3/ticker/24hr?symbol=${sym}USDT`,5000);}catch{return null;}}
+async function mxTickers(){const d=await pf('ticker/24hr',18000);if(Array.isArray(d))return d;throw new Error('MEXC no disponible');}
+async function mxKlines(sym,iv,lim=120){const im={m15:'15m',m30:'30m',h1:'60m',h4:'4h',d1:'1d'};try{const d=await pf(`klines?symbol=${sym}&interval=${im[iv]||'60m'}&limit=${lim}`,9000);if(Array.isArray(d))return d.map(k=>[Math.floor(+k[0]/1000),+k[1],+k[2],+k[3],+k[4],+k[5]]);return[];}catch{return[];}}
+async function mxDepth(sym,lim=200){try{const d=await pf(`depth?symbol=${sym}&limit=${lim}`,7000);if(d?.bids)return d;return null;}catch{return null;}}
+async function mxPrice(sym){try{const d=await pf(`ticker/price?symbol=${sym}USDT`,4000);return+d.price||0;}catch{return 0;}}
+async function mxTicker24h(sym){try{return await pf(`ticker/24hr?symbol=${sym}USDT`,5000);}catch{return null;}}
 
 // FORMAT
 function fpZ(p,ref){if(!p||!ref)return'0';if(ref>=10)return p.toFixed(3);if(ref>=0.1)return p.toFixed(4);if(ref>=0.01)return p.toFixed(5);if(ref>=0.001)return p.toFixed(6);const m=ref.toFixed(12).match(/^0\.(0+)/);return m?p.toFixed(m[1].length+4):p.toFixed(6);}
