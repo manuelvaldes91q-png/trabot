@@ -5,6 +5,8 @@ import { fileURLToPath } from "url";
 import { createServer as createViteServer } from "vite";
 import crypto from "crypto";
 import "dotenv/config";
+import { Connection, Keypair, VersionedTransaction, PublicKey } from '@solana/web3.js';
+import bs58 from 'bs58';
 
 const __filename = fileURLToPath(import.meta.url);
 const __dirname = path.dirname(__filename);
@@ -28,7 +30,12 @@ let appConfig = {
   mexcApiKey: process.env.MEXC_API_KEY || '',
   mexcApiSecret: process.env.MEXC_API_SECRET || '',
   tgBotToken: process.env.TELEGRAM_BOT_TOKEN || '',
-  tgChatId: process.env.TELEGRAM_CHAT_ID || ''
+  tgChatId: process.env.TELEGRAM_CHAT_ID || '',
+  solanaPrivateKey: process.env.SOLANA_PRIVATE_KEY || '',
+  solanaRpcUrl: process.env.SOLANA_RPC_URL || 'https://api.mainnet-beta.solana.com',
+  solanaBaseToken: process.env.SOLANA_BASE_TOKEN || 'SOL',
+  solanaSlippage: process.env.SOLANA_SLIPPAGE ? parseFloat(process.env.SOLANA_SLIPPAGE) : 2.5,
+  solanaPriorityFee: process.env.SOLANA_PRIORITY_FEE || 'auto'
 };
 
 function fpZ(p,ref){if(!p||!ref)return'0';if(ref>=10)return p.toFixed(3);if(ref>=0.1)return p.toFixed(4);if(ref>=0.01)return p.toFixed(5);if(ref>=0.001)return p.toFixed(6);const m=ref.toFixed(12).match(/^0\.(0+)/);return m?p.toFixed(m[1].length+4):p.toFixed(6);}
@@ -105,6 +112,199 @@ async function mxPrice(sym) {
 }
 
 // ============================================
+// SOLANA INTEGRATION (LIVE PRICE, BALANCES, JUPITER API)
+// ============================================
+async function getSolanaPrice(tokenAddress) {
+  try {
+    const r = await fetch(`https://api.dexscreener.com/latest/dex/tokens/${tokenAddress}`);
+    if (!r.ok) return 0;
+    const d = await r.json();
+    if (d && d.pairs && d.pairs.length) {
+      const solPairs = d.pairs.filter(p => p.chainId === 'solana');
+      if (solPairs.length) {
+        solPairs.sort((a, b) => (b.liquidity?.usd || 0) - (a.liquidity?.usd || 0));
+        return +solPairs[0].priceUsd || 0;
+      }
+    }
+    return 0;
+  } catch (err) {
+    console.error(`Error fetching solana price for ${tokenAddress}:`, err);
+    return 0;
+  }
+}
+
+async function getTokenBalance(connection, ownerPubKey, tokenMintStr) {
+  try {
+    const owner = new PublicKey(ownerPubKey);
+    if (tokenMintStr === 'So11111111111111111111111111111111111111112') {
+      const bal = await connection.getBalance(owner);
+      return bal;
+    }
+    const mint = new PublicKey(tokenMintStr);
+    const accounts = await connection.getParsedTokenAccountsByOwner(owner, { mint });
+    if (accounts && accounts.value && accounts.value.length) {
+      const bal = accounts.value[0].account.data.parsed.info.tokenAmount.amount;
+      return +bal;
+    }
+    return 0;
+  } catch (e) {
+    return 0;
+  }
+}
+
+let solanaWalletAddress = '';
+let solanaSolBalance = 0;
+let solanaUsdcBalance = 0;
+let lastSolanaBalanceUpdate = 0;
+
+async function updateSolanaWalletInfo() {
+  const pk = appConfig.solanaPrivateKey || process.env.SOLANA_PRIVATE_KEY;
+  if (!pk) {
+    solanaWalletAddress = '';
+    solanaSolBalance = 0;
+    solanaUsdcBalance = 0;
+    return;
+  }
+  
+  try {
+    const keypair = Keypair.fromSecretKey(bs58.decode(pk));
+    solanaWalletAddress = keypair.publicKey.toString();
+    
+    const now = Date.now();
+    if (now - lastSolanaBalanceUpdate < 10000) {
+      return;
+    }
+    
+    const rpcUrl = appConfig.solanaRpcUrl || process.env.SOLANA_RPC_URL || 'https://api.mainnet-beta.solana.com';
+    const connection = new Connection(rpcUrl, 'confirmed');
+    
+    const solLamports = await connection.getBalance(keypair.publicKey);
+    solanaSolBalance = solLamports / 1e9;
+    
+    const usdcMint = 'EPjFWdd5AufqSSqeM2qN1xzybapC8G4wEGGkZwyTDt1v';
+    const usdcBalRaw = await getTokenBalance(connection, solanaWalletAddress, usdcMint);
+    solanaUsdcBalance = usdcBalRaw / 1e6;
+    
+    lastSolanaBalanceUpdate = now;
+  } catch (err) {
+    console.error('Error actualizando balance Solana VPS:', err.message);
+  }
+}
+
+async function executeSolanaTrade(w, side, amountUSDT, price) {
+  if (mode !== 'real') return { ok: true, txid: 'simulated' };
+  
+  const pk = appConfig.solanaPrivateKey || process.env.SOLANA_PRIVATE_KEY;
+  if (!pk) {
+    addLog(`⚠️ No se puede ejecutar orden real en Solana para ${w.symbol}: Falta Solana Private Key en Config.`, 'warn');
+    return { ok: false };
+  }
+  
+  const rpcUrl = appConfig.solanaRpcUrl || process.env.SOLANA_RPC_URL || 'https://api.mainnet-beta.solana.com';
+  const connection = new Connection(rpcUrl, 'confirmed');
+  
+  try {
+    const keypair = Keypair.fromSecretKey(bs58.decode(pk));
+    const userPublicKey = keypair.publicKey.toString();
+    
+    const isSOL = (appConfig.solanaBaseToken !== 'USDC');
+    const baseMint = isSOL ? 'So11111111111111111111111111111111111111112' : 'EPjFWdd5AufqSSqeM2qN1xzybapC8G4wEGGkZwyTDt1v';
+    const targetMint = w.address;
+    
+    if (!targetMint) {
+      addLog(`⚠️ Error Solana trade: Falta la dirección del token para ${w.symbol}`, 'warn');
+      return { ok: false };
+    }
+    
+    let inputMint, outputMint, rawAmount;
+    
+    if (side === 'BUY') {
+      inputMint = baseMint;
+      outputMint = targetMint;
+      
+      if (isSOL) {
+        const solPrice = await mxPrice('SOL') || 140;
+        rawAmount = Math.floor((amountUSDT / solPrice) * 1e9); // lamports
+      } else {
+        rawAmount = Math.floor(amountUSDT * 1e6); // USDC decimals is 6
+      }
+    } else {
+      inputMint = targetMint;
+      outputMint = baseMint;
+      
+      const bal = await getTokenBalance(connection, userPublicKey, targetMint);
+      if (bal <= 0) {
+        addLog(`⚠️ No se encontró balance de ${w.symbol} para vender.`, 'warn');
+        return { ok: false };
+      }
+      rawAmount = bal;
+    }
+    
+    const slipPercent = appConfig.solanaSlippage || 2.5;
+    const slippageBps = Math.floor(slipPercent * 100);
+    addLog(`🌀 Consultando cotización Jupiter para ${side} ${w.symbol} (Monto: ${rawAmount}, Slippage: ${slipPercent}%)...`, 'info');
+    
+    const quoteUrl = `https://quote-api.jup.ag/v6/quote?inputMint=${inputMint}&outputMint=${outputMint}&amount=${rawAmount}&slippageBps=${slippageBps}`;
+    const qr = await fetch(quoteUrl);
+    if (!qr.ok) {
+      const errTxt = await qr.text();
+      addLog(`❌ Error Jupiter Quote: ${errTxt}`, 'warn');
+      return { ok: false };
+    }
+    const quoteResponse = await qr.json();
+    
+    let priorityFee = 'auto';
+    if (appConfig.solanaPriorityFee && appConfig.solanaPriorityFee !== 'auto') {
+      priorityFee = parseInt(appConfig.solanaPriorityFee) || 200000;
+    }
+    
+    const sr = await fetch('https://quote-api.jup.ag/v6/swap', {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({
+        quoteResponse,
+        userPublicKey,
+        wrapAndUnwrapSol: true,
+        dynamicComputeUnitLimit: true,
+        prioritizationFeeLamports: priorityFee
+      })
+    });
+    
+    if (!sr.ok) {
+      const errTxt = await sr.text();
+      addLog(`❌ Error Jupiter Swap API: ${errTxt}`, 'warn');
+      return { ok: false };
+    }
+    const { swapTransaction } = await sr.json();
+    
+    const swapTransactionBuf = Buffer.from(swapTransaction, 'base64');
+    const transaction = VersionedTransaction.deserialize(swapTransactionBuf);
+    transaction.sign([keypair]);
+    
+    addLog(`🚀 Enviando transacción real de Solana para ${w.symbol}...`, 'info');
+    const txid = await connection.sendRawTransaction(transaction.serialize(), {
+      skipPreflight: false,
+      maxRetries: 2
+    });
+    
+    addLog(`✅ Transacción enviada: ${txid.slice(0, 8)}... Esperando confirmación...`, 'info');
+    
+    const latestBlockHash = await connection.getLatestBlockhash();
+    await connection.confirmTransaction({
+      blockhash: latestBlockHash.blockhash,
+      lastValidBlockHeight: latestBlockHash.lastValidBlockHeight,
+      signature: txid
+    }, 'confirmed');
+    
+    addLog(`🎉 Solana trade ${side} confirmado con éxito para ${w.symbol}! TxID: ${txid}`, side==='BUY'?'buy':'sell');
+    return { ok: true, txid };
+  } catch (err) {
+    addLog(`❌ Error en ejecución de Solana: ${err.message}`, 'warn');
+    return { ok: false };
+  }
+}
+
+// ============================================
 // BUCLE PRINCIPAL DEL MONITOR EN EL SERVIDOR
 // ============================================
 
@@ -148,6 +348,14 @@ async function mxCancelOrder(symbol, orderId) {
 
 let loopTimer = null;
 
+async function executeOrder(w, side, amount, price) {
+  if (w.network === 'solana') {
+    return await executeSolanaTrade(w, side, amount, price);
+  } else {
+    return await mxRealOrder(w.symbol, side, amount, price);
+  }
+}
+
 async function runCycle() {
   if (!monitorOn) return;
   if (!watchItems.length) return;
@@ -155,6 +363,7 @@ async function runCycle() {
   
   for (let wi = 0; wi < watchItems.length; wi++) {
     const w = watchItems[wi];
+    if (w.network === 'solana') continue; // Solana se procesa en el ciclo de alta frecuencia por separado
     try {
       const cp = await mxPrice(w.symbol);
       if (cp <= 0) continue;
@@ -175,14 +384,13 @@ async function runCycle() {
           
           if (!w.filledBuys) w.filledBuys = [];
           w.filledBuys.push({ price: cp, amount: o.amount, level: o.level });
-          const realRes = await mxRealOrder(w.symbol, 'BUY', o.amount, cp);
+          const realRes = await executeOrder(w, 'BUY', o.amount, cp);
           if (realRes && realRes.ok) {
             if(mode!=='real') SIM.balance -= o.amount;
             SIM.totalExec++;
             
-            // Si tiene TP1, mandamos la venta LIMIT de inmediato (en modo real se queda en el libro)
+            // Si tiene TP1, mandamos la venta LIMIT de inmediato (en modo real se queda en el libro - sólo MEXC)
             if (w.tp1Price) {
-               // calculamos los USDT totales a recibir a tp1Price
                const qtyTokens = o.amount / cp;
                const totalTargetUsdt = qtyTokens * w.tp1Price;
                const tpRes = await mxRealOrder(w.symbol, 'SELL', totalTargetUsdt, w.tp1Price);
@@ -195,9 +403,9 @@ async function runCycle() {
           } else continue; // Si falla, abortar ejecución actual
           
           if (!w.slPrice) {
-            w.slPrice = o.price * (1 - (o.sl || 10)/100);
-            w.tp1Price = o.price * (1 + (o.tp1 || 8)/100);
-            w.tp2Price = o.price * (1 + (o.tp2 || 15)/100);
+             w.slPrice = o.price * (1 - (o.sl || 10)/100);
+             w.tp1Price = o.price * (1 + (o.tp1 || 8)/100);
+             w.tp2Price = o.price * (1 + (o.tp2 || 15)/100);
           }
           addLog(`✅ AUTO-COMPRA ${w.symbol} #${o.level}: $${fpZ(cp,cp)} · $${o.amount}`, 'buy');
           break; // sólo una por ciclo
@@ -212,12 +420,12 @@ async function runCycle() {
         const pnlP = (cp - avg) / avg * 100;
         
         if (cp <= w.slPrice) {
-          // Si cae a SL, tenemos que cancelar la orden Limit TP si existe antes de vender el SL!
+          // Si cae a SL, tenemos que cancelar la orden Limit TP si existe antes de vender el SL! (solo MEXC)
           if (w.realSellOrderIds && w.realSellOrderIds.length) {
             for (let id of w.realSellOrderIds) await mxCancelOrder(w.symbol, id);
           }
           const pnl = inv * pnlP / 100;
-          const realRes = await mxRealOrder(w.symbol, 'SELL', inv + pnl, cp);
+          const realRes = await executeOrder(w, 'SELL', inv + pnl, cp);
           if (realRes && realRes.ok) {
             if(mode!=='real') SIM.balance += inv + pnl;
             SIM.pnl += pnl; 
@@ -234,12 +442,9 @@ async function runCycle() {
         } else if (w.tp1Price && cp >= w.tp1Price && !w.tp1Hit) {
           const pnl = inv * pnlP / 100;
           let realRes = { ok: true };
-          // En modo real, la orden LIMIT ya se debería haber ejecutado en el exchange (o lo hará pronto)
-          // Pero si es SIM o no se puso la limit, la lanzamos
           if (mode === 'sim') {
-             realRes = await mxRealOrder(w.symbol, 'SELL', inv + pnl, cp);
+             realRes = await executeOrder(w, 'SELL', inv + pnl, cp);
           } else {
-             // En modo real simplemente asumimos que la orden limit se rellenó si el precio lo cruzó
              w.tp1Hit = true;
           }
           if (realRes && realRes.ok) {
@@ -260,7 +465,7 @@ async function runCycle() {
           const pnl = inv * pnlP / 100;
           let realRes = { ok: true };
           if (mode === 'sim') {
-             realRes = await mxRealOrder(w.symbol, 'SELL', inv + pnl, cp);
+             realRes = await executeOrder(w, 'SELL', inv + pnl, cp);
           } else {
              w.tp2Hit = true;
           }
@@ -281,17 +486,157 @@ async function runCycle() {
         }
       }
     } catch (e) {
-      console.log('Error en ciclo:', w.symbol, e.message);
+      console.log('Error en ciclo MEXC:', w.symbol, e.message);
     }
   }
   saveState();
 }
+
+async function runSolanaCycle() {
+  if (!monitorOn) return;
+  if (!watchItems.length) return;
+  
+  const solanaItems = watchItems.filter(w => w.network === 'solana');
+  if (!solanaItems.length) return;
+  
+  for (let wi = 0; wi < watchItems.length; wi++) {
+    const w = watchItems[wi];
+    if (w.network !== 'solana') continue;
+    
+    try {
+      const cp = await getSolanaPrice(w.address);
+      if (cp <= 0) continue;
+      
+      w.prevPrice = (w.currentPrice || cp);
+      w.currentPrice = cp;
+      w.lastUpdate = Date.now();
+      
+      // AUTO-EJECUTAR ÓRDENES COMPRA SOLANA
+      for (let oi = 0; oi < w.orders.length; oi++) {
+        const o = w.orders[oi];
+        if (o.status !== 'pending') continue;
+        
+        // Verifica si el precio bajó hasta el punto de entrada
+        if (cp <= o.price * 1.005) {
+          o.status = 'filled'; 
+          o.filledAt = Date.now(); 
+          o.filledPrice = cp;
+          
+          if (!w.filledBuys) w.filledBuys = [];
+          w.filledBuys.push({ price: cp, amount: o.amount, level: o.level });
+          
+          addLog(`⚡ [Solana Instant] Disparando swap compra para ${w.symbol} a $${fpZ(cp,cp)}...`, 'info');
+          const realRes = await executeOrder(w, 'BUY', o.amount, cp);
+          if (realRes && realRes.ok) {
+            if (mode !== 'real') SIM.balance -= o.amount;
+            SIM.totalExec++;
+          } else {
+            // Si falla la transacción real en Solana, revertimos estado a pending para intentar de nuevo
+            o.status = 'pending';
+            o.filledAt = null;
+            o.filledPrice = null;
+            w.filledBuys.pop();
+            addLog(`⚠️ Falló swap real en Solana para ${w.symbol}. Reintentando en el próximo tick rápido.`, 'warn');
+            continue; 
+          }
+          
+          if (!w.slPrice) {
+             w.slPrice = o.price * (1 - (o.sl || 10)/100);
+             w.tp1Price = o.price * (1 + (o.tp1 || 8)/100);
+             w.tp2Price = o.price * (1 + (o.tp2 || 15)/100);
+          }
+          addLog(`✅ AUTO-COMPRA SOLANA COMPLETADA: ${w.symbol} #${o.level} · $${o.amount}`, 'buy');
+          break; // sólo una por ciclo
+        }
+      }
+      
+      // VERIFICAR SL / TP SOLANA
+      const filled = w.orders.filter(o => o.status === 'filled');
+      if (filled.length && w.slPrice) {
+        const inv = filled.reduce((a, o) => a + o.amount, 0);
+        const avg = filled.reduce((a, o) => a + o.price * o.amount, 0) / inv;
+        const pnlP = (cp - avg) / avg * 100;
+        
+        if (cp <= w.slPrice) {
+          addLog(`⚡ [Solana Instant] Disparando Stop Loss para ${w.symbol} a $${fpZ(cp,cp)}...`, 'info');
+          const pnl = inv * pnlP / 100;
+          const realRes = await executeOrder(w, 'SELL', inv + pnl, cp);
+          if (realRes && realRes.ok) {
+            if (mode !== 'real') SIM.balance += inv + pnl;
+            SIM.pnl += pnl; 
+            SIM.losses++;
+            SIM.trades.push({ symbol: w.symbol, avgEntry: avg, exit: cp, pnl, pnlPct: pnlP.toFixed(2), at: Date.now() });
+            
+            w.orders.forEach(o => { if (o.status === 'pending') o.status = 'cancelled'; });
+            w.slPrice = null; w.tp1Price = null; w.tp2Price = null;
+            addLog(`❌ SL SOLANA CERRADO ${w.symbol}: $${fpZ(cp,cp)} · P&L $${pnl.toFixed(2)} (${pnlP.toFixed(1)}%)`, 'sl_');
+            
+            watchItems.splice(wi, 1);
+            wi--;
+          } else {
+            addLog(`⚠️ Falló Stop Loss real en Solana para ${w.symbol}. Reintentando inmediatamente.`, 'warn');
+          }
+        } else if (w.tp1Price && cp >= w.tp1Price && !w.tp1Hit) {
+          addLog(`⚡ [Solana Instant] Disparando Take Profit 1 para ${w.symbol} a $${fpZ(cp,cp)}...`, 'info');
+          const pnl = inv * pnlP / 100;
+          const realRes = await executeOrder(w, 'SELL', inv + pnl, cp);
+          if (realRes && realRes.ok) {
+            if (mode !== 'real') SIM.balance += inv + pnl;
+            SIM.pnl += pnl; 
+            SIM.wins++;
+            SIM.trades.push({ symbol: w.symbol, avgEntry: avg, exit: cp, pnl, pnlPct: pnlP.toFixed(2), at: Date.now() });
+            
+            w.orders.forEach(o => { if (o.status === 'pending') o.status = 'cancelled'; });
+            w.tp1Hit = true;
+            w.slPrice = null; w.tp1Price = null; w.tp2Price = null;
+            addLog(`🎯 TP1 SOLANA CERRADO ${w.symbol}: $${fpZ(cp,cp)} · P&L $${pnl.toFixed(2)} (+${pnlP.toFixed(1)}%)`, 'tp');
+            
+            watchItems.splice(wi, 1);
+            wi--;
+          } else {
+            addLog(`⚠️ Falló Take Profit 1 real en Solana para ${w.symbol}. Reintentando inmediatamente.`, 'warn');
+          }
+        } else if (w.tp2Price && cp >= w.tp2Price && !w.tp2Hit) {
+          addLog(`⚡ [Solana Instant] Disparando Take Profit 2 para ${w.symbol} a $${fpZ(cp,cp)}...`, 'info');
+          const pnl = inv * pnlP / 100;
+          const realRes = await executeOrder(w, 'SELL', inv + pnl, cp);
+          if (realRes && realRes.ok) {
+            if (mode !== 'real') SIM.balance += inv + pnl;
+            SIM.pnl += pnl; 
+            SIM.wins++;
+            SIM.trades.push({ symbol: w.symbol, avgEntry: avg, exit: cp, pnl, pnlPct: pnlP.toFixed(2), at: Date.now() });
+            
+            w.orders.forEach(o => { if (o.status === 'pending') o.status = 'cancelled'; });
+            w.tp2Hit = true;
+            w.slPrice = null; w.tp1Price = null; w.tp2Price = null;
+            addLog(`🚀 TP2 SOLANA CERRADO ${w.symbol}: $${fpZ(cp,cp)} · P&L $${pnl.toFixed(2)} (+${pnlP.toFixed(1)}%)`, 'tp');
+            
+            watchItems.splice(wi, 1);
+            wi--;
+          } else {
+            addLog(`⚠️ Falló Take Profit 2 real en Solana para ${w.symbol}. Reintentando inmediatamente.`, 'warn');
+          }
+        }
+      }
+    } catch (e) {
+      console.log('Error en ciclo Solana:', w.symbol, e.message);
+    }
+  }
+  saveState();
+}
+
+let solanaTimer = null;
 
 function startLoop() {
   if (loopTimer) clearInterval(loopTimer);
   loopTimer = setInterval(() => {
     if (monitorOn) runCycle();
   }, monitorInterval * 1000);
+
+  if (solanaTimer) clearInterval(solanaTimer);
+  solanaTimer = setInterval(() => {
+    if (monitorOn) runSolanaCycle();
+  }, 3000); // Monitoreo de alta frecuencia cada 3 segundos para tokens ultra-volátiles de Solana
 }
 
 // Iniciar el loop si estaba encendido en el estado recuperado
@@ -314,11 +659,27 @@ app.post('/api/login', (req, res) => {
   if (req.body.password === pwd) res.json({status: 'ok', token: pwd});
   else res.status(401).json({error: 'Invalid password'});
 });
-app.get('/api/state', (req, res) => {
+app.get('/api/state', async (req, res) => {
   res.setHeader('Cache-Control', 'no-store, no-cache, must-revalidate, proxy-revalidate');
   res.setHeader('Pragma', 'no-cache');
   res.setHeader('Expires', '0');
-  res.json({ SIM, watchItems, logs, monitorOn, monitorInterval, cycleN, mode });
+  
+  await updateSolanaWalletInfo();
+  
+  res.json({ 
+    SIM, 
+    watchItems, 
+    logs, 
+    monitorOn, 
+    monitorInterval, 
+    cycleN, 
+    mode,
+    vpsSolWallet: {
+      address: solanaWalletAddress,
+      sol: solanaSolBalance,
+      usdc: solanaUsdcBalance
+    }
+  });
 });
 
 app.get('/api/config', (req, res) => {
@@ -327,14 +688,33 @@ app.get('/api/config', (req, res) => {
 });
 
 app.post('/api/config', (req, res) => {
-  const { mexcApiKey, mexcApiSecret, tgBotToken, tgChatId, appPassword } = req.body;
+  const { mexcApiKey, mexcApiSecret, tgBotToken, tgChatId, appPassword, solanaPrivateKey, solanaRpcUrl, solanaBaseToken, solanaSlippage, solanaPriorityFee } = req.body;
   if(mexcApiKey !== undefined) appConfig.mexcApiKey = mexcApiKey;
   if(mexcApiSecret !== undefined) appConfig.mexcApiSecret = mexcApiSecret;
   if(tgBotToken !== undefined) appConfig.tgBotToken = tgBotToken;
   if(tgChatId !== undefined) appConfig.tgChatId = tgChatId;
   if(appPassword !== undefined) appConfig.appPassword = appPassword;
+  if(solanaPrivateKey !== undefined) appConfig.solanaPrivateKey = solanaPrivateKey;
+  if(solanaRpcUrl !== undefined) appConfig.solanaRpcUrl = solanaRpcUrl;
+  if(solanaBaseToken !== undefined) appConfig.solanaBaseToken = solanaBaseToken;
+  if(solanaSlippage !== undefined) appConfig.solanaSlippage = parseFloat(solanaSlippage) || 2.5;
+  if(solanaPriorityFee !== undefined) appConfig.solanaPriorityFee = solanaPriorityFee;
   saveState();
   res.json({ status: 'ok', config: appConfig });
+});
+
+app.get('/api/dexscreener/*', async (req, res) => {
+  try {
+    const endpoint = req.params[0];
+    const qs = new URLSearchParams(req.query).toString();
+    const url = `https://api.dexscreener.com/${endpoint}${qs ? '?' + qs : ''}`;
+    const r = await fetch(url);
+    if (!r.ok) return res.status(r.status).json({error: `DexScreener err: ${r.statusText}`});
+    const data = await r.json();
+    res.json(data);
+  } catch (err) {
+    res.status(500).json({error: err.message});
+  }
 });
 
 app.get('/api/mexc/*', async (req, res) => {
@@ -397,7 +777,7 @@ app.post('/api/action', async (req, res) => {
         const cp = w.currentPrice || w.cp;
         const pnl = inv * (cp - avg) / avg;
         
-        if (mode === 'real') await mxRealOrder(w.symbol, 'SELL', inv + pnl, cp);
+        if (mode === 'real') await executeOrder(w, 'SELL', inv + pnl, cp);
         if (mode !== 'real') SIM.balance += inv + pnl;
         SIM.pnl += pnl;
         if (pnl > 0) SIM.wins++; else SIM.losses++;
