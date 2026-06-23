@@ -26,6 +26,7 @@ let monitorOn = false;
 let monitorInterval = 15;
 let cycleN = 0;
 let mode = 'simulated';
+let solMode = 'sim'; // 'sim' o 'wallet'
 let appConfig = {
   mexcApiKey: process.env.MEXC_API_KEY || '',
   mexcApiSecret: process.env.MEXC_API_SECRET || '',
@@ -67,7 +68,7 @@ const STATE_FILE = path.join(__dirname, 'bot-state.json');
 function saveState() {
   try {
     const tmp = STATE_FILE + '.tmp';
-    fs.writeFileSync(tmp, JSON.stringify({ SIM, watchItems, logs, monitorOn, monitorInterval, mode, appConfig }));
+    fs.writeFileSync(tmp, JSON.stringify({ SIM, watchItems, logs, monitorOn, monitorInterval, mode, solMode, appConfig }));
     fs.renameSync(tmp, STATE_FILE);
   } catch (e) {
     console.error("Error guardando estado:", e);
@@ -84,6 +85,7 @@ function loadState() {
       if (data.monitorOn !== undefined) monitorOn = data.monitorOn;
       if (data.monitorInterval) monitorInterval = data.monitorInterval;
       if (data.mode) mode = data.mode;
+      if (data.solMode) solMode = data.solMode;
       if (data.appConfig) appConfig = {...appConfig, ...data.appConfig};
       
       watchItems.forEach(w => {
@@ -172,11 +174,11 @@ async function updateSolanaWalletInfo() {
     solanaWalletAddress = keypair.publicKey.toString();
     
     const now = Date.now();
-    if (now - lastSolanaBalanceUpdate < 10000 && mode === 'real') {
+    if (now - lastSolanaBalanceUpdate < 10000 && solMode === 'wallet') {
       return;
     }
     
-    if (mode !== 'real') {
+    if (solMode !== 'wallet') {
         solanaSolBalance = SIM.solBalance || 10;
         solanaUsdcBalance = SIM.usdcBalance || 1000;
         return;
@@ -199,7 +201,7 @@ async function updateSolanaWalletInfo() {
 }
 
 async function executeSolanaTrade(w, side, amountUSDT, price) {
-  if (mode !== 'real') return { ok: true, txid: 'simulated' };
+  if (solMode !== 'wallet') return { ok: true, txid: 'simulated' };
   
   const pk = appConfig.solanaPrivateKey || process.env.SOLANA_PRIVATE_KEY;
   if (!pk) {
@@ -505,10 +507,10 @@ async function runCycle() {
 
 async function runSolanaCycle() {
   if (!monitorOn) return;
-  if (!watchItems.length) return;
-  
   const solanaItems = watchItems.filter(w => w.network === 'solana');
   if (!solanaItems.length) return;
+  
+  // console.log(`[Solana Cycle] Monitoring ${solanaItems.length} items...`);
   
   for (let wi = 0; wi < watchItems.length; wi++) {
     const w = watchItems[wi];
@@ -539,7 +541,7 @@ async function runSolanaCycle() {
           addLog(`⚡ [Solana Instant] Disparando swap compra para ${w.symbol} a $${fpZ(cp,cp)}...`, 'info');
           const realRes = await executeOrder(w, 'BUY', o.amount, cp);
           if (realRes && realRes.ok) {
-            if (mode !== 'real') {
+            if (solMode !== 'wallet') {
                 SIM.usdcBalance -= o.amount;
                 SIM.solBalance += o.amount / cp;
             }
@@ -576,7 +578,7 @@ async function runSolanaCycle() {
           const pnl = inv * pnlP / 100;
           const realRes = await executeOrder(w, 'SELL', inv + pnl, cp);
           if (realRes && realRes.ok) {
-            if (mode !== 'real') {
+            if (solMode !== 'wallet') {
                 SIM.usdcBalance += inv + pnl;
                 SIM.solBalance -= (inv / avg);
             }
@@ -598,7 +600,7 @@ async function runSolanaCycle() {
           const pnl = inv * pnlP / 100;
           const realRes = await executeOrder(w, 'SELL', inv + pnl, cp);
           if (realRes && realRes.ok) {
-            if (mode !== 'real') {
+            if (solMode !== 'wallet') {
                 SIM.usdcBalance += inv + pnl;
                 SIM.solBalance -= (inv / avg);
             }
@@ -621,7 +623,7 @@ async function runSolanaCycle() {
           const pnl = inv * pnlP / 100;
           const realRes = await executeOrder(w, 'SELL', inv + pnl, cp);
           if (realRes && realRes.ok) {
-            if (mode !== 'real') {
+            if (solMode !== 'wallet') {
                 SIM.usdcBalance += inv + pnl;
                 SIM.solBalance -= (inv / avg);
             }
@@ -700,6 +702,7 @@ app.get('/api/state', async (req, res) => {
     monitorInterval, 
     cycleN, 
     mode,
+    solMode,
     vpsSolWallet: {
       address: solanaWalletAddress,
       sol: solanaSolBalance,
@@ -763,8 +766,16 @@ app.post('/api/action', async (req, res) => {
   const { action, payload } = req.body;
   
   if (action === 'setMode') {
-    mode = payload.mode;
-    addLog(`Modo cambiado a: ${mode.toUpperCase()}`, 'warn');
+    if (payload.mode) {
+      mode = payload.mode;
+      addLog(`Modo Global cambiado a: ${mode.toUpperCase()}`, 'warn');
+    }
+    if (payload.solMode) {
+      solMode = payload.solMode;
+      addLog(`Modo Solana cambiado a: ${solMode === 'wallet' ? 'WALLET REAL' : 'SIMULADO'}`, 'warn');
+    }
+    saveState();
+    return res.json({ ok: true });
   } else if (action === 'start') {
     monitorOn = true; 
     monitorInterval = payload.interval || 15;
@@ -805,8 +816,17 @@ app.post('/api/action', async (req, res) => {
         const cp = w.currentPrice || w.cp;
         const pnl = inv * (cp - avg) / avg;
         
-        if (mode === 'real') await executeOrder(w, 'SELL', inv + pnl, cp);
-        if (mode !== 'real') SIM.balance += inv + pnl;
+        if (w.network === 'solana') {
+           const res = await executeOrder(w, 'SELL', inv + pnl, cp);
+           if (res.ok && solMode !== 'wallet') {
+              SIM.usdcBalance += inv + pnl;
+              SIM.solBalance -= (inv / avg);
+           }
+        } else {
+           if (mode === 'real') await executeOrder(w, 'SELL', inv + pnl, cp);
+           if (mode !== 'real') SIM.balance += inv + pnl;
+        }
+        
         SIM.pnl += pnl;
         if (pnl > 0) SIM.wins++; else SIM.losses++;
         SIM.trades.push({ symbol: w.symbol, avgEntry: avg, exit: cp, pnl, pnlPct: ((cp - avg) / avg * 100).toFixed(2), at: Date.now() });

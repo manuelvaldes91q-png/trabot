@@ -474,8 +474,15 @@ function changeRunMode() {
 
 function changeSolMode() {
   const m = document.getElementById('solModeSel').value;
-  console.log('Solana Balance Mode changed to:', m);
-  // Potentially sync this with the server or just use it client-side
+  myFetch('/api/action', {
+    method: 'POST', 
+    headers:{'Content-Type':'application/json'}, 
+    body: JSON.stringify({action: 'setMode', payload: {solMode: m}})
+  }).then(() => {
+    addLog(`Solana Balance Mode cambiado a: ${m === 'wallet' ? 'WALLET' : 'SIMULADO'}`, 'info');
+    // Refresh to update UI immediately
+    initServerState();
+  });
 }
 function toggleSound(){
   soundOn=!soundOn;
@@ -667,6 +674,9 @@ async function initServerState(){
       if (data.mode) {
         document.getElementById('modeSel').value = data.mode;
         document.getElementById('dBalS').textContent = data.mode === 'real' ? 'USDT (Real MEXC)' : 'disponible';
+      }
+      if (data.solMode) {
+        document.getElementById('solModeSel').value = data.solMode;
       }
       if (data.vpsSolWallet) {
         updateSolanaVpsWalletUI(data.vpsSolWallet);
