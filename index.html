@@ -691,6 +691,11 @@ async function initServerState(){
         bStart.style.display='none';
         bStop.style.display='';
         stat.innerHTML=`Ciclo ${cycleN} · ${watchItems.length} monedas <span style="color:var(--g)">(VPS Activo)</span>`;
+      } else {
+        dot.classList.remove('on');
+        bStart.style.display='';
+        bStop.style.display='none';
+        stat.textContent='Monitor VPS detenido';
       }
 
       if(watchItems.length>0){
@@ -1766,11 +1771,30 @@ let monitorOn=false,cycleN=0;
 function startMonitor(){
   if(monitorOn)return;
   const iv = +document.getElementById('cfInterval').value||15;
-  myFetch('/api/action', {method: 'POST', headers: {'Content-Type': 'application/json'}, body: JSON.stringify({action: 'start', payload: {interval: iv}})});
+  myFetch('/api/action', {
+    method: 'POST', 
+    headers: {'Content-Type': 'application/json'}, 
+    body: JSON.stringify({action: 'start', payload: {interval: iv}})
+  }).then(res => {
+    if (res.ok) {
+      addLog('Sistema de monitoreo iniciado', 'info');
+      // Force immediate UI update
+      initServerState();
+    }
+  });
 }
 
 function stopMonitor(){
-  myFetch('/api/action', {method: 'POST', headers: {'Content-Type': 'application/json'}, body: JSON.stringify({action: 'stop'})});
+  myFetch('/api/action', {
+    method: 'POST', 
+    headers: {'Content-Type': 'application/json'}, 
+    body: JSON.stringify({action: 'stop'})
+  }).then(res => {
+    if (res.ok) {
+      addLog('Sistema de monitoreo detenido', 'warn');
+      initServerState();
+    }
+  });
 }
 
 setInterval(async () => {

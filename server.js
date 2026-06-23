@@ -455,7 +455,7 @@ async function runCycle() {
         } else if (w.tp1Price && cp >= w.tp1Price && !w.tp1Hit) {
           const pnl = inv * pnlP / 100;
           let realRes = { ok: true };
-          if (mode === 'sim') {
+          if (mode !== 'real') {
              realRes = await executeOrder(w, 'SELL', inv + pnl, cp);
           } else {
              w.tp1Hit = true;
@@ -477,7 +477,7 @@ async function runCycle() {
         } else if (w.tp2Price && cp >= w.tp2Price && !w.tp2Hit) {
           const pnl = inv * pnlP / 100;
           let realRes = { ok: true };
-          if (mode === 'sim') {
+          if (mode !== 'real') {
              realRes = await executeOrder(w, 'SELL', inv + pnl, cp);
           } else {
              w.tp2Hit = true;
@@ -781,6 +781,8 @@ app.post('/api/action', async (req, res) => {
     monitorInterval = payload.interval || 15;
     addLog(`🚀 Monitor VPS activo — ${monitorInterval}s`, 'info');
     startLoop();
+    saveState();
+    return res.json({ status: 'ok', monitorOn: true });
 
   } else if (action === 'updateInterval') {
     monitorInterval = payload.interval || 15;
@@ -791,7 +793,9 @@ app.post('/api/action', async (req, res) => {
   } else if (action === 'stop') {
     monitorOn = false;
     addLog('⏹ Monitor VPS detenido', 'warn');
-    
+    saveState();
+    return res.json({ status: 'ok', monitorOn: false });
+
   } else if (action === 'addWatch') {
     watchItems.push(payload);
     addLog(`👁 ${payload.symbol} agregado a vigilancia`, 'info');
