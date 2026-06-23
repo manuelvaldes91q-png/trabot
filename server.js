@@ -19,7 +19,7 @@ const PORT = process.env.PORT || 3000;
 // ============================================
 // STATE DEL BOT (SE MANTIENE EN LA MEMORIA RAM Y SE GUARDA EN ARCHIVO)
 // ============================================
-let SIM = { balance: 100, initBal: 100, trades: [], pnl: 0, wins: 0, losses: 0, totalExec: 0 };
+let SIM = { balance: 100, solBalance: 10, usdcBalance: 1000, initBal: 100, trades: [], pnl: 0, wins: 0, losses: 0, totalExec: 0 };
 let watchItems = [];
 let logs = [];
 let monitorOn = false;
@@ -172,8 +172,14 @@ async function updateSolanaWalletInfo() {
     solanaWalletAddress = keypair.publicKey.toString();
     
     const now = Date.now();
-    if (now - lastSolanaBalanceUpdate < 10000) {
+    if (now - lastSolanaBalanceUpdate < 10000 && mode === 'real') {
       return;
+    }
+    
+    if (mode !== 'real') {
+        solanaSolBalance = SIM.solBalance || 10;
+        solanaUsdcBalance = SIM.usdcBalance || 1000;
+        return;
     }
     
     const rpcUrl = appConfig.solanaRpcUrl || process.env.SOLANA_RPC_URL || 'https://api.mainnet-beta.solana.com';
@@ -533,7 +539,10 @@ async function runSolanaCycle() {
           addLog(`⚡ [Solana Instant] Disparando swap compra para ${w.symbol} a $${fpZ(cp,cp)}...`, 'info');
           const realRes = await executeOrder(w, 'BUY', o.amount, cp);
           if (realRes && realRes.ok) {
-            if (mode !== 'real') SIM.balance -= o.amount;
+            if (mode !== 'real') {
+                SIM.usdcBalance -= o.amount;
+                SIM.solBalance += o.amount / cp;
+            }
             SIM.totalExec++;
           } else {
             // Si falla la transacción real en Solana, revertimos estado a pending para intentar de nuevo
@@ -567,7 +576,10 @@ async function runSolanaCycle() {
           const pnl = inv * pnlP / 100;
           const realRes = await executeOrder(w, 'SELL', inv + pnl, cp);
           if (realRes && realRes.ok) {
-            if (mode !== 'real') SIM.balance += inv + pnl;
+            if (mode !== 'real') {
+                SIM.usdcBalance += inv + pnl;
+                SIM.solBalance -= (inv / avg);
+            }
             SIM.pnl += pnl; 
             SIM.losses++;
             SIM.trades.push({ symbol: w.symbol, avgEntry: avg, exit: cp, pnl, pnlPct: pnlP.toFixed(2), at: Date.now() });
@@ -586,7 +598,10 @@ async function runSolanaCycle() {
           const pnl = inv * pnlP / 100;
           const realRes = await executeOrder(w, 'SELL', inv + pnl, cp);
           if (realRes && realRes.ok) {
-            if (mode !== 'real') SIM.balance += inv + pnl;
+            if (mode !== 'real') {
+                SIM.usdcBalance += inv + pnl;
+                SIM.solBalance -= (inv / avg);
+            }
             SIM.pnl += pnl; 
             SIM.wins++;
             SIM.trades.push({ symbol: w.symbol, avgEntry: avg, exit: cp, pnl, pnlPct: pnlP.toFixed(2), at: Date.now() });
@@ -606,7 +621,10 @@ async function runSolanaCycle() {
           const pnl = inv * pnlP / 100;
           const realRes = await executeOrder(w, 'SELL', inv + pnl, cp);
           if (realRes && realRes.ok) {
-            if (mode !== 'real') SIM.balance += inv + pnl;
+            if (mode !== 'real') {
+                SIM.usdcBalance += inv + pnl;
+                SIM.solBalance -= (inv / avg);
+            }
             SIM.pnl += pnl; 
             SIM.wins++;
             SIM.trades.push({ symbol: w.symbol, avgEntry: avg, exit: cp, pnl, pnlPct: pnlP.toFixed(2), at: Date.now() });

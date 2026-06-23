@@ -224,6 +224,10 @@ select.inp{cursor:pointer}
     <option value="simulated">🟢 MODO SIMULADO</option>
     <option value="real">🔴 API REAL</option>
   </select>
+  <select id="solModeSel" class="inp" style="width:120px;font-size:9px;padding:2px 4px;margin-left:10px;background:rgba(255,255,255,.05);border-color:var(--bdr2);color:var(--t);" onchange="changeSolMode()">
+    <option value="sim">💰 Saldo Simulado</option>
+    <option value="wallet">🟣 Wallet Real</option>
+  </select>
   <span id="solanaVpsWallet" style="display:none;font-family:var(--mono);font-size:8px;background:rgba(20,241,149,0.12);padding:4px 8px;border-radius:4px;border:1px solid rgba(20,241,149,0.3);color:#14f195;align-items:center;gap:4px;margin-left:8px">
     🤖 VPS Wallet: <span id="vpsSolAddress">No config</span> · <span id="vpsSolBalance" style="font-weight:700">0.00 SOL</span>
   </span>
@@ -273,6 +277,12 @@ select.inp{cursor:pointer}
           <option value="-999">Cualquiera</option><option value="0" selected>0%+</option>
           <option value="3">3%+</option><option value="5">5%+</option><option value="10">10%+</option>
         </select>
+      </div>
+      <div class="sf"><div class="lbl">Mín Días (Edad)</div>
+        <input type="number" id="cfMinAge" class="inp" value="1" min="0" step="0.1">
+      </div>
+      <div class="sf"><div class="lbl">Mín MarketCap ($)</div>
+        <input type="number" id="cfMinMarketCap" class="inp" value="0" min="0" step="1000">
       </div>
       <div class="sf"><div class="lbl">Tendencia</div>
         <select id="cfTrend" class="inp">
@@ -461,6 +471,12 @@ function changeRunMode() {
   });
   document.getElementById('dBalS').textContent = m === 'real' ? 'USDT (Real MEXC)' : 'disponible';
 }
+
+function changeSolMode() {
+  const m = document.getElementById('solModeSel').value;
+  console.log('Solana Balance Mode changed to:', m);
+  // Potentially sync this with the server or just use it client-side
+}
 function toggleSound(){
   soundOn=!soundOn;
   const b=document.getElementById('btnSound');
@@ -607,7 +623,7 @@ function analyzeOB(bids,asks,cp,dips){
 // ══════════════════════════════════════════════════════════
 // SIMULADOR Y SINCRONIZACIÓN CON EL SERVIDOR (VPS)
 // ══════════════════════════════════════════════════════════
-let SIM={balance:100,initBal:100,trades:[],pnl:0,wins:0,losses:0,totalExec:0};
+let SIM={solBalance:10,usdcBalance:1000,initBal:1000,trades:[],pnl:0,wins:0,losses:0,totalExec:0};
 
 let syncTimer=null;
 function syncState(){
@@ -889,20 +905,22 @@ function updateSolanaVpsWalletUI(vpsSolWallet) {
     const base = (vpsSolWallet.baseToken || 'SOL').toUpperCase();
     const solVal = vpsSolWallet.sol !== undefined ? vpsSolWallet.sol : 0;
     const usdcVal = vpsSolWallet.usdc !== undefined ? vpsSolWallet.usdc : 0;
+    const solMode = document.getElementById('solModeSel').value;
+    const solModeLabel = solMode === 'wallet' ? '🟣 Wallet' : '💰 Simulado';
     
     if (base === 'USDC') {
       balText = usdcVal.toFixed(2) + ' USDC | ' + solVal.toFixed(3) + ' SOL';
     } else {
       balText = solVal.toFixed(3) + ' SOL | ' + usdcVal.toFixed(2) + ' USDC';
     }
-    document.getElementById('vpsSolBalance').textContent = balText;
+    document.getElementById('vpsSolBalance').textContent = balText + ' (' + solModeLabel + ')';
   } else {
     el.style.display = 'none';
   }
 }
 
 function updateDash(){
-  document.getElementById('dBal').textContent='$'+SIM.balance.toFixed(2);
+  document.getElementById('dBal').textContent=SIM.usdcBalance.toFixed(2)+' USDC | '+SIM.solBalance.toFixed(3)+' SOL';
   const pnl=SIM.pnl,pct=SIM.initBal>0?pnl/SIM.initBal*100:0;
   document.getElementById('dPnL').textContent=(pnl>=0?'+':'')+'$'+pnl.toFixed(2);
   document.getElementById('dPnL').style.color=pnl>=0?'var(--g)':'var(--r)';
@@ -1054,22 +1072,91 @@ async function startScan(){
       let d = { pairs: [] };
       
       if (!q) {
-        setSt(`Buscando tokens de Solana calientes (Búsqueda general)...`, 15);
-        // Fetch SOL and USDC pairs to get a rich pool of altcoins
-        const [r1, r2] = await Promise.all([
+        setSt(`Buscando tokens de Solana calientes...`, 15);
+        
+        // Fetch diverse endpoints to get trending, newly profiled, and boosted tokens on Solana, in addition to high-volume searches
+        const searchPromises = [
+          myFetch(`/api/dexscreener/token-profiles/latest/v1`),
+          myFetch(`/api/dexscreener/token-boosts/latest/v1`),
+          myFetch(`/api/dexscreener/token-boosts/top/v1`),
           myFetch(`/api/dexscreener/latest/dex/search?q=SOL`),
-          myFetch(`/api/dexscreener/latest/dex/search?q=USDC`)
-        ]);
+          myFetch(`/api/dexscreener/latest/dex/search?q=USDC`),
+          myFetch(`/api/dexscreener/latest/dex/search?q=BONK`),
+          myFetch(`/api/dexscreener/latest/dex/search?q=WIF`),
+          myFetch(`/api/dexscreener/latest/dex/search?q=POPCAT`)
+        ];
         
-        let d1 = { pairs: [] }, d2 = { pairs: [] };
-        if (r1.ok) d1 = await r1.json().catch(() => ({ pairs: [] }));
-        if (r2.ok) d2 = await r2.json().catch(() => ({ pairs: [] }));
+        const responses = await Promise.all(searchPromises.map(p => p.catch(() => null)));
         
+        let profiles = [];
+        let boostsLatest = [];
+        let boostsTop = [];
+        let searchPairs = [];
+        
+        if (responses[0] && responses[0].ok) {
+          profiles = await responses[0].json().catch(() => []) || [];
+        }
+        if (responses[1] && responses[1].ok) {
+          boostsLatest = await responses[1].json().catch(() => []) || [];
+        }
+        if (responses[2] && responses[2].ok) {
+          boostsTop = await responses[2].json().catch(() => []) || [];
+        }
+        
+        // Collect search results
+        for (let i = 3; i < responses.length; i++) {
+          const r = responses[i];
+          if (r && r.ok) {
+            const data = await r.json().catch(() => null);
+            if (data && data.pairs) {
+              searchPairs.push(...data.pairs);
+            }
+          }
+        }
+        
+        // Extract Solana token addresses from profiles and boosts
+        const tokenAddresses = new Set();
+        const processTokenList = (list) => {
+          if (!list) return;
+          const arr = Array.isArray(list) ? list : [];
+          for (const item of arr) {
+            if (item && item.chainId === 'solana' && item.tokenAddress) {
+              tokenAddresses.add(item.tokenAddress);
+            }
+          }
+        };
+        
+        processTokenList(profiles);
+        processTokenList(boostsLatest);
+        processTokenList(boostsTop);
+        
+        // Fetch details for these specific token addresses in batches of 30
+        const profilePairs = [];
+        if (tokenAddresses.size > 0) {
+          const addressList = Array.from(tokenAddresses);
+          const pairDetailsPromises = [];
+          for (let i = 0; i < addressList.length; i += 30) {
+            const batch = addressList.slice(i, i + 30).join(',');
+            pairDetailsPromises.push(
+              myFetch(`/api/dexscreener/latest/dex/tokens/${batch}`)
+                .then(r => r.ok ? r.json() : null)
+                .catch(() => null)
+            );
+          }
+          const pairDetailsResults = await Promise.all(pairDetailsPromises);
+          for (const res of pairDetailsResults) {
+            if (res && res.pairs) {
+              profilePairs.push(...res.pairs);
+            }
+          }
+        }
+        
+        // Merge all pairs and deduplicate by pair address
         const seenPairs = new Set();
         const mergedPairs = [];
-        const allPairs = [...(d1.pairs || []), ...(d2.pairs || [])];
+        const allPairs = [...profilePairs, ...searchPairs];
         for (const p of allPairs) {
-          if (p.chainId === 'solana' && p.baseToken && !seenPairs.has(p.pairAddress)) {
+          if (p && p.chainId === 'solana' && p.baseToken && !seenPairs.has(p.pairAddress)) {
             seenPairs.add(p.pairAddress);
             mergedPairs.push(p);
           }
@@ -1266,7 +1353,15 @@ async function startScan(){
 let selScan=null;
 function renderScanResults(){
   const sort=document.getElementById('cfSort').value;
-  let data=[...scanResults];
+  const minAge=parseFloat(document.getElementById('cfMinAge').value)||0;
+  const minCap=parseFloat(document.getElementById('cfMinMarketCap').value)||0;
+  const now=Date.now();
+  
+  let data=scanResults.filter(d => {
+    const ageDays = (now - (d.pairCreatedAt||0)) / (24*60*60*1000);
+    return ageDays >= minAge && (d.marketCap||0) >= minCap;
+  });
+  
   if(sort==='chg')data.sort((a,b)=>b.chg-a.chg);
   else if(sort==='dist')data.sort((a,b)=>(a.dist||99)-(b.dist||99));
   else if(sort==='vol')data.sort((a,b)=>b.vol-a.vol);
