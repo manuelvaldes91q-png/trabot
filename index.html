@@ -327,7 +327,7 @@ select.inp{cursor:pointer}
         <div class="countdown" id="countdown">—</div>
       </div>
       <div style="flex:1;padding-left:5px">
-        <div class="mb-stat">Ciclo: <span class="mb-val" id="cycleN">0</span> · Vigiladas: <span class="mb-val" id="watchN">0</span></div>
+        <div class="mb-stat">Ciclo: <span class="mb-val" id="dCycle">0</span> · Vigiladas: <span class="mb-val" id="watchN">0</span></div>
         <div class="mb-stat">Ejecutadas: <span class="mb-val" id="execN" style="color:var(--g)">0</span> · Intervalo:
           <select id="cfInterval" class="inp" style="display:inline;width:auto;padding:1px 4px;font-size:8px" onchange="myFetch('/api/action', {method: 'POST', headers: {'Content-Type': 'application/json'}, body: JSON.stringify({action: 'updateInterval', payload: {interval: +this.value}})})">
             <option value="10">10s⚡</option><option value="15" selected>15s</option>
@@ -668,6 +668,7 @@ async function initServerState(){
       
       monitorOn = data.monitorOn || false;
       cycleN = data.cycleN || 0;
+      document.getElementById('dCycle').textContent = cycleN;
       if(data.monitorInterval) {
         document.getElementById('cfInterval').value = data.monitorInterval;
       }
@@ -1809,6 +1810,18 @@ setInterval(async () => {
     }
     watchItems = data.watchItems || watchItems;
     cycleN = data.cycleN || cycleN;
+    document.getElementById('dCycle').textContent = cycleN;
+    
+    // Countdown logic
+    const nextUpdate = data.nextUpdate || 0;
+    if (monitorOn && nextUpdate > 0) {
+        const diff = Math.max(0, Math.round((nextUpdate - Date.now()) / 1000));
+        const cd = document.getElementById('countdown');
+        cd.textContent = diff + 's';
+        if (diff <= 3) cd.classList.add('urgent'); else cd.classList.remove('urgent');
+    } else {
+        document.getElementById('countdown').textContent = '—';
+    }
     if (data.vpsSolWallet) {
       updateSolanaVpsWalletUI(data.vpsSolWallet);
     }
@@ -1870,7 +1883,6 @@ setInterval(async () => {
       bStop.style.display='none';
       stat.textContent='Monitor VPS detenido';
     }
-    document.getElementById('cycleN').textContent=cycleN;
     document.getElementById('htime').textContent=new Date().toLocaleTimeString('es',{hour:'2-digit',minute:'2-digit',second:'2-digit'});
   } catch(e) {
     console.error('Interval error:', e);

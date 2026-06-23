@@ -360,6 +360,8 @@ async function mxCancelOrder(symbol, orderId) {
 }
 
 let loopTimer = null;
+let lastCycleAt = Date.now();
+let lastSolanaCycleAt = Date.now();
 
 async function executeOrder(w, side, amount, price) {
   if (w.network === 'solana') {
@@ -371,6 +373,7 @@ async function executeOrder(w, side, amount, price) {
 
 async function runCycle() {
   if (!monitorOn) return;
+  lastCycleAt = Date.now();
   if (!watchItems.length) return;
   cycleN++;
   
@@ -507,8 +510,10 @@ async function runCycle() {
 
 async function runSolanaCycle() {
   if (!monitorOn) return;
+  lastSolanaCycleAt = Date.now();
   const solanaItems = watchItems.filter(w => w.network === 'solana');
   if (!solanaItems.length) return;
+  cycleN++;
   
   // console.log(`[Solana Cycle] Monitoring ${solanaItems.length} items...`);
   
@@ -703,6 +708,7 @@ app.get('/api/state', async (req, res) => {
     cycleN, 
     mode,
     solMode,
+    nextUpdate: monitorOn ? (lastCycleAt + (monitorInterval * 1000)) : 0,
     vpsSolWallet: {
       address: solanaWalletAddress,
       sol: solanaSolBalance,
