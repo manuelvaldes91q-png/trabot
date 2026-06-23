@@ -156,6 +156,7 @@ let solanaWalletAddress = '';
 let solanaSolBalance = 0;
 let solanaUsdcBalance = 0;
 let lastSolanaBalanceUpdate = 0;
+let solanaSwapLogs = [];
 
 async function updateSolanaWalletInfo() {
   const pk = appConfig.solanaPrivateKey || process.env.SOLANA_PRIVATE_KEY;
@@ -297,6 +298,10 @@ async function executeSolanaTrade(w, side, amountUSDT, price) {
     }, 'confirmed');
     
     addLog(`🎉 Solana trade ${side} confirmado con éxito para ${w.symbol}! TxID: ${txid}`, side==='BUY'?'buy':'sell');
+    
+    solanaSwapLogs.unshift({ txid, symbol: w.symbol, side, amountUSDT, time: Date.now() });
+    if(solanaSwapLogs.length > 50) solanaSwapLogs.pop();
+    
     return { ok: true, txid };
   } catch (err) {
     addLog(`❌ Error en ejecución de Solana: ${err.message}`, 'warn');
@@ -664,7 +669,10 @@ app.get('/api/state', async (req, res) => {
   res.setHeader('Pragma', 'no-cache');
   res.setHeader('Expires', '0');
   
-  await updateSolanaWalletInfo();
+  // Run update in background so it does not block the API state response and cause client-side timeouts
+  updateSolanaWalletInfo().catch(err => {
+    console.error('Background updateSolanaWalletInfo failed:', err);
+  });
   
   res.json({ 
     SIM, 
@@ -677,8 +685,10 @@ app.get('/api/state', async (req, res) => {
     vpsSolWallet: {
       address: solanaWalletAddress,
       sol: solanaSolBalance,
-      usdc: solanaUsdcBalance
-    }
+      usdc: solanaUsdcBalance,
+      baseToken: appConfig.solanaBaseToken || 'SOL'
+    },
+    solanaSwapLogs
   });
 });
 
