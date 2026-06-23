@@ -1077,12 +1077,17 @@ async function startScan(){
         d.pairs = mergedPairs;
       } else {
         setSt(`Buscando tokens de Solana (${q})...`, 15);
-        const r = await myFetch(`/api/dexscreener/latest/dex/search?q=${encodeURIComponent(q)}`);
-        if (!r.ok) throw new Error('DexScreener API offline');
-        const json = await r.json();
-        
-        // Ensure d is set
-        d = json || { pairs: [] };
+        const queries = q.split(',').map(s => s.trim()).filter(Boolean);
+        let allResults = [];
+        for (const query of queries) {
+            const r = await myFetch(`/api/dexscreener/latest/dex/search?q=${encodeURIComponent(query)}`);
+            if (r.ok) {
+                const json = await r.json();
+                if (json.pairs) allResults.push(...json.pairs);
+            }
+        }
+        d = { pairs: allResults };
+        console.log('DexScreener API search results:', d.pairs);
         
         // Deduplicate pairs by token address
         const seenTokens = new Set();
@@ -1106,8 +1111,9 @@ async function startScan(){
       }
       
       // Filter out base assets/stablecoins themselves from being trade target tokens
+      console.log('Pairs before filtering:', d.pairs);
       const solPairs = d.pairs.filter(p => {
-        if (p.chainId !== 'solana' || !p.baseToken || !p.volume?.h24) return false;
+        if (!p.chainId || p.chainId.toLowerCase() !== 'solana' || !p.baseToken) return false;
         const sym = p.baseToken.symbol.toUpperCase();
         if (sym === 'SOL' || sym === 'WSOL' || sym === 'USDC' || sym === 'USDT') return false;
         return true;
