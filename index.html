@@ -1079,7 +1079,21 @@ async function startScan(){
         setSt(`Buscando tokens de Solana (${q})...`, 15);
         const r = await myFetch(`/api/dexscreener/latest/dex/search?q=${encodeURIComponent(q)}`);
         if (!r.ok) throw new Error('DexScreener API offline');
-        d = await r.json();
+        const json = await r.json();
+        
+        // Ensure d is set
+        d = json || { pairs: [] };
+        
+        // Deduplicate pairs by token address
+        const seenTokens = new Set();
+        const mergedPairs = [];
+        for (const p of (d.pairs || [])) {
+          if (p.chainId === 'solana' && p.baseToken && !seenTokens.has(p.baseToken.address)) {
+            seenTokens.add(p.baseToken.address);
+            mergedPairs.push(p);
+          }
+        }
+        d.pairs = mergedPairs;
       }
       
       if (!d.pairs || !d.pairs.length) {
