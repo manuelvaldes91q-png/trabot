@@ -216,7 +216,7 @@ select.inp{cursor:pointer}
 <!-- HEADER -->
 <div class="hdr">
   <span class="logo">DIP<span>/</span>HUNTER <span style="font-size:9px;color:var(--pu)">v6</span></span>
-  <span class="hbadge">Escáner MEXC · Monitor 10s · Auto-Ejecución · Alerta Sonora</span>
+  <span class="hbadge" id="hbadge">Escáner MEXC · Monitor 15s · Auto-Ejecución</span>
   <div class="hdot" id="dot"></div>
   <span class="htime" id="htime">—</span>
   <div style="font-family:var(--mono);font-size:8px;color:var(--t2)" id="hstat">Monitor detenido</div>
@@ -1691,7 +1691,7 @@ function renderWatchList(){
         <div style="display:flex;gap:3px;flex-wrap:wrap;margin-top:4px">
           ${filledOrds.length?`<button class="btn btn-y btn-xs" onclick="closeTrade(${wi})">💰 Cerrar</button>` :''}
           <button class="btn btn-d btn-xs" onclick="addOrderToWatch(${wi})">+ Orden</button>
-          <a href="https://www.mexc.com/exchange/${w.pair.replace('USDT','_USDT')}" target="_blank" class="btn btn-d btn-xs">MEXC↗</a>
+          <a href="${w.network === 'solana' ? 'https://dexscreener.com/solana/' + (w.address || '') : 'https://www.mexc.com/exchange/' + w.pair.replace('USDT','_USDT')}" target="_blank" class="btn btn-d btn-xs">${w.network === 'solana' ? 'DexS' : 'MEXC'}↗</a>
           ${w.lastUpdate?`<span style="font-size:7px;color:var(--t3);font-family:var(--mono);padding-top:3px">${new Date(w.lastUpdate).toLocaleTimeString('es',{hour:'2-digit',minute:'2-digit',second:'2-digit'})}</span>` :''}
         </div>
       </div>
@@ -1811,6 +1811,12 @@ setInterval(async () => {
     watchItems = data.watchItems || watchItems;
     cycleN = data.cycleN || cycleN;
     document.getElementById('dCycle').textContent = cycleN;
+    
+    // Update header badge
+    const badge = document.getElementById('hbadge');
+    if (badge) {
+        badge.textContent = `${currentNetwork === 'solana' ? 'Escáner Solana' : 'Escáner MEXC'} · Monitor ${monitorInterval}s · ${monitorOn ? 'ACTIVO' : 'PAUSADO'}`;
+    }
     
     // Countdown logic
     const nextUpdate = data.nextUpdate || 0;

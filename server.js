@@ -117,15 +117,21 @@ async function mxPrice(sym) {
 // SOLANA INTEGRATION (LIVE PRICE, BALANCES, JUPITER API)
 // ============================================
 async function getSolanaPrice(tokenAddress) {
+  if (!tokenAddress) return 0;
   try {
     const r = await fetch(`https://api.dexscreener.com/latest/dex/tokens/${tokenAddress}`);
-    if (!r.ok) return 0;
+    if (!r.ok) {
+      console.warn(`DexScreener API error for ${tokenAddress}: ${r.status}`);
+      return 0;
+    }
     const d = await r.json();
     if (d && d.pairs && d.pairs.length) {
       const solPairs = d.pairs.filter(p => p.chainId === 'solana');
       if (solPairs.length) {
         solPairs.sort((a, b) => (b.liquidity?.usd || 0) - (a.liquidity?.usd || 0));
-        return +solPairs[0].priceUsd || 0;
+        const price = +solPairs[0].priceUsd;
+        if (isNaN(price)) return 0;
+        return price;
       }
     }
     return 0;
