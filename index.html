@@ -1791,7 +1791,7 @@ function renderWatchList(){
         <div style="display:flex;gap:3px;flex-wrap:wrap;margin-top:4px">
           ${filledOrds.length?`<button class="btn btn-y btn-xs" onclick="closeTrade(${wi})">💰 Cerrar</button>` :''}
           <button class="btn btn-d btn-xs" onclick="addOrderToWatch(${wi})">+ Orden</button>
-          <a href="${w.network === 'solana' ? 'https://www.dextools.io/app/en/solana/pair-explorer/' + (w.address || '') : 'https://www.mexc.com/exchange/' + w.pair.replace('USDT','_USDT')}" target="_blank" class="btn btn-d btn-xs">${w.network === 'solana' ? 'DEXT' : 'MEXC'}↗</a>
+          <a href="${w.network === 'solana' ? 'https://dexscreener.com/solana/' + (w.address || '') : 'https://www.mexc.com/exchange/' + w.pair.replace('USDT','_USDT')}" target="_blank" class="btn btn-d btn-xs">${w.network === 'solana' ? 'DexS' : 'MEXC'}↗</a>
           ${w.lastUpdate?`<span style="font-size:7px;color:var(--t3);font-family:var(--mono);padding-top:3px">${new Date(w.lastUpdate).toLocaleTimeString('es',{hour:'2-digit',minute:'2-digit',second:'2-digit'})}</span>` :''}
         </div>
       </div>
@@ -2012,10 +2012,10 @@ async function showDetail(d){
   const cp=d.currentPrice||d.cp||0;
   const isSol = d.network === 'solana';
   const pairName = isSol ? `${d.symbol}/SOL` : `${d.symbol}/USDT`;
-  const extLink = isSol ? `https://www.dextools.io/app/en/solana/pair-explorer/${d.address}` : `https://www.mexc.com/exchange/${d.pair.replace('USDT','_USDT')}`;
-  const extLabel = isSol ? `DEXTools ↗` : `MEXC ↗`;
-  const extCol = isSol ? `#38bdf8` : `var(--b)`;
-  const extBdr = isSol ? `rgba(56,189,248,0.2)` : `rgba(59,130,246,0.2)`;
+  const extLink = isSol ? `https://dexscreener.com/solana/${d.address}` : `https://www.mexc.com/exchange/${d.pair.replace('USDT','_USDT')}`;
+  const extLabel = isSol ? `DexScreener ↗` : `MEXC ↗`;
+  const extCol = isSol ? `#9945FF` : `var(--b)`;
+  const extBdr = isSol ? `rgba(153,69,255,0.2)` : `rgba(59,130,246,0.2)`;
 
   document.getElementById('detHdr').innerHTML=`
     <span style="font-family:var(--mono);font-size:13px;font-weight:700">${pairName}</span>
