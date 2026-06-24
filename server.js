@@ -19,7 +19,7 @@ const PORT = process.env.PORT || 3000;
 // ============================================
 // STATE DEL BOT (SE MANTIENE EN LA MEMORIA RAM Y SE GUARDA EN ARCHIVO)
 // ============================================
-let SIM = { balance: 100, solBalance: 10, usdcBalance: 1000, initBal: 100, trades: [], pnl: 0, wins: 0, losses: 0, totalExec: 0 };
+let SIM = { balance: 1000, solBalance: 10, initBal: 1000, trades: [], pnl: 0, wins: 0, losses: 0, totalExec: 0 };
 let watchItems = [];
 let logs = [];
 let monitorOn = false;
@@ -116,29 +116,50 @@ async function mxPrice(sym) {
 // ============================================
 // SOLANA INTEGRATION (LIVE PRICE, BALANCES, JUPITER API)
 // ============================================
-async function getSolanaPrice(tokenAddress) {
-  if (!tokenAddress) return 0;
+async function getSolanaPrices(addresses) {
+  if (!addresses || !addresses.length) return {};
   try {
-    const r = await fetch(`https://api.dexscreener.com/latest/dex/tokens/${tokenAddress}`);
-    if (!r.ok) {
-      console.warn(`DexScreener API error for ${tokenAddress}: ${r.status}`);
-      return 0;
+    // DexScreener supports up to 30 addresses comma-separated
+    const chunks = [];
+    for (let i = 0; i < addresses.length; i += 30) {
+      chunks.push(addresses.slice(i, i + 30));
     }
-    const d = await r.json();
-    if (d && d.pairs && d.pairs.length) {
-      const solPairs = d.pairs.filter(p => p.chainId === 'solana');
-      if (solPairs.length) {
-        solPairs.sort((a, b) => (b.liquidity?.usd || 0) - (a.liquidity?.usd || 0));
-        const price = +solPairs[0].priceUsd;
-        if (isNaN(price)) return 0;
-        return price;
+    
+    const results = {};
+    for (const chunk of chunks) {
+      const url = `https://api.dexscreener.com/latest/dex/tokens/${chunk.join(',')}`;
+      const r = await fetch(url);
+      if (!r.ok) {
+        console.warn(`DexScreener API error: ${r.status}`);
+        continue;
       }
+      const d = await r.json();
+      if (d && d.pairs) {
+        d.pairs.forEach(p => {
+          if (p.chainId === 'solana' && p.baseToken) {
+            const addr = p.baseToken.address;
+            if (!results[addr] || (p.liquidity?.usd || 0) > (results[addr].liquidity || 0)) {
+              results[addr] = {
+                price: +p.priceUsd,
+                liquidity: p.liquidity?.usd || 0
+              };
+            }
+          }
+        });
+      }
+      // Add a small delay between chunks if multiple
+      if (chunks.length > 1) await new Promise(res => setTimeout(res, 500));
     }
-    return 0;
+    return results;
   } catch (err) {
-    console.error(`Error fetching solana price for ${tokenAddress}:`, err);
-    return 0;
+    console.error(`Error fetching solana prices:`, err);
+    return {};
   }
+}
+
+async function getSolanaPrice(tokenAddress) {
+  const res = await getSolanaPrices([tokenAddress]);
+  return res[tokenAddress]?.price || 0;
 }
 
 async function getTokenBalance(connection, ownerPubKey, tokenMintStr) {
@@ -185,8 +206,8 @@ async function updateSolanaWalletInfo() {
     }
     
     if (solMode !== 'wallet') {
+        solanaUsdcBalance = SIM.balance || 1000;
         solanaSolBalance = SIM.solBalance || 10;
-        solanaUsdcBalance = SIM.usdcBalance || 1000;
         return;
     }
     
@@ -520,16 +541,15 @@ async function runSolanaCycle() {
   const solanaItems = watchItems.filter(w => w.network === 'solana');
   if (!solanaItems.length) return;
   
-  // cycleN increment happens in startLoop or runCycle to avoid double counting if both networks are active
-  
-  // console.log(`[Solana Cycle] Monitoring ${solanaItems.length} items...`);
+  const addresses = solanaItems.map(w => w.address).filter(Boolean);
+  const prices = await getSolanaPrices(addresses);
   
   for (let wi = 0; wi < watchItems.length; wi++) {
     const w = watchItems[wi];
     if (w.network !== 'solana') continue;
     
     try {
-      const cp = await getSolanaPrice(w.address);
+      const cp = prices[w.address]?.price || 0;
       if (cp <= 0) continue;
       
       w.prevPrice = (w.currentPrice || cp);
@@ -554,8 +574,7 @@ async function runSolanaCycle() {
           const realRes = await executeOrder(w, 'BUY', o.amount, cp);
           if (realRes && realRes.ok) {
             if (solMode !== 'wallet') {
-                SIM.usdcBalance -= o.amount;
-                SIM.solBalance += o.amount / cp;
+                SIM.balance -= o.amount;
             }
             SIM.totalExec++;
           } else {
@@ -591,8 +610,7 @@ async function runSolanaCycle() {
           const realRes = await executeOrder(w, 'SELL', inv + pnl, cp);
           if (realRes && realRes.ok) {
             if (solMode !== 'wallet') {
-                SIM.usdcBalance += inv + pnl;
-                SIM.solBalance -= (inv / avg);
+                SIM.balance += inv + pnl;
             }
             SIM.pnl += pnl; 
             SIM.losses++;
@@ -613,8 +631,7 @@ async function runSolanaCycle() {
           const realRes = await executeOrder(w, 'SELL', inv + pnl, cp);
           if (realRes && realRes.ok) {
             if (solMode !== 'wallet') {
-                SIM.usdcBalance += inv + pnl;
-                SIM.solBalance -= (inv / avg);
+                SIM.balance += inv + pnl;
             }
             SIM.pnl += pnl; 
             SIM.wins++;
@@ -636,8 +653,7 @@ async function runSolanaCycle() {
           const realRes = await executeOrder(w, 'SELL', inv + pnl, cp);
           if (realRes && realRes.ok) {
             if (solMode !== 'wallet') {
-                SIM.usdcBalance += inv + pnl;
-                SIM.solBalance -= (inv / avg);
+                SIM.balance += inv + pnl;
             }
             SIM.pnl += pnl; 
             SIM.wins++;
@@ -836,8 +852,7 @@ app.post('/api/action', async (req, res) => {
         if (w.network === 'solana') {
            const res = await executeOrder(w, 'SELL', inv + pnl, cp);
            if (res.ok && solMode !== 'wallet') {
-              SIM.usdcBalance += inv + pnl;
-              SIM.solBalance -= (inv / avg);
+              SIM.balance += inv + pnl;
            }
         } else {
            if (mode === 'real') await executeOrder(w, 'SELL', inv + pnl, cp);
@@ -864,7 +879,11 @@ app.post('/api/action', async (req, res) => {
     if (!w.filledBuys) w.filledBuys = [];
     w.filledBuys.push({ price: cp, amount: o.amount, level: o.level });
     
-    SIM.balance -= o.amount; 
+    if (w.network === 'solana') {
+      SIM.balance -= o.amount;
+    } else {
+      SIM.balance -= o.amount; 
+    }
     SIM.totalExec++;
     
     if (o.level === 1 || !w.slPrice) {

@@ -936,7 +936,7 @@ function updateSolanaVpsWalletUI(vpsSolWallet) {
 }
 
 function updateDash(){
-  document.getElementById('dBal').textContent=SIM.usdcBalance.toFixed(2)+' USDC | '+SIM.solBalance.toFixed(3)+' SOL';
+  document.getElementById('dBal').textContent = '$' + SIM.balance.toFixed(2);
   const pnl=SIM.pnl,pct=SIM.initBal>0?pnl/SIM.initBal*100:0;
   document.getElementById('dPnL').textContent=(pnl>=0?'+':'')+'$'+pnl.toFixed(2);
   document.getElementById('dPnL').style.color=pnl>=0?'var(--g)':'var(--r)';
