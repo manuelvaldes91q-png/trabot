@@ -1699,11 +1699,24 @@ function addToWatch(){
 function renderWatchList(){
   const el=document.getElementById('wlist');
   if(!watchItems.length){el.innerHTML='<div class="empty"><div style="font-size:20px">👁</div><div>Sin monedas</div><div style="font-size:8px;color:var(--t3)">Escanea y configura una entrada</div></div>';return;}
-  el.innerHTML=watchItems.map((w,wi)=>{
-    const cp=w.currentPrice||w.cp;
-    const filledOrds=w.orders.filter(o=>o.status==='filled');
-    const pendingOrds=w.orders.filter(o=>o.status==='pending');
-    const nextOrd=pendingOrds[0]||null;
+  
+  const sortedItems = watchItems.map((w, wi) => {
+    const cp = w.currentPrice || w.cp || 0;
+    const filledOrds = w.orders.filter(o => o.status === 'filled');
+    const pendingOrds = w.orders.filter(o => o.status === 'pending');
+    const nextOrd = pendingOrds[0] || null;
+    let dist = 9999;
+    if (nextOrd && cp > 0) {
+      dist = Math.abs((cp - nextOrd.price) / cp * 100);
+    }
+    return { w, wi, filled: filledOrds.length > 0, dist, cp, filledOrds, pendingOrds, nextOrd };
+  }).sort((a, b) => {
+    if (a.filled && !b.filled) return -1;
+    if (!a.filled && b.filled) return 1;
+    return a.dist - b.dist;
+  });
+
+  el.innerHTML = sortedItems.map(({w, wi, cp, filledOrds, pendingOrds, nextOrd}) => {
     const dist=nextOrd?(cp-nextOrd.price)/cp*100:null;
     const hot=dist!==null&&dist<=1.5,near=dist!==null&&dist<=5;
     let pnlLive=0,pnlPct=0,totalInv=0,avgEntry=0;
