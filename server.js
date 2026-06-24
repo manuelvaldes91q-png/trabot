@@ -140,7 +140,7 @@ async function getSolanaPrices(addresses) {
     
     const results = {};
     for (const chunk of chunks) {
-      const url = `https://api.dexscreener.com/latest/dex/tokens/${chunk.join(',')}`;
+      const url = `https://api.dexscreener.com/latest/dex/tokens/${chunk.join(',')}?t=${Date.now()}`;
       const r = await fetch(url, { signal: AbortSignal.timeout(8000) });
       if (!r.ok) {
         console.warn(`DexScreener API error: ${r.status}`);
@@ -751,10 +751,10 @@ app.get('/api/state', async (req, res) => {
     } catch (e) { console.error('Error sync solana in state:', e); }
   }
 
-  // Actualizar MEXC si llevan más de 15s sin actualizar
+  // Actualizar MEXC si llevan más de 1s sin actualizar
   const now = Date.now();
   for (let w of watchItems) {
-    if (w.network === 'mexc' && (now - (w.lastUpdate || 0) > 15000)) {
+    if (w.network === 'mexc' && (now - (w.lastUpdate || 0) > 1000)) {
        try {
          const cp = await mxPrice(w.symbol);
          if (cp > 0) {
