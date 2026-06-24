@@ -279,7 +279,7 @@ select.inp{cursor:pointer}
         </select>
       </div>
       <div class="sf"><div class="lbl">Mín Días (Edad)</div>
-        <input type="number" id="cfMinAge" class="inp" value="1" min="0" step="0.1">
+        <input type="number" id="cfMinAge" class="inp" value="0" min="0" step="0.1">
       </div>
       <div class="sf"><div class="lbl">Mín MarketCap ($)</div>
         <input type="number" id="cfMinMarketCap" class="inp" value="0" min="0" step="1000">
@@ -511,20 +511,39 @@ function pushNotif(title,body){
 // ══════════════════════════════════════════════════════════
 // API
 // ══════════════════════════════════════════════════════════
-const PX=[u=>`https://corsproxy.io/?${encodeURIComponent(u)}`,u=>`https://api.allorigins.win/raw?url=${encodeURIComponent(u)}`,u=>`https://thingproxy.freeboard.io/fetch/${u}`,u=>u];
+const PX=[
+  u=>`/api/mexc/${u}`,
+  u=>`https://api.allorigins.win/raw?url=${encodeURIComponent('https://api.mexc.com/api/v3/'+u)}`,
+  u=>`https://corsproxy.io/?${encodeURIComponent('https://api.mexc.com/api/v3/'+u)}`
+];
 let pxi=0;
 async function pf(url,ms=10000){
-  try {
-    const c=new AbortController();
-    const t=setTimeout(()=>c.abort(),ms);
-    const r=await myFetch('/api/mexc/' + url, {signal:c.signal});
-    clearTimeout(t);
-    if(!r.ok) throw new Error('Proxy error');
-    return await r.json();
-  } catch(e) {
-    console.error('pf error', e);
-    throw new Error('Sin conexión');
+  for (let i = 0; i < PX.length; i++) {
+    const idx = (pxi + i) % PX.length;
+    try {
+      const c = new AbortController();
+      const t = setTimeout(() => c.abort(), ms);
+      
+      let r;
+      if (idx === 0) {
+        // Backend proxy needs myFetch to send Auth headers
+        r = await myFetch(PX[idx](url), {signal: c.signal});
+      } else {
+        // Public proxies
+        r = await fetch(PX[idx](url), {signal: c.signal});
+      }
+      
+      clearTimeout(t);
+      if (!r.ok) throw new Error('Proxy error ' + r.status);
+      const data = await r.json();
+      pxi = idx; // Save working proxy index
+      return data;
+    } catch(e) {
+      console.warn(`pf attempt ${idx} failed:`, e.message);
+    }
   }
+  console.error('pf error', 'All proxies failed');
+  throw new Error('Sin conexión');
 }
 async function mxTickers(){const d=await pf('ticker/24hr',18000);if(Array.isArray(d))return d;throw new Error('MEXC no disponible');}
 async function mxKlines(sym,iv,lim=120){const im={m15:'15m',m30:'30m',h1:'60m',h4:'4h',d1:'1d'};try{const d=await pf(`klines?symbol=${sym}&interval=${im[iv]||'60m'}&limit=${lim}`,9000);if(Array.isArray(d))return d.map(k=>[Math.floor(+k[0]/1000),+k[1],+k[2],+k[3],+k[4],+k[5]]);return[];}catch{return[];}}
@@ -1016,21 +1035,57 @@ async function checkPhantom() {
   }
 }
 
-function generateSimulatedKlines(cp, chgPct, length=120) {
+function generateSimulatedKlines(cp, priceChangeObj, length=120, seedStr="") {
   const klines = [];
-  const startPrice = cp / (1 + (chgPct || 0) / 100);
-  let current = startPrice;
-  const step = (cp - startPrice) / length;
   const nowSec = Math.floor(Date.now() / 1000);
+  
+  const chg = priceChangeObj || {};
+  const h24 = chg.h24 || 0;
+  const h6 = chg.h6 || (h24 * 0.25);
+  const h1 = chg.h1 || (h6 * 0.16);
+  const m5 = chg.m5 || (h1 * 0.08);
+  
+  // Historical exact prices based on current price
+  const pNow = cp;
+  const p1h = cp / (1 + h1 / 100);
+  const p6h = cp / (1 + h6 / 100);
+  const p24h = cp / (1 + h24 / 100);
+  
+  // For standard 120 items (let's map them to 24h)
+  // Time span: 24h
+  
+  let hash = 0;
+  for (let i = 0; i < seedStr.length; i++) {
+    hash = ((hash << 5) - hash) + seedStr.charCodeAt(i);
+    hash |= 0;
+  }
+  const phase1 = (Math.abs(hash) % 100) / 10;
+  
+  // Helper to get interpolated base price
+  const getBasePrice = (hoursAgo) => {
+    if (hoursAgo <= 0) return pNow;
+    if (hoursAgo <= 1) return p1h + (pNow - p1h) * (1 - hoursAgo);
+    if (hoursAgo <= 6) return p6h + (p1h - p6h) * (1 - (hoursAgo - 1) / 5);
+    if (hoursAgo <= 24) return p24h + (p6h - p24h) * (1 - (hoursAgo - 6) / 18);
+    return p24h; // flat before 24h
+  };
+
   for (let i = 0; i < length; i++) {
-    const pct = i / length;
-    const noise = (Math.sin(i * 0.15) * 0.02 + Math.cos(i * 0.35) * 0.01 + (Math.random() - 0.5) * 0.01) * cp;
-    const price = Math.max(0.000000001, current + pct * (cp - startPrice) + noise);
-    const high = price * (1 + Math.random() * 0.015);
-    const low = price * (1 - Math.random() * 0.015);
-    const open = i === 0 ? startPrice : klines[i-1][4];
+    // how many hours ago is this candle?
+    // if length is 120 and we want to span 24 hours, each step is 24/120 = 0.2 hours
+    const hoursAgo = (length - 1 - i) * (24 / length);
+    const basePrice = getBasePrice(hoursAgo);
+    
+    // Add some noise
+    const noise = (Math.sin(i * 0.3 + phase1) * 0.015 + (Math.random() - 0.5) * 0.01) * basePrice;
+    const price = Math.max(0.000000001, basePrice + noise);
+    
+    const high = price * (1 + Math.random() * 0.012);
+    const low = price * (1 - Math.random() * 0.012);
+    const open = i === 0 ? getBasePrice(24) : klines[i-1][4];
+    
     klines.push([
-      nowSec - (length - i) * 3600,
+      nowSec - Math.floor(hoursAgo * 3600),
       open,
       high,
       low,
@@ -1038,7 +1093,7 @@ function generateSimulatedKlines(cp, chgPct, length=120) {
       Math.random() * 10000
     ]);
   }
-  klines[length-1][4] = cp;
+  klines[length-1][4] = cp; // Exact current price at the end
   return klines;
 }
 
@@ -1235,10 +1290,29 @@ async function startScan(){
       const chgMin = +document.getElementById('cfChg').value || -999;
       const trendReq = document.getElementById('cfTrend').value || 'any';
       const maxCoins = +document.getElementById('cfMax').value || 400;
+      const minAge = document.getElementById('cfMinAge') ? +document.getElementById('cfMinAge').value : 0;
+      const minMarketCap = document.getElementById('cfMinMarketCap') ? +document.getElementById('cfMinMarketCap').value : 0;
       
       setSt(`Procesando ${solPairs.length} pares...`, 40);
       
-      const pool = solPairs.filter(p => (p.volume?.h24 || 0) >= volMin && (p.priceChange?.h24 || 0) >= chgMin).slice(0, maxCoins);
+      const nowMs = Date.now();
+      const pool = solPairs.filter(p => {
+        if ((p.volume?.h24 || 0) < volMin) return false;
+        if ((p.priceChange?.h24 || 0) < chgMin) return false;
+        
+        if (minAge > 0) {
+          if (!p.pairCreatedAt) return false;
+          const ageDays = (nowMs - p.pairCreatedAt) / (1000 * 60 * 60 * 24);
+          if (ageDays < minAge) return false;
+        }
+        
+        if (minMarketCap > 0) {
+          const mc = p.marketCap || p.fdv || 0;
+          if (mc < minMarketCap) return false;
+        }
+        
+        return true;
+      }).slice(0, maxCoins);
       
       for (let i = 0; i < pool.length; i++) {
         const p = pool[i];
@@ -1252,8 +1326,8 @@ async function startScan(){
         const vol = p.volume?.h24 || 0;
         const liq = p.liquidity?.usd || 0;
         
-        const kl1h = generateSimulatedKlines(cp, chg, 120);
-        const kl1d = generateSimulatedKlines(cp, chg, 60);
+        const kl1h = generateSimulatedKlines(cp, p.priceChange, 120, address);
+        const kl1d = generateSimulatedKlines(cp, p.priceChange, 60, address);
         
         const trend = detectTrend(kl1h);
         if (trendReq === 'bull' && !trend.bull) continue;
@@ -1277,6 +1351,7 @@ async function startScan(){
           pairAddress,
           cp,
           chg,
+          priceChangeObj: p.priceChange,
           vol,
           liq,
           trend,
@@ -1926,23 +2001,30 @@ async function showDetail(d){
   document.getElementById('detContent').innerHTML=`
     <div class="det-body">
       <div class="det-left">
+        ${isSol ? '' : `
         <div class="ctabs">
           <button class="ctab on" onclick="loadChart('h1',this)">1H</button>
           <button class="ctab" onclick="loadChart('h4',this)">4H</button>
           <button class="ctab" onclick="loadChart('m30',this)">30M</button>
           <button class="ctab" onclick="loadChart('d1',this)">1D</button>
         </div>
-        <div class="cwrap"><div class="cload" id="cload">⟳ Cargando...</div><canvas id="detChart" style="display:none"></canvas></div>
+        `}
+        <div class="cwrap" style="padding:0;overflow:hidden">
+          ${isSol 
+            ? `<iframe src="https://dexscreener.com/solana/${d.pairAddress || d.address}?embed=1&theme=dark&trades=0&info=0" style="width:100%;height:100%;border:none;border-radius:4px;"></iframe>`
+            : `<div class="cload" id="cload">⟳ Cargando...</div><canvas id="detChart" style="display:none"></canvas>`
+          }
+        </div>
         <div id="apanel"></div>
       </div>
       <div class="det-right">
         <div style="font-family:var(--mono);font-size:8px;font-weight:700;color:var(--t2);text-transform:uppercase;letter-spacing:.08em;margin-bottom:5px;display:flex;justify-content:space-between">
-          📚 AMM / LIQUIDEZ <span style="cursor:pointer;color:var(--b)" onclick="refreshOB()">🔄</span>
+          📚 ${isSol ? 'AMM / LIQUIDEZ' : 'ORDER BOOK'} <span style="cursor:pointer;color:var(--b)" onclick="refreshOB()">🔄</span>
         </div>
-        <div id="obDiv"><div style="color:var(--t2);font-size:8px;font-family:var(--mono)">Cargando AMM...</div></div>
+        <div id="obDiv"><div style="color:var(--t2);font-size:8px;font-family:var(--mono)">Cargando...</div></div>
       </div>
     </div>`;
-  loadChart('h1');
+  if (!isSol) loadChart('h1');
   
   if (isSol) {
     const obDiv = document.getElementById('obDiv');
@@ -1997,7 +2079,7 @@ async function loadChart(tf,tabEl){
   if (curDet.network === 'solana') {
     kl = tf === 'd1' ? curDet.klines1d : curDet.klines1h;
     if (!kl || kl.length === 0) {
-      kl = generateSimulatedKlines(curDet.currentPrice || curDet.cp, curDet.chg || 0, tf === 'd1' ? 60 : 120);
+      kl = generateSimulatedKlines(curDet.currentPrice || curDet.cp, curDet.priceChangeObj || { h24: curDet.chg || 0 }, tf === 'd1' ? 60 : 120, curDet.address || "");
       if (tf === 'd1') curDet.klines1d = kl;
       else curDet.klines1h = kl;
     }
@@ -2069,13 +2151,27 @@ function renderOB(an,cp){
 function renderAP(d,an,cp){
   const el=document.getElementById('apanel');if(!el)return;
   const t=d.trend,s=an.strat;
+  const isSol = d.network === 'solana';
+  
+  // Calculate Scam / Rugpull risk for Solana based on liquidity and volume
+  let scamRisk = null;
+  if (isSol) {
+    const liq = d.liq || 0;
+    const vol = d.vol || 0;
+    if (liq < 5000) scamRisk = ['Riesgo Rugpull / Scam', '🔴 ALTO (Poca liquidez)', 'var(--r)'];
+    else if (liq < 15000) scamRisk = ['Riesgo Rugpull / Scam', '🟡 MEDIO (Liq < $15k)', 'var(--y)'];
+    else scamRisk = ['Riesgo Rugpull / Scam', '🟢 BAJO (Liquidez buena)', 'var(--g)'];
+  }
+
   el.innerHTML=`<div style="background:var(--bg2);border:1px solid var(--bdr);border-radius:5px;padding:7px 9px;margin-top:6px">
     <div style="font-family:var(--mono);font-size:8px;font-weight:700;color:var(--g);margin-bottom:4px">📈 Análisis — ${d.symbol}</div>
     ${[
+      scamRisk,
       ['Tendencia 1H',`${t.emoji} ${t.label} (${t.score}%)`,t.score>=70?'var(--g)':t.score>=45?'var(--y)':'var(--r)'],
+      ['Ciclo / Zigzag', d.zz ? `${d.zz.cycles} ciclos (${d.zz.swingPct.toFixed(1)}% swing)` : 'N/A', d.zz && d.zz.cycles>=3 ? 'var(--g)' : 'var(--y)'],
       ['EMA20 vs precio',`${t.above20?'✅ encima':'❌ debajo'} (${t.distEMA20>0?'+':''}${t.distEMA20}%)`,t.above20?'var(--g)':'var(--r)'],
-      d.bestDip?['Mejor dip hist.',`$${fpZ(d.bestDip.price,cp)} · ×${d.bestDip.count} rebotes`,'var(--y)']:null,
-      s?['🧱 Mejor pared',`$${fpZ(s.bestWall.price,cp)} (${s.bestWall.str}x) −${s.bestWall.dist.toFixed(1)}%`,'var(--g)']:null,
+      d.bestDip?['Punto de rebote (Dip)',`$${fpZ(d.bestDip.price,cp)} · ×${d.bestDip.count} rebotes`,'var(--y)']:null,
+      s?['🧱 Mejor pared / Entrada',`$${fpZ(s.bestWall.price,cp)} (${s.bestWall.str}x) −${s.bestWall.dist.toFixed(1)}%`,'var(--g)']:null,
       s?['R/R estimado',`${s.rr}:1 ${s.rr>=2?'✅':''}`,s.rr>=2?'var(--g)':s.rr>=1?'var(--y)':'var(--r)']:null,
     ].filter(Boolean).map(([l,v,c])=>`<div style="display:flex;justify-content:space-between;padding:2px 0;border-bottom:1px solid rgba(30,38,56,.3);font-size:8px"><span style="color:var(--t2)">${l}</span><span style="font-family:var(--mono);font-weight:700;color:${c}">${v}</span></div>`).join('')}
     <div style="font-size:7px;color:var(--t2);margin-top:4px;font-family:var(--mono)">⚠️ Solo educativo · No es asesoramiento financiero</div>

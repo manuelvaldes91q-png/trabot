@@ -105,7 +105,7 @@ loadState();
 // ============================================
 async function mxPrice(sym) {
   try {
-    const r = await fetch(`https://api.mexc.com/api/v3/ticker/price?symbol=${sym}USDT`);
+    const r = await fetch(`https://api.mexc.com/api/v3/ticker/price?symbol=${sym}USDT`, { signal: AbortSignal.timeout(5000) });
     const d = await r.json();
     return +d.price || 0;
   } catch {
@@ -128,7 +128,7 @@ async function getSolanaPrices(addresses) {
     const results = {};
     for (const chunk of chunks) {
       const url = `https://api.dexscreener.com/latest/dex/tokens/${chunk.join(',')}`;
-      const r = await fetch(url);
+      const r = await fetch(url, { signal: AbortSignal.timeout(8000) });
       if (!r.ok) {
         console.warn(`DexScreener API error: ${r.status}`);
         continue;
@@ -281,7 +281,7 @@ async function executeSolanaTrade(w, side, amountUSDT, price) {
     addLog(`🌀 Consultando cotización Jupiter para ${side} ${w.symbol} (Monto: ${rawAmount}, Slippage: ${slipPercent}%)...`, 'info');
     
     const quoteUrl = `https://quote-api.jup.ag/v6/quote?inputMint=${inputMint}&outputMint=${outputMint}&amount=${rawAmount}&slippageBps=${slippageBps}`;
-    const qr = await fetch(quoteUrl);
+    const qr = await fetch(quoteUrl, { signal: AbortSignal.timeout(8000) });
     if (!qr.ok) {
       const errTxt = await qr.text();
       addLog(`❌ Error Jupiter Quote: ${errTxt}`, 'warn');
@@ -297,6 +297,7 @@ async function executeSolanaTrade(w, side, amountUSDT, price) {
     const sr = await fetch('https://quote-api.jup.ag/v6/swap', {
       method: 'POST',
       headers: { 'Content-Type': 'application/json' },
+      signal: AbortSignal.timeout(10000),
       body: JSON.stringify({
         quoteResponse,
         userPublicKey,
@@ -361,7 +362,7 @@ async function mxRealOrder(symbol, side, amountUSDT, price) {
   const sig = crypto.createHmac('sha256', apiSecret).update(qs).digest('hex');
   try {
     const r = await fetch(`https://api.mexc.com/api/v3/order?${qs}&signature=${sig}`, {
-      method: 'POST', headers: { 'X-MEXC-APIKEY': apiKey }
+      method: 'POST', headers: { 'X-MEXC-APIKEY': apiKey }, signal: AbortSignal.timeout(10000)
     });
     const res = await r.json();
     if (res.code) { addLog(`MEXC Error (${symbol}): ${res.msg}`, 'warn'); return { ok: false }; }
@@ -380,7 +381,7 @@ async function mxCancelOrder(symbol, orderId) {
   const sig = crypto.createHmac('sha256', apiSecret).update(qs).digest('hex');
   try {
     await fetch(`https://api.mexc.com/api/v3/order?${qs}&signature=${sig}`, {
-      method: 'DELETE', headers: { 'X-MEXC-APIKEY': apiKey }
+      method: 'DELETE', headers: { 'X-MEXC-APIKEY': apiKey }, signal: AbortSignal.timeout(10000)
     });
     return true;
   } catch(e) { return false; }
@@ -803,7 +804,7 @@ app.get('/api/dexscreener/*', async (req, res) => {
     const endpoint = req.params[0];
     const qs = new URLSearchParams(req.query).toString();
     const url = `https://api.dexscreener.com/${endpoint}${qs ? '?' + qs : ''}`;
-    const r = await fetch(url);
+    const r = await fetch(url, { signal: AbortSignal.timeout(10000) });
     if (!r.ok) return res.status(r.status).json({error: `DexScreener err: ${r.statusText}`});
     const data = await r.json();
     res.json(data);
@@ -817,7 +818,7 @@ app.get('/api/mexc/*', async (req, res) => {
     const endpoint = req.params[0];
     const qs = new URLSearchParams(req.query).toString();
     const url = `https://api.mexc.com/api/v3/${endpoint}${qs ? '?' + qs : ''}`;
-    const r = await fetch(url);
+    const r = await fetch(url, { signal: AbortSignal.timeout(10000) });
     if (!r.ok) return res.status(r.status).json({error: `MEXC err: ${r.statusText}`});
     const data = await r.json();
     res.json(data);
