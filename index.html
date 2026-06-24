@@ -1996,6 +1996,11 @@ async function loadChart(tf,tabEl){
   let kl;
   if (curDet.network === 'solana') {
     kl = tf === 'd1' ? curDet.klines1d : curDet.klines1h;
+    if (!kl || kl.length === 0) {
+      kl = generateSimulatedKlines(curDet.currentPrice || curDet.cp, curDet.chg || 0, tf === 'd1' ? 60 : 120);
+      if (tf === 'd1') curDet.klines1d = kl;
+      else curDet.klines1h = kl;
+    }
   } else {
     kl = await mxKlines(curDet.pair,tf,120);
   }
