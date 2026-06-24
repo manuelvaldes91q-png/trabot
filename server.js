@@ -138,10 +138,14 @@ async function getSolanaPrices(addresses) {
     const toFetch = [];
     const results = {};
 
-    // Check which addresses need a refresh (older than 3 seconds or not in cache)
-    for (const addr of addresses) {
+    // Deduplicate and trim incoming addresses
+    const uniqueAddresses = Array.from(new Set(addresses.map(a => a.trim()).filter(Boolean)));
+    if (!uniqueAddresses.length) return {};
+
+    // Check which addresses need a refresh (older than 5 seconds or not in cache)
+    for (const addr of uniqueAddresses) {
       const cached = solanaPricesCache[addr];
-      if (cached && (now - cached.lastFetch < 3000)) {
+      if (cached && (now - cached.lastFetch < 5000)) {
         results[addr] = { price: cached.price, liquidity: cached.liquidity };
       } else {
         toFetch.push(addr);
@@ -156,13 +160,21 @@ async function getSolanaPrices(addresses) {
       }
       
       for (const chunk of chunks) {
-        const url = `https://api.dexscreener.com/latest/dex/tokens/${chunk.join(',')}?t=${now}`;
+        // Round the timestamp query to 10 seconds to leverage CDN caching and avoid 429 errors
+        const tRound = Math.floor(now / 10000) * 10;
+        const url = `https://api.dexscreener.com/latest/dex/tokens/${chunk.join(',')}?t=${tRound}`;
         const r = await fetch(url, { signal: AbortSignal.timeout(8000) });
+        
         if (!r.ok) {
           console.warn(`DexScreener API error: ${r.status}`);
-          // If we get an error (like 429), fall back to whatever is in cache if available
+          // If we get an error (like 429), set a 12s cooldown (via lastFetch) so we don't spam the API
           for (const addr of chunk) {
             const cached = solanaPricesCache[addr];
+            solanaPricesCache[addr] = {
+              price: cached ? cached.price : 0,
+              liquidity: cached ? cached.liquidity : 0,
+              lastFetch: now + 12000 // future timestamp means it won't re-fetch for 12s
+            };
             if (cached) {
               results[addr] = { price: cached.price, liquidity: cached.liquidity };
             }
@@ -187,15 +199,26 @@ async function getSolanaPrices(addresses) {
           });
         }
 
-        // Save chunk results to the cache and results
+        // Save chunk results to the cache and results with case-insensitive fallback mapping
         for (const addr of chunk) {
-          if (chunkResults[addr]) {
+          let matchedResult = chunkResults[addr];
+          
+          // Case-insensitive lookup fallback if exact case failed (Solana addresses should be exact, but just in case)
+          if (!matchedResult) {
+            const lowerAddr = addr.toLowerCase();
+            const foundKey = Object.keys(chunkResults).find(k => k.toLowerCase() === lowerAddr);
+            if (foundKey) {
+              matchedResult = chunkResults[foundKey];
+            }
+          }
+
+          if (matchedResult) {
             solanaPricesCache[addr] = {
-              price: chunkResults[addr].price,
-              liquidity: chunkResults[addr].liquidity,
+              price: matchedResult.price,
+              liquidity: matchedResult.liquidity,
               lastFetch: now
             };
-            results[addr] = { price: chunkResults[addr].price, liquidity: chunkResults[addr].liquidity };
+            results[addr] = { price: matchedResult.price, liquidity: matchedResult.liquidity };
           } else {
             // Token wasn't found in DexScreener response (might be newly listed or invalid),
             // cache it with 0 or keep old to prevent spamming the API
@@ -218,11 +241,13 @@ async function getSolanaPrices(addresses) {
     return results;
   } catch (err) {
     console.error(`Error fetching solana prices:`, err);
-    // Return cache fallback on complete error
+    // Return cache fallback on complete error and set a short cooldown
     const results = {};
+    const now = Date.now();
     for (const addr of addresses) {
       const cached = solanaPricesCache[addr];
       if (cached) {
+        solanaPricesCache[addr].lastFetch = now + 12000; // 12s cooldown
         results[addr] = { price: cached.price, liquidity: cached.liquidity };
       }
     }
@@ -795,17 +820,24 @@ app.get('/api/state', async (req, res) => {
   res.setHeader('Pragma', 'no-cache');
   res.setHeader('Expires', '0');
   
-  // Forzar actualización de precios de Solana en cada petición para sincronización total con DexScreener
+  // Forzar actualización de precios de Solana solo si el monitor está apagado o las posiciones están desactualizadas (evita tormentas de peticiones a DexScreener)
   const solanaItems = watchItems.filter(w => w.network === 'solana');
   if (solanaItems.length > 0) {
     try {
-      const addresses = solanaItems.map(w => w.address).filter(Boolean);
-      const prices = await getSolanaPrices(addresses);
-      for (let w of watchItems) {
-        if (w.network === 'solana' && prices[w.address]) {
-          w.prevPrice = w.currentPrice || prices[w.address].price;
-          w.currentPrice = prices[w.address].price;
-          w.lastUpdate = Date.now();
+      const nowMs = Date.now();
+      // Si el monitor está encendido, ya actualiza en background cada 1s, por lo que no es necesario forzar
+      // la petición aquí a menos que lleve más de 5 segundos desactualizado.
+      const needsSync = !monitorOn || solanaItems.some(w => !w.lastUpdate || (nowMs - w.lastUpdate > 5000));
+      
+      if (needsSync) {
+        const addresses = solanaItems.map(w => w.address).filter(Boolean);
+        const prices = await getSolanaPrices(addresses);
+        for (let w of watchItems) {
+          if (w.network === 'solana' && prices[w.address]) {
+            w.prevPrice = w.currentPrice || prices[w.address].price;
+            w.currentPrice = prices[w.address].price;
+            w.lastUpdate = nowMs;
+          }
         }
       }
     } catch (e) { console.error('Error sync solana in state:', e); }
