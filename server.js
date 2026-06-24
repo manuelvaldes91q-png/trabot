@@ -103,11 +103,24 @@ loadState();
 // ============================================
 // API DE MEXC (NATIHVA EN NODE.JS)
 // ============================================
+let mexcPricesCache = null;
+let mexcPricesTime = 0;
+
 async function mxPrice(sym) {
   try {
-    const r = await fetch(`https://api.mexc.com/api/v3/ticker/price?symbol=${sym}USDT`, { signal: AbortSignal.timeout(5000) });
-    const d = await r.json();
-    return +d.price || 0;
+    const now = Date.now();
+    if (now - mexcPricesTime > 1000 || !mexcPricesCache) {
+      const r = await fetch(`https://api.mexc.com/api/v3/ticker/price`, { signal: AbortSignal.timeout(5000) });
+      const d = await r.json();
+      if (Array.isArray(d)) {
+        mexcPricesCache = {};
+        for(const item of d) {
+          mexcPricesCache[item.symbol] = +item.price;
+        }
+        mexcPricesTime = now;
+      }
+    }
+    return mexcPricesCache ? (mexcPricesCache[`${sym}USDT`] || 0) : 0;
   } catch {
     return 0;
   }
@@ -694,7 +707,7 @@ function startLoop() {
   if (solanaTimer) clearInterval(solanaTimer);
   solanaTimer = setInterval(() => {
     if (monitorOn) runSolanaCycle();
-  }, 3000); // Monitoreo de alta frecuencia cada 3 segundos para tokens ultra-volátiles de Solana
+  }, 1000); // Monitoreo de alta frecuencia cada 1 segundo para Solana
 }
 
 // Iniciar el loop si estaba encendido en el estado recuperado

@@ -330,7 +330,8 @@ select.inp{cursor:pointer}
         <div class="mb-stat">Ciclo: <span class="mb-val" id="dCycle">0</span> · Vigiladas: <span class="mb-val" id="watchN">0</span></div>
         <div class="mb-stat">Ejecutadas: <span class="mb-val" id="execN" style="color:var(--g)">0</span> · Intervalo:
           <select id="cfInterval" class="inp" style="display:inline;width:auto;padding:1px 4px;font-size:8px" onchange="myFetch('/api/action', {method: 'POST', headers: {'Content-Type': 'application/json'}, body: JSON.stringify({action: 'updateInterval', payload: {interval: +this.value}})})">
-            <option value="10">10s⚡</option><option value="15" selected>15s</option>
+            <option value="1">1s⚡⚡</option><option value="2">2s⚡⚡</option><option value="3">3s⚡</option>
+            <option value="5">5s⚡</option><option value="10">10s</option><option value="15" selected>15s</option>
             <option value="30">30s</option><option value="60">60s</option>
           </select>
         </div>
