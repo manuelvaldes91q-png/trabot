@@ -1818,6 +1818,10 @@ setInterval(async () => {
         badge.textContent = `${currentNetwork === 'solana' ? 'Escáner Solana' : 'Escáner MEXC'} · Monitor ${monitorInterval}s · ${monitorOn ? 'ACTIVO' : 'PAUSADO'}`;
     }
     
+    if (monitorOn) {
+      stat.innerHTML=`Ciclo ${cycleN} · ${watchItems.length} monedas <span style="color:var(--g)">(VPS Activo)</span>`;
+    }
+    
     // Countdown logic
     const nextUpdate = data.nextUpdate || 0;
     if (monitorOn && nextUpdate > 0) {

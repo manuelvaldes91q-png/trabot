@@ -519,7 +519,8 @@ async function runSolanaCycle() {
   lastSolanaCycleAt = Date.now();
   const solanaItems = watchItems.filter(w => w.network === 'solana');
   if (!solanaItems.length) return;
-  cycleN++;
+  
+  // cycleN increment happens in startLoop or runCycle to avoid double counting if both networks are active
   
   // console.log(`[Solana Cycle] Monitoring ${solanaItems.length} items...`);
   
