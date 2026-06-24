@@ -36,7 +36,8 @@ let appConfig = {
   solanaRpcUrl: process.env.SOLANA_RPC_URL || 'https://api.mainnet-beta.solana.com',
   solanaBaseToken: process.env.SOLANA_BASE_TOKEN || 'SOL',
   solanaSlippage: process.env.SOLANA_SLIPPAGE ? parseFloat(process.env.SOLANA_SLIPPAGE) : 2.5,
-  solanaPriorityFee: process.env.SOLANA_PRIORITY_FEE || 'auto'
+  solanaPriorityFee: process.env.SOLANA_PRIORITY_FEE || 'auto',
+  dextoolsApiKey: process.env.DEXTOOLS_API_KEY || ''
 };
 
 function fpZ(p,ref){if(!p||!ref)return'0';if(ref>=10)return p.toFixed(3);if(ref>=0.1)return p.toFixed(4);if(ref>=0.01)return p.toFixed(5);if(ref>=0.001)return p.toFixed(6);const m=ref.toFixed(12).match(/^0\.(0+)/);return m?p.toFixed(m[1].length+4):p.toFixed(6);}
@@ -153,95 +154,198 @@ async function getSolanaPrices(addresses) {
     }
 
     if (toFetch.length > 0) {
-      // DexScreener supports up to 30 addresses comma-separated
-      const chunks = [];
-      for (let i = 0; i < toFetch.length; i += 30) {
-        chunks.push(toFetch.slice(i, i + 30));
-      }
+      // If we have a DexTools API key configured, we can fetch from DexTools, otherwise we use GeckoTerminal/DexScreener
+      const apiKey = appConfig.dextoolsApiKey || process.env.DEXTOOLS_API_KEY;
       
-      for (const chunk of chunks) {
-        // Round the timestamp query to 10 seconds to leverage CDN caching and avoid 429 errors
-        const tRound = Math.floor(now / 10000) * 10;
-        const url = `https://api.dexscreener.com/latest/dex/tokens/${chunk.join(',')}?t=${tRound}`;
-        const r = await fetch(url, { signal: AbortSignal.timeout(8000) });
-        
-        if (!r.ok) {
-          console.warn(`DexScreener API error: ${r.status}`);
-          // If we get an error (like 429), set a 12s cooldown (via lastFetch) so we don't spam the API
-          for (const addr of chunk) {
-            const cached = solanaPricesCache[addr];
-            solanaPricesCache[addr] = {
-              price: cached ? cached.price : 0,
-              liquidity: cached ? cached.liquidity : 0,
-              lastFetch: now + 12000 // future timestamp means it won't re-fetch for 12s
-            };
-            if (cached) {
-              results[addr] = { price: cached.price, liquidity: cached.liquidity };
+      if (apiKey) {
+        // Try fetching via DexTools API
+        for (const addr of toFetch) {
+          try {
+            // DexTools endpoint for token price: https://public-api.dextools.io/trial/v2/token/solana/{address}/price
+            const url = `https://public-api.dextools.io/trial/v2/token/solana/${addr}/price`;
+            const r = await fetch(url, {
+              headers: { 'x-api-key': apiKey },
+              signal: AbortSignal.timeout(5000)
+            });
+            if (r.ok) {
+              const d = await r.json();
+              const price = d.data?.price || d.data?.priceUsd || 0;
+              const liquidity = d.data?.liquidity || 0;
+              solanaPricesCache[addr] = { price: +price, liquidity: +liquidity, lastFetch: now };
+              results[addr] = { price: +price, liquidity: +liquidity };
+              continue;
             }
+          } catch (e) {
+            console.warn(`DexTools API fetch failed for ${addr}:`, e.message);
           }
-          continue;
+          
+          // Fallback to cache or fallback parser for this address
+          const cached = solanaPricesCache[addr];
+          if (cached) {
+            results[addr] = { price: cached.price, liquidity: cached.liquidity };
+          }
         }
-        const d = await r.json();
-        
-        // Mark addresses in this chunk as updated to avoid repeating failed ones immediately
-        const chunkResults = {};
-        if (d && d.pairs) {
-          d.pairs.forEach(p => {
-            if (p.chainId === 'solana' && p.baseToken) {
-              const addr = p.baseToken.address;
-              if (!chunkResults[addr] || (p.liquidity?.usd || 0) > (chunkResults[addr].liquidity || 0)) {
-                chunkResults[addr] = {
-                  price: +p.priceUsd,
-                  liquidity: p.liquidity?.usd || 0
-                };
+      } else {
+        // No DexTools API key -> Use GeckoTerminal as the primary reliable price source!
+        // GeckoTerminal supports up to 30 addresses separated by commas
+        const chunks = [];
+        for (let i = 0; i < toFetch.length; i += 30) {
+          chunks.push(toFetch.slice(i, i + 30));
+        }
+
+        for (const chunk of chunks) {
+          try {
+            const url = `https://api.geckoterminal.com/api/v2/networks/solana/tokens/multi/${chunk.join(',')}`;
+            const r = await fetch(url, { signal: AbortSignal.timeout(8000) });
+            
+            if (r.ok) {
+              const d = await r.json();
+              const chunkResults = {};
+              
+              if (d && d.data) {
+                d.data.forEach(item => {
+                  const addr = item.attributes?.address;
+                  if (addr) {
+                    chunkResults[addr] = {
+                      price: +(item.attributes?.price_usd || 0),
+                      liquidity: +(item.attributes?.total_reserve_in_usd || 0)
+                    };
+                  }
+                });
+              }
+
+              for (const addr of chunk) {
+                let matchedResult = chunkResults[addr];
+                if (!matchedResult) {
+                  const lowerAddr = addr.toLowerCase();
+                  const foundKey = Object.keys(chunkResults).find(k => k.toLowerCase() === lowerAddr);
+                  if (foundKey) {
+                    matchedResult = chunkResults[foundKey];
+                  }
+                }
+
+                if (matchedResult) {
+                  solanaPricesCache[addr] = {
+                    price: matchedResult.price,
+                    liquidity: matchedResult.liquidity,
+                    lastFetch: now
+                  };
+                  results[addr] = { price: matchedResult.price, liquidity: matchedResult.liquidity };
+                } else {
+                  // Fallback to DexScreener if GeckoTerminal didn't return this address
+                  const dexScrUrl = `https://api.dexscreener.com/latest/dex/tokens/${addr}`;
+                  try {
+                    const dexScrRes = await fetch(dexScrUrl, { signal: AbortSignal.timeout(5000) });
+                    if (dexScrRes.ok) {
+                      const dexScrData = await dexScrRes.json();
+                      const bestPair = dexScrData?.pairs?.find(p => p.chainId === 'solana');
+                      if (bestPair) {
+                        const price = +bestPair.priceUsd;
+                        const liquidity = bestPair.liquidity?.usd || 0;
+                        solanaPricesCache[addr] = { price, liquidity, lastFetch: now };
+                        results[addr] = { price, liquidity };
+                        continue;
+                      }
+                    }
+                  } catch (e) {
+                    console.warn(`DexScreener fallback failed for ${addr}:`, e.message);
+                  }
+
+                  const cached = solanaPricesCache[addr];
+                  solanaPricesCache[addr] = {
+                    price: cached ? cached.price : 0,
+                    liquidity: cached ? cached.liquidity : 0,
+                    lastFetch: now
+                  };
+                  if (cached) {
+                    results[addr] = { price: cached.price, liquidity: cached.liquidity };
+                  }
+                }
+              }
+            } else {
+              console.warn(`GeckoTerminal API error: ${r.status}. Falling back to DexScreener.`);
+              // If GeckoTerminal is rate-limited or fails, fall back to DexScreener for this chunk
+              const dexScrUrl = `https://api.dexscreener.com/latest/dex/tokens/${chunk.join(',')}`;
+              try {
+                const dexScrRes = await fetch(dexScrUrl, { signal: AbortSignal.timeout(8000) });
+                if (dexScrRes.ok) {
+                  const dexScrData = await dexScrRes.json();
+                  const chunkResults = {};
+                  if (dexScrData && dexScrData.pairs) {
+                    dexScrData.pairs.forEach(p => {
+                      if (p.chainId === 'solana' && p.baseToken) {
+                        const addr = p.baseToken.address;
+                        if (!chunkResults[addr] || (p.liquidity?.usd || 0) > (chunkResults[addr].liquidity || 0)) {
+                          chunkResults[addr] = {
+                            price: +p.priceUsd,
+                            liquidity: p.liquidity?.usd || 0
+                          };
+                        }
+                      }
+                    });
+                  }
+
+                  for (const addr of chunk) {
+                    let matchedResult = chunkResults[addr];
+                    if (!matchedResult) {
+                      const lowerAddr = addr.toLowerCase();
+                      const foundKey = Object.keys(chunkResults).find(k => k.toLowerCase() === lowerAddr);
+                      if (foundKey) matchedResult = chunkResults[foundKey];
+                    }
+
+                    if (matchedResult) {
+                      solanaPricesCache[addr] = { price: matchedResult.price, liquidity: matchedResult.liquidity, lastFetch: now };
+                      results[addr] = { price: matchedResult.price, liquidity: matchedResult.liquidity };
+                    } else {
+                      const cached = solanaPricesCache[addr];
+                      if (cached) {
+                        results[addr] = { price: cached.price, liquidity: cached.liquidity };
+                      }
+                    }
+                  }
+                } else {
+                  // Fallback to cache with a cooldown
+                  for (const addr of chunk) {
+                    const cached = solanaPricesCache[addr];
+                    solanaPricesCache[addr] = {
+                      price: cached ? cached.price : 0,
+                      liquidity: cached ? cached.liquidity : 0,
+                      lastFetch: now + 12000 // future timestamp means it won't re-fetch for 12s
+                    };
+                    if (cached) {
+                      results[addr] = { price: cached.price, liquidity: cached.liquidity };
+                    }
+                  }
+                }
+              } catch (e) {
+                console.warn(`DexScreener fallback chunk failed:`, e.message);
+                for (const addr of chunk) {
+                  const cached = solanaPricesCache[addr];
+                  if (cached) {
+                    results[addr] = { price: cached.price, liquidity: cached.liquidity };
+                  }
+                }
               }
             }
-          });
-        }
-
-        // Save chunk results to the cache and results with case-insensitive fallback mapping
-        for (const addr of chunk) {
-          let matchedResult = chunkResults[addr];
-          
-          // Case-insensitive lookup fallback if exact case failed (Solana addresses should be exact, but just in case)
-          if (!matchedResult) {
-            const lowerAddr = addr.toLowerCase();
-            const foundKey = Object.keys(chunkResults).find(k => k.toLowerCase() === lowerAddr);
-            if (foundKey) {
-              matchedResult = chunkResults[foundKey];
+          } catch (err) {
+            console.warn(`GeckoTerminal fetch error for chunk:`, err.message);
+            // Fallback to cache for this chunk
+            for (const addr of chunk) {
+              const cached = solanaPricesCache[addr];
+              if (cached) {
+                results[addr] = { price: cached.price, liquidity: cached.liquidity };
+              }
             }
           }
 
-          if (matchedResult) {
-            solanaPricesCache[addr] = {
-              price: matchedResult.price,
-              liquidity: matchedResult.liquidity,
-              lastFetch: now
-            };
-            results[addr] = { price: matchedResult.price, liquidity: matchedResult.liquidity };
-          } else {
-            // Token wasn't found in DexScreener response (might be newly listed or invalid),
-            // cache it with 0 or keep old to prevent spamming the API
-            const cached = solanaPricesCache[addr];
-            solanaPricesCache[addr] = {
-              price: cached ? cached.price : 0,
-              liquidity: cached ? cached.liquidity : 0,
-              lastFetch: now
-            };
-            if (cached) {
-              results[addr] = { price: cached.price, liquidity: cached.liquidity };
-            }
-          }
+          if (chunks.length > 1) await new Promise(res => setTimeout(res, 500));
         }
-
-        if (chunks.length > 1) await new Promise(res => setTimeout(res, 500));
       }
     }
 
     return results;
   } catch (err) {
     console.error(`Error fetching solana prices:`, err);
-    // Return cache fallback on complete error and set a short cooldown
     const results = {};
     const now = Date.now();
     for (const addr of addresses) {
@@ -909,7 +1013,7 @@ app.get('/api/config', (req, res) => {
 });
 
 app.post('/api/config', (req, res) => {
-  const { mexcApiKey, mexcApiSecret, tgBotToken, tgChatId, appPassword, solanaPrivateKey, solanaRpcUrl, solanaBaseToken, solanaSlippage, solanaPriorityFee } = req.body;
+  const { mexcApiKey, mexcApiSecret, tgBotToken, tgChatId, appPassword, solanaPrivateKey, solanaRpcUrl, solanaBaseToken, solanaSlippage, solanaPriorityFee, dextoolsApiKey } = req.body;
   if(mexcApiKey !== undefined) appConfig.mexcApiKey = mexcApiKey;
   if(mexcApiSecret !== undefined) appConfig.mexcApiSecret = mexcApiSecret;
   if(tgBotToken !== undefined) appConfig.tgBotToken = tgBotToken;
@@ -920,6 +1024,7 @@ app.post('/api/config', (req, res) => {
   if(solanaBaseToken !== undefined) appConfig.solanaBaseToken = solanaBaseToken;
   if(solanaSlippage !== undefined) appConfig.solanaSlippage = parseFloat(solanaSlippage) || 2.5;
   if(solanaPriorityFee !== undefined) appConfig.solanaPriorityFee = solanaPriorityFee;
+  if(dextoolsApiKey !== undefined) appConfig.dextoolsApiKey = dextoolsApiKey;
   saveState();
   res.json({ status: 'ok', config: appConfig });
 });
