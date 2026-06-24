@@ -721,6 +721,37 @@ app.get('/api/state', async (req, res) => {
   res.setHeader('Pragma', 'no-cache');
   res.setHeader('Expires', '0');
   
+  // Forzar actualización de precios de Solana en cada petición para sincronización total con DexScreener
+  const solanaItems = watchItems.filter(w => w.network === 'solana');
+  if (solanaItems.length > 0) {
+    try {
+      const addresses = solanaItems.map(w => w.address).filter(Boolean);
+      const prices = await getSolanaPrices(addresses);
+      for (let w of watchItems) {
+        if (w.network === 'solana' && prices[w.address]) {
+          w.prevPrice = w.currentPrice || prices[w.address].price;
+          w.currentPrice = prices[w.address].price;
+          w.lastUpdate = Date.now();
+        }
+      }
+    } catch (e) { console.error('Error sync solana in state:', e); }
+  }
+
+  // Actualizar MEXC si llevan más de 15s sin actualizar
+  const now = Date.now();
+  for (let w of watchItems) {
+    if (w.network === 'mexc' && (now - (w.lastUpdate || 0) > 15000)) {
+       try {
+         const cp = await mxPrice(w.symbol);
+         if (cp > 0) {
+           w.prevPrice = w.currentPrice || cp;
+           w.currentPrice = cp;
+           w.lastUpdate = now;
+         }
+       } catch (e) {}
+    }
+  }
+
   // Run update in background so it does not block the API state response and cause client-side timeouts
   updateSolanaWalletInfo().catch(err => {
     console.error('Background updateSolanaWalletInfo failed:', err);

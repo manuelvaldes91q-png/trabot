@@ -1648,7 +1648,7 @@ function renderWatchList(){
         <div style="display:flex;align-items:center;gap:5px">
           <span class="wc-sym">${w.symbol}</span>
           ${w.network==='solana'?'<span class="tag" style="background:#a855f725;color:#a855f7;border:1px solid #a855f740;font-size:7px;padding:0 3px">SOL</span>':''}
-          <span class="tag ${w.trend.score>=70?'tg':w.trend.score>=45?'ty':'tr'}">${w.trend.emoji}</span>
+          <span class="tag ${w.trend?.score>=70?'tg':w.trend?.score>=45?'ty':'tr'}">${w.trend?.emoji||'─'}</span>
           ${hot?'<span class="tag tg" style="animation:blink .5s infinite">🎯</span>' :''}
           ${near&&!hot?'<span class="tag ty">⚡</span>' :''}
         </div>
@@ -1815,25 +1815,40 @@ setInterval(async () => {
     cycleN = data.cycleN || cycleN;
     document.getElementById('dCycle').textContent = cycleN;
     
-    // Update header badge
+    // Update header badge and status
     const badge = document.getElementById('hbadge');
-    if (badge) {
+    const stat = document.getElementById('hstat');
+    const dot = document.getElementById('dot');
+    const bStart = document.getElementById('btnStart');
+    const bStop = document.getElementById('btnStop');
+    
+    if (badge && typeof currentNetwork !== 'undefined') {
         badge.textContent = `${currentNetwork === 'solana' ? 'Escáner Solana' : 'Escáner MEXC'} · Monitor ${monitorInterval}s · ${monitorOn ? 'ACTIVO' : 'PAUSADO'}`;
     }
     
     if (monitorOn) {
-      stat.innerHTML=`Ciclo ${cycleN} · ${watchItems.length} monedas <span style="color:var(--g)">(VPS Activo)</span>`;
+      if (dot) dot.classList.add('on');
+      if (bStart) bStart.style.display = 'none';
+      if (bStop) bStop.style.display = '';
+      if (stat) stat.innerHTML = `Ciclo ${cycleN} · ${watchItems.length} monedas <span style="color:var(--g)">(VPS Activo)</span>`;
+    } else {
+      if (dot) dot.classList.remove('on');
+      if (bStart) bStart.style.display = '';
+      if (bStop) bStop.style.display = 'none';
+      if (stat) stat.textContent = 'Monitor VPS detenido';
     }
     
     // Countdown logic
     const nextUpdate = data.nextUpdate || 0;
+    const cd = document.getElementById('countdown');
     if (monitorOn && nextUpdate > 0) {
         const diff = Math.max(0, Math.round((nextUpdate - Date.now()) / 1000));
-        const cd = document.getElementById('countdown');
-        cd.textContent = diff + 's';
-        if (diff <= 3) cd.classList.add('urgent'); else cd.classList.remove('urgent');
-    } else {
-        document.getElementById('countdown').textContent = '—';
+        if (cd) {
+          cd.textContent = diff + 's';
+          if (diff <= 3) cd.classList.add('urgent'); else cd.classList.remove('urgent');
+        }
+    } else if (cd) {
+        cd.textContent = '—';
     }
     if (data.vpsSolWallet) {
       updateSolanaVpsWalletUI(data.vpsSolWallet);
@@ -1853,7 +1868,9 @@ setInterval(async () => {
     
     // update scan badges
     document.querySelectorAll('.rc-sym').forEach(el => {
-      const sym = el.childNodes[0].textContent.trim();
+      const symNode = el.childNodes[0];
+      if (!symNode) return;
+      const sym = symNode.textContent.trim();
       const isWatched = watchItems.some(w => w.symbol === sym);
       const hasBadge = el.querySelector('.watch-badge');
       if (isWatched && !hasBadge) {
@@ -1878,24 +1895,6 @@ setInterval(async () => {
     renderWatchList();
     renderLog();
     
-    const bStart = document.getElementById('btnStart');
-    const bStop = document.getElementById('btnStop');
-    const dot = document.getElementById('dot');
-    const stat = document.getElementById('hstat');
-    
-    monitorOn = data.monitorOn;
-    
-    if (monitorOn) {
-      dot.classList.add('on');
-      bStart.style.display='none';
-      bStop.style.display='';
-      stat.innerHTML=`Ciclo ${cycleN} · ${watchItems.length} monedas <span style="color:var(--g)">(VPS Activo)</span>`;
-    } else {
-      dot.classList.remove('on');
-      bStart.style.display='';
-      bStop.style.display='none';
-      stat.textContent='Monitor VPS detenido';
-    }
     document.getElementById('htime').textContent=new Date().toLocaleTimeString('es',{hour:'2-digit',minute:'2-digit',second:'2-digit'});
   } catch(e) {
     console.error('Interval error:', e);
