@@ -630,7 +630,7 @@ function analyzeOB(bids,asks,cp,dips){
 // ══════════════════════════════════════════════════════════
 // SIMULADOR Y SINCRONIZACIÓN CON EL SERVIDOR (VPS)
 // ══════════════════════════════════════════════════════════
-let SIM={solBalance:10,usdcBalance:1000,initBal:1000,trades:[],pnl:0,wins:0,losses:0,totalExec:0};
+let SIM={balance:1000,solBalance:10,initBal:1000,trades:[],pnl:0,wins:0,losses:0,totalExec:0};
 
 let syncTimer=null;
 function syncState(){
@@ -1767,7 +1767,7 @@ function clearAll(){
 // ══════════════════════════════════════════════════════════
 // MONITOR — NÚCLEO (Sincronizado vía Backend)
 // ══════════════════════════════════════════════════════════
-let monitorOn=false,cycleN=0;
+let monitorOn=false,cycleN=0,monitorInterval=15;
 
 function startMonitor(){
   if(monitorOn)return;
@@ -1804,6 +1804,9 @@ setInterval(async () => {
     const data = await res.json();
     
     SIM = data.SIM || SIM;
+    monitorOn = data.monitorOn ?? monitorOn;
+    monitorInterval = data.monitorInterval || monitorInterval;
+    
     if(data.mode) {
       document.getElementById('modeSel').value = data.mode;
       document.getElementById('dBalS').textContent = data.mode === 'real' ? 'USDT (Real MEXC)' : 'disponible';

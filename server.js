@@ -575,6 +575,7 @@ async function runSolanaCycle() {
           if (realRes && realRes.ok) {
             if (solMode !== 'wallet') {
                 SIM.balance -= o.amount;
+                SIM.solBalance += o.amount / cp;
             }
             SIM.totalExec++;
           } else {
@@ -611,6 +612,7 @@ async function runSolanaCycle() {
           if (realRes && realRes.ok) {
             if (solMode !== 'wallet') {
                 SIM.balance += inv + pnl;
+                SIM.solBalance -= (inv / avg);
             }
             SIM.pnl += pnl; 
             SIM.losses++;
@@ -632,6 +634,7 @@ async function runSolanaCycle() {
           if (realRes && realRes.ok) {
             if (solMode !== 'wallet') {
                 SIM.balance += inv + pnl;
+                SIM.solBalance -= (inv / avg);
             }
             SIM.pnl += pnl; 
             SIM.wins++;
@@ -654,6 +657,7 @@ async function runSolanaCycle() {
           if (realRes && realRes.ok) {
             if (solMode !== 'wallet') {
                 SIM.balance += inv + pnl;
+                SIM.solBalance -= (inv / avg);
             }
             SIM.pnl += pnl; 
             SIM.wins++;
@@ -853,6 +857,7 @@ app.post('/api/action', async (req, res) => {
            const res = await executeOrder(w, 'SELL', inv + pnl, cp);
            if (res.ok && solMode !== 'wallet') {
               SIM.balance += inv + pnl;
+              SIM.solBalance -= (inv / avg);
            }
         } else {
            if (mode === 'real') await executeOrder(w, 'SELL', inv + pnl, cp);
@@ -881,6 +886,7 @@ app.post('/api/action', async (req, res) => {
     
     if (w.network === 'solana') {
       SIM.balance -= o.amount;
+      SIM.solBalance += o.amount / cp;
     } else {
       SIM.balance -= o.amount; 
     }
@@ -896,7 +902,11 @@ app.post('/api/action', async (req, res) => {
   } else if (action === 'unFill') {
     const w = watchItems[payload.wi];
     const o = w.orders[payload.oi];
+    const cp = o.filledPrice || w.currentPrice || w.cp;
     SIM.balance += o.amount; 
+    if (w.network === 'solana') {
+      SIM.solBalance -= o.amount / cp;
+    }
     SIM.totalExec = Math.max(0, SIM.totalExec - 1);
     w.filledBuys = (w.filledBuys || []).filter(b => b.level !== o.level);
     o.status = 'pending'; 
