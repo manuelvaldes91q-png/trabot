@@ -129,44 +129,104 @@ async function mxPrice(sym) {
 // ============================================
 // SOLANA INTEGRATION (LIVE PRICE, BALANCES, JUPITER API)
 // ============================================
+let solanaPricesCache = {}; // maps address -> { price, liquidity, lastFetch }
+
 async function getSolanaPrices(addresses) {
   if (!addresses || !addresses.length) return {};
   try {
-    // DexScreener supports up to 30 addresses comma-separated
-    const chunks = [];
-    for (let i = 0; i < addresses.length; i += 30) {
-      chunks.push(addresses.slice(i, i + 30));
-    }
-    
+    const now = Date.now();
+    const toFetch = [];
     const results = {};
-    for (const chunk of chunks) {
-      const url = `https://api.dexscreener.com/latest/dex/tokens/${chunk.join(',')}?t=${Date.now()}`;
-      const r = await fetch(url, { signal: AbortSignal.timeout(8000) });
-      if (!r.ok) {
-        console.warn(`DexScreener API error: ${r.status}`);
-        continue;
+
+    // Check which addresses need a refresh (older than 3 seconds or not in cache)
+    for (const addr of addresses) {
+      const cached = solanaPricesCache[addr];
+      if (cached && (now - cached.lastFetch < 3000)) {
+        results[addr] = { price: cached.price, liquidity: cached.liquidity };
+      } else {
+        toFetch.push(addr);
       }
-      const d = await r.json();
-      if (d && d.pairs) {
-        d.pairs.forEach(p => {
-          if (p.chainId === 'solana' && p.baseToken) {
-            const addr = p.baseToken.address;
-            if (!results[addr] || (p.liquidity?.usd || 0) > (results[addr].liquidity || 0)) {
-              results[addr] = {
-                price: +p.priceUsd,
-                liquidity: p.liquidity?.usd || 0
-              };
+    }
+
+    if (toFetch.length > 0) {
+      // DexScreener supports up to 30 addresses comma-separated
+      const chunks = [];
+      for (let i = 0; i < toFetch.length; i += 30) {
+        chunks.push(toFetch.slice(i, i + 30));
+      }
+      
+      for (const chunk of chunks) {
+        const url = `https://api.dexscreener.com/latest/dex/tokens/${chunk.join(',')}?t=${now}`;
+        const r = await fetch(url, { signal: AbortSignal.timeout(8000) });
+        if (!r.ok) {
+          console.warn(`DexScreener API error: ${r.status}`);
+          // If we get an error (like 429), fall back to whatever is in cache if available
+          for (const addr of chunk) {
+            const cached = solanaPricesCache[addr];
+            if (cached) {
+              results[addr] = { price: cached.price, liquidity: cached.liquidity };
             }
           }
-        });
+          continue;
+        }
+        const d = await r.json();
+        
+        // Mark addresses in this chunk as updated to avoid repeating failed ones immediately
+        const chunkResults = {};
+        if (d && d.pairs) {
+          d.pairs.forEach(p => {
+            if (p.chainId === 'solana' && p.baseToken) {
+              const addr = p.baseToken.address;
+              if (!chunkResults[addr] || (p.liquidity?.usd || 0) > (chunkResults[addr].liquidity || 0)) {
+                chunkResults[addr] = {
+                  price: +p.priceUsd,
+                  liquidity: p.liquidity?.usd || 0
+                };
+              }
+            }
+          });
+        }
+
+        // Save chunk results to the cache and results
+        for (const addr of chunk) {
+          if (chunkResults[addr]) {
+            solanaPricesCache[addr] = {
+              price: chunkResults[addr].price,
+              liquidity: chunkResults[addr].liquidity,
+              lastFetch: now
+            };
+            results[addr] = { price: chunkResults[addr].price, liquidity: chunkResults[addr].liquidity };
+          } else {
+            // Token wasn't found in DexScreener response (might be newly listed or invalid),
+            // cache it with 0 or keep old to prevent spamming the API
+            const cached = solanaPricesCache[addr];
+            solanaPricesCache[addr] = {
+              price: cached ? cached.price : 0,
+              liquidity: cached ? cached.liquidity : 0,
+              lastFetch: now
+            };
+            if (cached) {
+              results[addr] = { price: cached.price, liquidity: cached.liquidity };
+            }
+          }
+        }
+
+        if (chunks.length > 1) await new Promise(res => setTimeout(res, 500));
       }
-      // Add a small delay between chunks if multiple
-      if (chunks.length > 1) await new Promise(res => setTimeout(res, 500));
     }
+
     return results;
   } catch (err) {
     console.error(`Error fetching solana prices:`, err);
-    return {};
+    // Return cache fallback on complete error
+    const results = {};
+    for (const addr of addresses) {
+      const cached = solanaPricesCache[addr];
+      if (cached) {
+        results[addr] = { price: cached.price, liquidity: cached.liquidity };
+      }
+    }
+    return results;
   }
 }
 
@@ -789,6 +849,26 @@ app.get('/api/state', async (req, res) => {
     },
     solanaSwapLogs
   });
+});
+
+app.post('/api/state', (req, res) => {
+  const { sim, watch } = req.body;
+  if (sim) {
+    Object.assign(SIM, sim);
+  }
+  if (watch && Array.isArray(watch)) {
+    watchItems = watch.map(clientItem => {
+      const serverItem = watchItems.find(w => w.symbol === clientItem.symbol);
+      return {
+        ...clientItem,
+        klines1h: serverItem ? serverItem.klines1h : [],
+        klines1d: serverItem ? serverItem.klines1d : [],
+        orders: clientItem.orders || []
+      };
+    });
+  }
+  saveState();
+  res.json({ status: 'ok' });
 });
 
 app.get('/api/config', (req, res) => {
