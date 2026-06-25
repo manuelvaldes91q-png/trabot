@@ -362,6 +362,7 @@ select.inp{cursor:pointer}
     <div class="dc"><div class="dc-l">✅ Wins</div><div class="dc-v" id="dWins" style="color:var(--g)">0</div><div class="dc-s" id="dAvgW">avg +0%</div></div>
     <div class="dc"><div class="dc-l">❌ Losses</div><div class="dc-v" id="dLoss" style="color:var(--r)">0</div><div class="dc-s" id="dAvgL">avg 0%</div></div>
     <div class="dc"><div class="dc-l">⚡ Ejecutadas</div><div class="dc-v" id="dExec" style="color:var(--y)">0</div><div class="dc-s">órdenes auto</div></div>
+    <button class="btn btn-d" style="font-size:10px;padding:4px 8px;margin:auto" onclick="resetSim()">♻️ Reset</button>
   </div>
 
   <!-- ALERTAS -->
@@ -483,6 +484,21 @@ function changeSolMode() {
     addLog(`Solana Balance Mode cambiado a: ${m === 'wallet' ? 'WALLET' : 'SIMULADO'}`, 'info');
     // Refresh to update UI immediately
     initServerState();
+  });
+}
+
+function resetSim() {
+  if(!confirm('¿Estás seguro de que deseas reiniciar tu balance simulado, historial de órdenes y estadísticas de P&L?')) return;
+  myFetch('/api/action', {
+    method: 'POST', 
+    headers:{'Content-Type':'application/json'}, 
+    body: JSON.stringify({action: 'resetSim', payload: {clearLogs: true}})
+  }).then(r => r.json()).then(d => {
+    if(d.ok) {
+      showFlash('buy', '♻️ SIMULACIÓN RESETEADA', 'Se han restablecido los valores por defecto.');
+      SIM = d.sim;
+      updateDash();
+    }
   });
 }
 function toggleSound(){
@@ -1997,8 +2013,9 @@ setInterval(async () => {
     
     document.getElementById('htime').textContent=new Date().toLocaleTimeString('es',{hour:'2-digit',minute:'2-digit',second:'2-digit'});
   } catch(e) {
-    console.error('Interval error:', e);
-    // document.getElementById('logbody').innerHTML = '<div style="color:red">Error en monitor: ' + e.message + '</div>';
+    if (e.message !== 'Failed to fetch' && e.message !== 'Unauthorized') {
+      console.error('Interval error:', e);
+    }
   }
 }, 1000);
 
@@ -2036,7 +2053,7 @@ async function showDetail(d){
         `}
         <div class="cwrap" style="padding:0;overflow:hidden">
           ${isSol 
-            ? `<iframe src="https://www.dextools.io/widget/chart/en/solana/pair-explorer/${d.address}?theme=dark" style="width:100%;height:100%;border:none;border-radius:4px;"></iframe>`
+            ? `<iframe src="https://dexscreener.com/solana/${d.address}?embed=1&theme=dark&trades=0&info=0" style="width:100%;height:100%;border:none;border-radius:4px;"></iframe>`
             : `<div class="cload" id="cload">⟳ Cargando...</div><canvas id="detChart" style="display:none"></canvas>`
           }
         </div>

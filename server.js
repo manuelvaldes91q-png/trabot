@@ -1135,6 +1135,25 @@ app.post('/api/action', async (req, res) => {
       }
     }
     
+  } else if (action === 'resetSim') {
+    SIM.balance = SIM.initBal || 1000;
+    SIM.solBalance = 10;
+    SIM.pnl = 0;
+    SIM.wins = 0;
+    SIM.losses = 0;
+    SIM.trades = [];
+    SIM.totalExec = 0;
+    
+    // Optional: also clear logs & history
+    if (payload && payload.clearLogs) {
+        logs = [];
+        solanaSwapLogs = [];
+    }
+    
+    addLog(`♻️ Simulación reseteada a estado inicial`, 'info');
+    saveState();
+    return res.json({ ok: true, sim: SIM });
+    
   } else if (action === 'manualFill') {
     const w = watchItems[payload.wi];
     const o = w.orders[payload.oi];
