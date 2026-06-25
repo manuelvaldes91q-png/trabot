@@ -1154,6 +1154,52 @@ app.post('/api/action', async (req, res) => {
     saveState();
     return res.json({ ok: true, sim: SIM });
     
+  } else if (action === 'quickMarketBuy') {
+    const { symbol, network, address, pair, amount } = payload;
+    let w = watchItems.find(x => x.symbol === symbol);
+    let cp = 0;
+    
+    if (network === 'solana') {
+        cp = await getSolanaPrice(address);
+    } else {
+        cp = await mxPrice(symbol);
+    }
+
+    if (!cp || cp <= 0) return res.json({ error: 'No se pudo obtener el precio actual.' });
+
+    if (!w) {
+        w = { symbol, pair, network, address, currentPrice: cp, orders: [], lastUpdate: Date.now() };
+        watchItems.push(w);
+    }
+
+    const order = { level: w.orders.length + 1, price: cp, amount: +amount, note: 'Market Buy', status: 'filled', type: 'market', fillPrice: cp, filledAt: Date.now() };
+    w.orders.push(order);
+    
+    if (!w.filledBuys) w.filledBuys = [];
+    w.filledBuys.push({ price: cp, amount: +amount, level: order.level });
+    
+    SIM.totalExec++;
+
+    const realRes = await executeOrder(w, 'BUY', order.amount, cp);
+    if (!realRes || !realRes.ok) {
+       addLog(`⚠️ Fallo Market Buy real en ${network} para ${symbol}. Operación simulada ejecutada.`, 'warn');
+    } else {
+       addLog(`⚡ Market Buy real exitoso para ${symbol} (Tx: ${realRes.txid})`, 'buy');
+    }
+    
+    if (network === 'solana') {
+       if (solMode !== 'wallet') {
+         SIM.balance -= order.amount;
+         SIM.solBalance += (order.amount / cp);
+       }
+    } else {
+       if (mode !== 'real') SIM.balance -= order.amount;
+    }
+
+    addLog(`⚡ COMPRA INSTANTÁNEA (Mercado) de ${symbol} por $${order.amount} a $${cp}.`, 'buy');
+    saveState();
+    return res.json({ ok: true });
+
   } else if (action === 'manualFill') {
     const w = watchItems[payload.wi];
     const o = w.orders[payload.oi];

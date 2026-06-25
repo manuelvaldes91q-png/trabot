@@ -1870,6 +1870,34 @@ function closeTrade(wi){
 function removeWatch(wi){
   myFetch('/api/action', {method: 'POST', headers: {'Content-Type': 'application/json'}, body: JSON.stringify({action: 'removeWatch', payload: {index: wi}})});
 }
+
+function quickMarketBuy() {
+  if (!curDet) return;
+  const amount = prompt(`¿Cuánto quieres comprar de ${curDet.symbol}?`, '50');
+  if (!amount || +amount <= 0) return;
+  
+  myFetch('/api/action', {
+    method: 'POST', 
+    headers: {'Content-Type': 'application/json'}, 
+    body: JSON.stringify({
+      action: 'quickMarketBuy', 
+      payload: { 
+        symbol: curDet.symbol, 
+        network: curDet.network, 
+        address: curDet.address, 
+        pair: curDet.pair, 
+        amount: +amount 
+      }
+    })
+  }).then(r => r.json()).then(d => {
+    if (d.error) alert(d.error);
+    else {
+      showFlash('buy', '⚡ COMPRA DE MERCADO ENVIADA', `Orden de $${amount} procesada`);
+      closeModal('detModal');
+    }
+  });
+}
+
 function clearDone(){
   const items = watchItems.filter(w=>w.orders.some(o=>o.status==='pending'));
   myFetch('/api/action', {method: 'POST', headers: {'Content-Type': 'application/json'}, body: JSON.stringify({action: 'clearWatch', payload: {items}})});
@@ -2064,6 +2092,9 @@ async function showDetail(d){
           📚 ${isSol ? 'AMM / LIQUIDEZ' : 'ORDER BOOK'} <span style="cursor:pointer;color:var(--b)" onclick="refreshOB()">🔄</span>
         </div>
         <div id="obDiv"><div style="color:var(--t2);font-size:8px;font-family:var(--mono)">Cargando...</div></div>
+        <div style="margin-top:10px;">
+          <button class="btn btn-g" style="width:100%;padding:8px;font-size:11px" onclick="quickMarketBuy()">⚡ Comprar a Mercado ($50)</button>
+        </div>
       </div>
     </div>`;
   if (!isSol) loadChart('h1');
