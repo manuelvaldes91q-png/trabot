@@ -263,7 +263,7 @@ async function getSolanaPrices(addresses) {
                 }
               }
             } else {
-              console.warn(`GeckoTerminal API error: ${r.status}. Falling back to DexScreener.`);
+              // console.warn(`GeckoTerminal API error: ${r.status}. Falling back to DexScreener.`);
               // If GeckoTerminal is rate-limited or fails, fall back to DexScreener for this chunk
               const dexScrUrl = `https://api.dexscreener.com/latest/dex/tokens/${chunk.join(',')}`;
               try {
