@@ -1,0 +1,375 @@
+<!DOCTYPE html>
+<html lang="es" class="dark">
+<head>
+  <meta charset="UTF-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1.0">
+  <title>Investor Dashboard</title>
+  <script src="https://cdn.tailwindcss.com"></script>
+  <script src="https://unpkg.com/lucide@latest"></script>
+  <script>
+    tailwind.config = {
+      darkMode: 'class',
+      theme: {
+        extend: {
+          colors: {
+            investor: {
+              900: '#1e1e2d',
+              800: '#2b2b40',
+              700: '#323249',
+              accent: '#3b82f6',
+              success: '#10b981',
+              danger: '#ef4444'
+            }
+          },
+          fontFamily: {
+            sans: ['Inter', 'sans-serif'],
+            mono: ['JetBrains Mono', 'monospace']
+          }
+        }
+      }
+    }
+  </script>
+  <style>
+    @import url('https://fonts.googleapis.com/css2?family=Inter:wght@400;500;600&family=JetBrains+Mono:wght@400;500&display=swap');
+    body { background-color: #1e1e2d; color: #f8f8f2; }
+    .card { background-color: #2b2b40; border: 1px solid #323249; border-radius: 0.75rem; padding: 1.5rem; }
+    .glass { background: rgba(43, 43, 64, 0.7); backdrop-filter: blur(10px); border: 1px solid rgba(255, 255, 255, 0.05); }
+    .fade-in { animation: fadeIn 0.3s ease-out forwards; }
+    @keyframes fadeIn { from { opacity: 0; transform: translateY(10px); } to { opacity: 1; transform: translateY(0); } }
+  </style>
+</head>
+<body class="min-h-screen antialiased flex flex-col font-sans">
+  
+  <div id="login-view" class="flex-1 flex items-center justify-center p-4">
+    <div class="card w-full max-w-md fade-in">
+      <h1 class="text-2xl font-semibold mb-2">Acceso a Inversores</h1>
+      <p class="text-gray-400 mb-6 text-sm">Introduce tu usuario y contraseña asignada por el administrador.</p>
+      <input type="text" id="investor-name" placeholder="Tu Nombre" class="w-full bg-[#1e1e2d] border border-[#323249] rounded-lg px-4 py-3 mb-4 text-white focus:outline-none focus:border-investor-accent">
+      <input type="password" id="investor-pwd" placeholder="Contraseña" class="w-full bg-[#1e1e2d] border border-[#323249] rounded-lg px-4 py-3 mb-4 text-white focus:outline-none focus:border-investor-accent" onkeydown="if(event.key==='Enter') login()">
+      <button onclick="login()" class="w-full bg-investor-accent hover:bg-blue-600 text-white font-medium py-3 rounded-lg transition-colors">
+        Entrar al Panel
+      </button>
+    </div>
+  </div>
+
+  <div id="dashboard-view" class="hidden flex-1 flex flex-col max-w-6xl mx-auto w-full p-4 md:p-8 space-y-6">
+    <header class="flex justify-between items-center mb-4">
+      <div>
+        <h1 class="text-3xl font-semibold tracking-tight">Panel de Inversión</h1>
+        <p class="text-gray-400 mt-1">Bienvenido, <span id="lbl-name" class="font-medium text-white"></span></p>
+      </div>
+      <button onclick="logout()" class="text-gray-400 hover:text-white flex items-center space-x-2 text-sm">
+        <i data-lucide="log-out" class="w-4 h-4"></i>
+        <span>Salir</span>
+      </button>
+    </header>
+    
+    <div id="activation-banner" class="hidden mb-2 bg-[#2a2a3e] border border-blue-500 rounded-lg p-4 flex flex-col sm:flex-row justify-between items-center">
+      <div>
+        <h3 class="font-bold text-white mb-1" id="act-title">Depósito Requerido</h3>
+        <p class="text-sm text-gray-300" id="act-desc">Debes depositar fondos para activar el bot.</p>
+      </div>
+      <button id="btn-confirm-act" class="mt-3 sm:mt-0 bg-blue-600 hover:bg-blue-500 text-white px-4 py-2 rounded-lg font-medium text-sm transition-colors" onclick="confirmDeposit()">Ya realicé el depósito</button>
+    </div>
+
+    <div class="grid grid-cols-1 md:grid-cols-3 gap-6">
+      <div class="card fade-in" style="animation-delay: 0.1s">
+        <div class="flex items-center text-gray-400 mb-2 space-x-2">
+          <i data-lucide="wallet" class="w-4 h-4"></i>
+          <span class="text-sm font-medium uppercase tracking-wider">Tu Inversión</span>
+        </div>
+        <div class="text-4xl font-semibold font-mono tracking-tight">$<span id="val-deposit">0.00</span></div>
+      </div>
+      
+      <div class="card fade-in" style="animation-delay: 0.2s">
+        <div class="flex items-center text-gray-400 mb-2 space-x-2">
+          <i data-lucide="trending-up" class="w-4 h-4"></i>
+          <span class="text-sm font-medium uppercase tracking-wider">Ganancias (Netas)</span>
+        </div>
+        <div class="text-4xl font-semibold font-mono tracking-tight" id="val-profit">$0.00</div>
+      </div>
+
+      <div class="card fade-in" style="animation-delay: 0.3s">
+        <div class="flex items-center text-gray-400 mb-2 space-x-2">
+          <i data-lucide="pie-chart" class="w-4 h-4"></i>
+          <span class="text-sm font-medium uppercase tracking-wider">Valor Total (Tu Cuenta)</span>
+        </div>
+        <div class="text-4xl font-semibold font-mono tracking-tight text-investor-accent">$<span id="val-total">0.00</span></div>
+      </div>
+    </div>
+
+    <div class="card fade-in border-investor-accent/30 bg-investor-accent/5" style="animation-delay: 0.4s">
+      <div class="flex flex-col md:flex-row items-start md:items-center justify-between gap-4">
+        <div>
+          <h3 class="font-medium flex items-center gap-2"><i data-lucide="building-2" class="w-4 h-4 text-investor-accent"></i> Bóveda Central / Pool de Inversión</h3>
+          <p class="text-sm text-gray-400 mt-1">Para añadir fondos a tu cuenta, transfiere USDT a esta dirección y notifica al administrador.</p>
+        </div>
+        <div class="bg-[#1e1e2d] px-4 py-2 rounded-lg border border-[#323249] flex items-center gap-3">
+          <span class="font-mono text-sm text-gray-300 select-all" id="pool-wallet">Cargando...</span>
+          <button onclick="copyWallet()" class="text-gray-400 hover:text-white" title="Copiar">
+            <i data-lucide="copy" class="w-4 h-4"></i>
+          </button>
+        </div>
+      </div>
+    </div>
+
+    <div class="grid grid-cols-1 lg:grid-cols-3 gap-6">
+      
+      <!-- Solicitar Deposito Simulado (Para probar) -->
+      <div class="card fade-in lg:col-span-1 flex flex-col gap-6" style="animation-delay: 0.5s">
+        
+        <div>
+          <h3 class="font-medium mb-4 flex items-center gap-2"><i data-lucide="arrow-down-circle" class="w-4 h-4 text-investor-success"></i> Solicitar Retiro</h3>
+          <p class="text-sm text-gray-400 mb-4">Pide al administrador que te envíe fondos.</p>
+          <div class="space-y-3">
+            <input type="number" id="withdraw-amount" placeholder="Cantidad (USD)" class="w-full bg-[#1e1e2d] border border-[#323249] rounded-lg px-3 py-2 text-white focus:outline-none focus:border-investor-accent">
+            <input type="text" id="withdraw-wallet" placeholder="Tu dirección de wallet (USDT)" class="w-full bg-[#1e1e2d] border border-[#323249] rounded-lg px-3 py-2 text-white focus:outline-none focus:border-investor-accent">
+            <button onclick="requestWithdraw()" class="w-full bg-investor-success/20 text-investor-success hover:bg-investor-success/30 px-4 py-2 rounded-lg font-medium transition-colors border border-investor-success/50">
+              Solicitar
+            </button>
+          </div>
+        </div>
+
+      </div>
+
+      <!-- Historial de Trades / Retiros -->
+      <div class="card fade-in lg:col-span-2 flex flex-col h-[550px]" style="animation-delay: 0.6s">
+        <div class="flex justify-between items-center mb-4 border-b border-[#323249] pb-2">
+          <h3 class="font-medium flex items-center gap-2"><i data-lucide="history" class="w-4 h-4"></i> Últimos Movimientos del Pool</h3>
+        </div>
+        
+        <div class="mb-4">
+          <h4 class="text-xs font-semibold uppercase text-gray-500 mb-2 tracking-wider">Tus Solicitudes de Retiro</h4>
+          <div class="overflow-y-auto max-h-32 space-y-2 pr-2" id="withdraws-list">
+            <div class="text-xs text-gray-500">No tienes solicitudes pendientes.</div>
+          </div>
+        </div>
+        
+        <h4 class="text-xs font-semibold uppercase text-gray-500 mb-2 tracking-wider">Operaciones de Trading (Global)</h4>
+        <div class="overflow-y-auto flex-1 pr-2 space-y-2" id="trades-list">
+          <div class="text-sm text-gray-500 text-center mt-10">Cargando operaciones...</div>
+        </div>
+      </div>
+
+    </div>
+  </div>
+
+  <script>
+    lucide.createIcons();
+    
+    let currentInvestor = localStorage.getItem('investor_name') || '';
+    let currentToken = localStorage.getItem('investor_token') || '';
+    
+    async function myFetch(url, opts = {}) {
+      if (!opts.headers) opts.headers = {};
+      opts.headers['Authorization'] = 'Bearer ' + currentToken;
+      return await fetch(url, opts);
+    }
+    
+    if (currentInvestor && currentToken) {
+      document.getElementById('login-view').classList.add('hidden');
+      document.getElementById('dashboard-view').classList.remove('hidden');
+      document.getElementById('lbl-name').textContent = currentInvestor;
+      loadData();
+    }
+
+    async function login() {
+      const name = document.getElementById('investor-name').value.trim();
+      const password = document.getElementById('investor-pwd').value;
+      if (!name || !password) return;
+      
+      try {
+        const res = await fetch('/api/investor/login', {
+          method: 'POST',
+          headers: { 'Content-Type': 'application/json' },
+          body: JSON.stringify({ name, password })
+        });
+        const data = await res.json();
+        if (data.status === 'ok') {
+          currentInvestor = data.name;
+          currentToken = data.token;
+          localStorage.setItem('investor_name', currentInvestor);
+          localStorage.setItem('investor_token', currentToken);
+          document.getElementById('login-view').classList.add('hidden');
+          document.getElementById('dashboard-view').classList.remove('hidden');
+          document.getElementById('lbl-name').textContent = currentInvestor;
+          loadData();
+        } else {
+          alert(data.error || 'Login fallido');
+        }
+      } catch(e) {
+        alert('Error conectando al servidor');
+      }
+    }
+
+    function logout() {
+      currentInvestor = '';
+      currentToken = '';
+      localStorage.removeItem('investor_name');
+      localStorage.removeItem('investor_token');
+      document.getElementById('dashboard-view').classList.add('hidden');
+      document.getElementById('login-view').classList.remove('hidden');
+    }
+
+    async function loadData() {
+      if (!currentInvestor || !currentToken) return;
+      try {
+        const res = await myFetch('/api/investor/me');
+        if (!res.ok) {
+          if (res.status === 401) logout();
+          return;
+        }
+        const data = await res.json();
+        
+        if (data.poolConfig) {
+          document.getElementById('pool-wallet').textContent = data.poolConfig.walletAddress || 'No configurada por admin';
+          
+          let me = data.poolConfig.investors.find(i => i.name.toLowerCase() === currentInvestor.toLowerCase());
+          if (!me) {
+            me = { deposit: 0, profit: 0 };
+          }
+          
+          const deposit = me.deposit || 0;
+          const profit = me.profit || 0;
+          const total = deposit + profit;
+          
+          const banner = document.getElementById('activation-banner');
+          const actTitle = document.getElementById('act-title');
+          const actDesc = document.getElementById('act-desc');
+          const btnConfirm = document.getElementById('btn-confirm-act');
+          
+          if (me.depositStatus === 'pending_user') {
+            banner.classList.remove('hidden');
+            banner.classList.replace('border-green-500', 'border-blue-500');
+            actTitle.textContent = `Activación Pendiente ($${(me.expectedDeposit || 0).toFixed(2)})`;
+            actDesc.innerHTML = `Para iniciar las operaciones del bot, envía <strong>$${(me.expectedDeposit || 0).toFixed(2)} USDC</strong> a la wallet de la pool: <code class="bg-[#1e1e2d] px-1 rounded">${data.poolConfig.walletAddress || '...'}</code>`;
+            btnConfirm.style.display = 'block';
+          } else if (me.depositStatus === 'pending_admin') {
+            banner.classList.remove('hidden');
+            banner.classList.replace('border-blue-500', 'border-green-500');
+            actTitle.textContent = `Verificando Depósito`;
+            actDesc.innerHTML = `Tu depósito ha sido reportado y está siendo verificado por el administrador. El bot comenzará a operar pronto.`;
+            btnConfirm.style.display = 'none';
+          } else {
+            banner.classList.add('hidden');
+          }
+          
+          document.getElementById('val-deposit').textContent = deposit.toFixed(2);
+          
+          const pEl = document.getElementById('val-profit');
+          pEl.textContent = (profit >= 0 ? '+' : '') + profit.toFixed(2);
+          pEl.className = `text-4xl font-semibold font-mono tracking-tight ${profit > 0 ? 'text-investor-success' : (profit < 0 ? 'text-investor-danger' : 'text-gray-300')}`;
+          
+          document.getElementById('val-total').textContent = total.toFixed(2);
+
+          // Llenar solicitudes de retiro
+          if (data.poolConfig.withdrawalRequests) {
+            const myRequests = data.poolConfig.withdrawalRequests.filter(r => r.name.toLowerCase() === currentInvestor.toLowerCase());
+            const wList = document.getElementById('withdraws-list');
+            if (myRequests.length === 0) {
+              wList.innerHTML = '<div class="text-xs text-gray-500">No tienes solicitudes pendientes.</div>';
+            } else {
+              wList.innerHTML = myRequests.sort((a,b) => b.createdAt - a.createdAt).map(r => {
+                const colors = {
+                  'pending': 'text-yellow-500',
+                  'approved': 'text-investor-success',
+                  'rejected': 'text-investor-danger'
+                };
+                const statusName = {
+                  'pending': 'Pendiente',
+                  'approved': 'Aprobada',
+                  'rejected': 'Rechazada'
+                };
+                return `
+                  <div class="bg-[#1e1e2d] border border-[#323249] p-2 rounded-lg flex justify-between items-center text-sm">
+                    <div>
+                      <div class="font-medium">Retiro: $${r.amount}</div>
+                      <div class="text-xs text-gray-400">Hacia: ${r.destinationWallet}</div>
+                    </div>
+                    <div class="text-right">
+                      <div class="font-medium ${colors[r.status] || ''}">${statusName[r.status] || r.status}</div>
+                      <div class="text-xs text-gray-500">${new Date(r.createdAt).toLocaleDateString()}</div>
+                    </div>
+                  </div>
+                `;
+              }).join('');
+            }
+          }
+        }
+
+        if (data.trades) {
+          const list = document.getElementById('trades-list');
+          list.innerHTML = '';
+          const sorted = [...data.trades].sort((a,b) => b.at - a.at).slice(0, 50);
+          
+          if (sorted.length === 0) {
+            list.innerHTML = '<div class="text-sm text-gray-500 text-center mt-10">Sin operaciones recientes</div>';
+          }
+          
+          sorted.forEach(t => {
+            const date = new Date(t.at).toLocaleString();
+            const pnlColor = t.pnl > 0 ? 'text-investor-success' : 'text-investor-danger';
+            const html = `
+              <div class="bg-[#1e1e2d] border border-[#323249] p-3 rounded-lg flex justify-between items-center">
+                <div>
+                  <div class="font-medium">${t.symbol}</div>
+                  <div class="text-xs text-gray-400">${date}</div>
+                </div>
+                <div class="text-right font-mono">
+                  <div class="${pnlColor}">${t.pnl > 0 ? '+' : ''}$${t.pnl.toFixed(2)} (${t.pnlPct}%)</div>
+                  <div class="text-xs text-gray-500">In: ${Number(t.avgEntry).toPrecision(4)} → Out: ${Number(t.exit).toPrecision(4)}</div>
+                </div>
+              </div>
+            `;
+            list.innerHTML += html;
+          });
+        }
+      } catch (e) {
+        console.error(e);
+      }
+    }
+
+    async function confirmDeposit() {
+      const res = await myFetch('/api/investor/confirm_deposit', {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+      });
+      if (res.ok) {
+        loadData();
+        alert('Depósito reportado al administrador.');
+      }
+    }
+
+    async function requestWithdraw() {
+      const amt = document.getElementById('withdraw-amount').value;
+      const wallet = document.getElementById('withdraw-wallet').value;
+      if (!amt || amt <= 0) return alert('Ingresa una cantidad válida');
+      if (!wallet) return alert('Ingresa tu dirección de wallet de destino');
+
+      const res = await myFetch('/api/investor/request_withdraw', {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({ amount: Number(amt), destinationWallet: wallet })
+      });
+      
+      const data = await res.json();
+      if (data.error) {
+        alert(data.error);
+      } else {
+        document.getElementById('withdraw-amount').value = '';
+        document.getElementById('withdraw-wallet').value = '';
+        loadData();
+        alert('Solicitud enviada al administrador.');
+      }
+    }
+
+    function copyWallet() {
+      const text = document.getElementById('pool-wallet').innerText;
+      navigator.clipboard.writeText(text);
+      alert('Dirección copiada');
+    }
+
+    setInterval(loadData, 5000);
+  </script>
+</body>
+</html>

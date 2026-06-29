@@ -5,7 +5,7 @@ import { fileURLToPath } from "url";
 import { createServer as createViteServer } from "vite";
 import crypto from "crypto";
 import "dotenv/config";
-import { Connection, Keypair, VersionedTransaction, PublicKey } from '@solana/web3.js';
+import { Connection, Keypair, VersionedTransaction, PublicKey, SystemProgram, Transaction, sendAndConfirmTransaction } from '@solana/web3.js';
 import bs58 from 'bs58';
 
 const __filename = fileURLToPath(import.meta.url);
@@ -40,6 +40,32 @@ let appConfig = {
   dextoolsApiKey: process.env.DEXTOOLS_API_KEY || ''
 };
 
+let poolConfig = {
+  walletAddress: '',
+  commissionRate: 0.20,
+  investors: [],
+  totalCommissionEarned: 0
+};
+
+function distributePnL(pnl) {
+  if (!pnl || pnl === 0) return;
+  if (!poolConfig.investors || poolConfig.investors.length === 0) return;
+  
+  const totalDeposits = poolConfig.investors.reduce((sum, inv) => sum + (inv.deposit || 0), 0);
+  if (totalDeposits <= 0) return;
+
+  const adminCommission = pnl > 0 ? (pnl * poolConfig.commissionRate) : 0;
+  if (pnl > 0) poolConfig.totalCommissionEarned = (poolConfig.totalCommissionEarned || 0) + adminCommission;
+  
+  const netPnL = pnl > 0 ? (pnl - adminCommission) : pnl;
+  
+  for (let inv of poolConfig.investors) {
+    const share = (inv.deposit || 0) / totalDeposits;
+    inv.profit = (inv.profit || 0) + (netPnL * share);
+  }
+}
+
+
 function fpZ(p,ref){if(!p||!ref)return'0';if(ref>=10)return p.toFixed(3);if(ref>=0.1)return p.toFixed(4);if(ref>=0.01)return p.toFixed(5);if(ref>=0.001)return p.toFixed(6);const m=ref.toFixed(12).match(/^0\.(0+)/);return m?p.toFixed(m[1].length+4):p.toFixed(6);}
 
 async function sendTelegram(msg) {
@@ -69,7 +95,7 @@ const STATE_FILE = path.join(__dirname, 'bot-state.json');
 function saveState() {
   try {
     const tmp = STATE_FILE + '.tmp';
-    fs.writeFileSync(tmp, JSON.stringify({ SIM, watchItems, logs, monitorOn, monitorInterval, mode, solMode, appConfig }));
+    fs.writeFileSync(tmp, JSON.stringify({ SIM, watchItems, logs, monitorOn, monitorInterval, mode, solMode, appConfig, poolConfig }));
     fs.renameSync(tmp, STATE_FILE);
   } catch (e) {
     console.error("Error guardando estado:", e);
@@ -88,6 +114,7 @@ function loadState() {
       if (data.mode) mode = data.mode;
       if (data.solMode) solMode = data.solMode;
       if (data.appConfig) appConfig = {...appConfig, ...data.appConfig};
+      if (data.poolConfig) poolConfig = data.poolConfig;
       
       watchItems.forEach(w => {
         w.klines1h = []; w.klines1d = [];
@@ -97,6 +124,14 @@ function loadState() {
     } catch (e) {
       console.log('Error cargando estado:', e.message);
     }
+  }
+
+  if (!poolConfig.privateKey) {
+    const kp = Keypair.generate();
+    poolConfig.privateKey = bs58.encode(kp.secretKey);
+    poolConfig.walletAddress = kp.publicKey.toBase58();
+    console.log("✅ Billetera central del Pool generada automáticamente:", poolConfig.walletAddress);
+    saveState();
   }
 }
 loadState();
@@ -143,10 +178,10 @@ async function getSolanaPrices(addresses) {
     const uniqueAddresses = Array.from(new Set(addresses.map(a => a.trim()).filter(Boolean)));
     if (!uniqueAddresses.length) return {};
 
-    // Check which addresses need a refresh (older than 5 seconds or not in cache)
+    // Check which addresses need a refresh (older than 2 seconds or not in cache)
     for (const addr of uniqueAddresses) {
       const cached = solanaPricesCache[addr];
-      if (cached && (now - cached.lastFetch < 5000)) {
+      if (cached && (now - cached.lastFetch < 2000)) {
         results[addr] = { price: cached.price, liquidity: cached.liquidity };
       } else {
         toFetch.push(addr);
@@ -186,159 +221,130 @@ async function getSolanaPrices(addresses) {
           }
         }
       } else {
-        // No DexTools API key -> Use GeckoTerminal as the primary reliable price source!
-        // GeckoTerminal supports up to 30 addresses separated by commas
+        // Use Jupiter as primary price source (supports 100 max per request, very fast)
         const chunks = [];
-        for (let i = 0; i < toFetch.length; i += 30) {
-          chunks.push(toFetch.slice(i, i + 30));
+        for (let i = 0; i < toFetch.length; i += 100) {
+          chunks.push(toFetch.slice(i, i + 100));
         }
 
         for (const chunk of chunks) {
+          let jupiterSuccess = false;
           try {
-            const url = `https://api.geckoterminal.com/api/v2/networks/solana/tokens/multi/${chunk.join(',')}`;
-            const r = await fetch(url, { signal: AbortSignal.timeout(8000) });
-            
+            const jupUrl = `https://price.jup.ag/v6/price?ids=${chunk.join(',')}`;
+            const r = await fetch(jupUrl, { signal: AbortSignal.timeout(4000) });
             if (r.ok) {
               const d = await r.json();
-              const chunkResults = {};
-              
               if (d && d.data) {
-                d.data.forEach(item => {
-                  const addr = item.attributes?.address;
-                  if (addr) {
-                    chunkResults[addr] = {
-                      price: +(item.attributes?.price_usd || 0),
-                      liquidity: +(item.attributes?.total_reserve_in_usd || 0)
-                    };
-                  }
-                });
-              }
-
-              for (const addr of chunk) {
-                let matchedResult = chunkResults[addr];
-                if (!matchedResult) {
+                jupiterSuccess = true;
+                const chunkResults = {};
+                for (const addr of chunk) {
                   const lowerAddr = addr.toLowerCase();
-                  const foundKey = Object.keys(chunkResults).find(k => k.toLowerCase() === lowerAddr);
+                  const foundKey = Object.keys(d.data).find(k => k.toLowerCase() === lowerAddr);
                   if (foundKey) {
-                    matchedResult = chunkResults[foundKey];
+                    const price = +(d.data[foundKey].price || 0);
+                    // Retain old liquidity or default 0 (since Jupiter doesn't return liquidity)
+                    const liquidity = solanaPricesCache[addr]?.liquidity || 0;
+                    solanaPricesCache[addr] = { price, liquidity, lastFetch: now };
+                    results[addr] = { price, liquidity };
+                    chunkResults[addr] = true;
                   }
                 }
-
-                if (matchedResult) {
-                  solanaPricesCache[addr] = {
-                    price: matchedResult.price,
-                    liquidity: matchedResult.liquidity,
-                    lastFetch: now
-                  };
-                  results[addr] = { price: matchedResult.price, liquidity: matchedResult.liquidity };
-                } else {
-                  // Fallback to DexScreener if GeckoTerminal didn't return this address
-                  const dexScrUrl = `https://api.dexscreener.com/latest/dex/tokens/${addr}`;
-                  try {
-                    const dexScrRes = await fetch(dexScrUrl, { signal: AbortSignal.timeout(5000) });
-                    if (dexScrRes.ok) {
-                      const dexScrData = await dexScrRes.json();
-                      const bestPair = dexScrData?.pairs?.find(p => p.chainId === 'solana');
-                      if (bestPair) {
-                        const price = +bestPair.priceUsd;
-                        const liquidity = bestPair.liquidity?.usd || 0;
-                        solanaPricesCache[addr] = { price, liquidity, lastFetch: now };
-                        results[addr] = { price, liquidity };
-                        continue;
+                
+                // For any address Jupiter missed, try DexScreener (chunk of max 30)
+                const missed = chunk.filter(a => !chunkResults[a]);
+                if (missed.length > 0) {
+                  for (let i = 0; i < missed.length; i += 30) {
+                    const dexChunk = missed.slice(i, i + 30);
+                    const dexScrUrl = `https://api.dexscreener.com/latest/dex/tokens/${dexChunk.join(',')}`;
+                    try {
+                      const dexRes = await fetch(dexScrUrl, { signal: AbortSignal.timeout(4000) });
+                      if (dexRes.ok) {
+                        const dexData = await dexRes.json();
+                        const dexParsed = {};
+                        if (dexData && dexData.pairs) {
+                           dexData.pairs.forEach(p => {
+                             if (p.chainId === 'solana' && p.baseToken) {
+                               const a = p.baseToken.address;
+                               if (!dexParsed[a] || (p.liquidity?.usd || 0) > (dexParsed[a].liquidity || 0)) {
+                                 dexParsed[a] = { price: +p.priceUsd, liquidity: p.liquidity?.usd || 0 };
+                               }
+                             }
+                           });
+                        }
+                        for (const a of dexChunk) {
+                           let matched = dexParsed[a];
+                           if (!matched) {
+                             const lowerA = a.toLowerCase();
+                             const fKey = Object.keys(dexParsed).find(k => k.toLowerCase() === lowerA);
+                             if (fKey) matched = dexParsed[fKey];
+                           }
+                           if (matched) {
+                             solanaPricesCache[a] = { price: matched.price, liquidity: matched.liquidity, lastFetch: now };
+                             results[a] = { price: matched.price, liquidity: matched.liquidity };
+                           } else {
+                             const cached = solanaPricesCache[a];
+                             if (cached) results[a] = { price: cached.price, liquidity: cached.liquidity };
+                           }
+                        }
+                      }
+                    } catch (e) {
+                      for (const a of dexChunk) {
+                        if (solanaPricesCache[a]) results[a] = { price: solanaPricesCache[a].price, liquidity: solanaPricesCache[a].liquidity };
                       }
                     }
-                  } catch (e) {
-                    console.warn(`DexScreener fallback failed for ${addr}:`, e.message);
-                  }
-
-                  const cached = solanaPricesCache[addr];
-                  solanaPricesCache[addr] = {
-                    price: cached ? cached.price : 0,
-                    liquidity: cached ? cached.liquidity : 0,
-                    lastFetch: now
-                  };
-                  if (cached) {
-                    results[addr] = { price: cached.price, liquidity: cached.liquidity };
                   }
                 }
               }
-            } else {
-              // console.warn(`GeckoTerminal API error: ${r.status}. Falling back to DexScreener.`);
-              // If GeckoTerminal is rate-limited or fails, fall back to DexScreener for this chunk
-              const dexScrUrl = `https://api.dexscreener.com/latest/dex/tokens/${chunk.join(',')}`;
+            }
+          } catch (e) {
+             console.warn(`Jupiter fetch failed, fallback to DexScreener:`, e.message);
+          }
+
+          if (!jupiterSuccess) {
+            // Full fallback to Dexscreener in chunks of 30 if Jupiter completely failed
+            for (let i = 0; i < chunk.length; i += 30) {
+              const dexChunk = chunk.slice(i, i + 30);
+              const dexScrUrl = `https://api.dexscreener.com/latest/dex/tokens/${dexChunk.join(',')}`;
               try {
-                const dexScrRes = await fetch(dexScrUrl, { signal: AbortSignal.timeout(8000) });
-                if (dexScrRes.ok) {
-                  const dexScrData = await dexScrRes.json();
-                  const chunkResults = {};
-                  if (dexScrData && dexScrData.pairs) {
-                    dexScrData.pairs.forEach(p => {
+                const dexRes = await fetch(dexScrUrl, { signal: AbortSignal.timeout(5000) });
+                if (dexRes.ok) {
+                  const dexData = await dexRes.json();
+                  const dexParsed = {};
+                  if (dexData && dexData.pairs) {
+                    dexData.pairs.forEach(p => {
                       if (p.chainId === 'solana' && p.baseToken) {
-                        const addr = p.baseToken.address;
-                        if (!chunkResults[addr] || (p.liquidity?.usd || 0) > (chunkResults[addr].liquidity || 0)) {
-                          chunkResults[addr] = {
-                            price: +p.priceUsd,
-                            liquidity: p.liquidity?.usd || 0
-                          };
+                        const a = p.baseToken.address;
+                        if (!dexParsed[a] || (p.liquidity?.usd || 0) > (dexParsed[a].liquidity || 0)) {
+                          dexParsed[a] = { price: +p.priceUsd, liquidity: p.liquidity?.usd || 0 };
                         }
                       }
                     });
                   }
-
-                  for (const addr of chunk) {
-                    let matchedResult = chunkResults[addr];
-                    if (!matchedResult) {
-                      const lowerAddr = addr.toLowerCase();
-                      const foundKey = Object.keys(chunkResults).find(k => k.toLowerCase() === lowerAddr);
-                      if (foundKey) matchedResult = chunkResults[foundKey];
+                  for (const a of dexChunk) {
+                    let matched = dexParsed[a];
+                    if (!matched) {
+                      const lowerA = a.toLowerCase();
+                      const fKey = Object.keys(dexParsed).find(k => k.toLowerCase() === lowerA);
+                      if (fKey) matched = dexParsed[fKey];
                     }
-
-                    if (matchedResult) {
-                      solanaPricesCache[addr] = { price: matchedResult.price, liquidity: matchedResult.liquidity, lastFetch: now };
-                      results[addr] = { price: matchedResult.price, liquidity: matchedResult.liquidity };
+                    if (matched) {
+                      solanaPricesCache[a] = { price: matched.price, liquidity: matched.liquidity, lastFetch: now };
+                      results[a] = { price: matched.price, liquidity: matched.liquidity };
                     } else {
-                      const cached = solanaPricesCache[addr];
-                      if (cached) {
-                        results[addr] = { price: cached.price, liquidity: cached.liquidity };
-                      }
-                    }
-                  }
-                } else {
-                  // Fallback to cache with a cooldown
-                  for (const addr of chunk) {
-                    const cached = solanaPricesCache[addr];
-                    solanaPricesCache[addr] = {
-                      price: cached ? cached.price : 0,
-                      liquidity: cached ? cached.liquidity : 0,
-                      lastFetch: now + 12000 // future timestamp means it won't re-fetch for 12s
-                    };
-                    if (cached) {
-                      results[addr] = { price: cached.price, liquidity: cached.liquidity };
+                      const cached = solanaPricesCache[a];
+                      if (cached) results[a] = { price: cached.price, liquidity: cached.liquidity };
                     }
                   }
                 }
               } catch (e) {
-                console.warn(`DexScreener fallback chunk failed:`, e.message);
-                for (const addr of chunk) {
-                  const cached = solanaPricesCache[addr];
-                  if (cached) {
-                    results[addr] = { price: cached.price, liquidity: cached.liquidity };
-                  }
-                }
-              }
-            }
-          } catch (err) {
-            console.warn(`GeckoTerminal fetch error for chunk:`, err.message);
-            // Fallback to cache for this chunk
-            for (const addr of chunk) {
-              const cached = solanaPricesCache[addr];
-              if (cached) {
-                results[addr] = { price: cached.price, liquidity: cached.liquidity };
+                 for (const a of dexChunk) {
+                    if (solanaPricesCache[a]) results[a] = { price: solanaPricesCache[a].price, liquidity: solanaPricesCache[a].liquidity };
+                 }
               }
             }
           }
-
-          if (chunks.length > 1) await new Promise(res => setTimeout(res, 500));
+          
+          if (chunks.length > 1) await new Promise(res => setTimeout(res, 200));
         }
       }
     }
@@ -390,7 +396,7 @@ let lastSolanaBalanceUpdate = 0;
 let solanaSwapLogs = [];
 
 async function updateSolanaWalletInfo() {
-  const pk = appConfig.solanaPrivateKey || process.env.SOLANA_PRIVATE_KEY;
+  const pk = poolConfig.privateKey || appConfig.solanaPrivateKey || process.env.SOLANA_PRIVATE_KEY;
   if (!pk) {
     solanaWalletAddress = '';
     solanaSolBalance = 0;
@@ -432,9 +438,9 @@ async function updateSolanaWalletInfo() {
 async function executeSolanaTrade(w, side, amountUSDT, price) {
   if (solMode !== 'wallet') return { ok: true, txid: 'simulated' };
   
-  const pk = appConfig.solanaPrivateKey || process.env.SOLANA_PRIVATE_KEY;
+  const pk = poolConfig.privateKey || appConfig.solanaPrivateKey || process.env.SOLANA_PRIVATE_KEY;
   if (!pk) {
-    addLog(`⚠️ No se puede ejecutar orden real en Solana para ${w.symbol}: Falta Solana Private Key en Config.`, 'warn');
+    addLog(`⚠️ No se puede ejecutar orden real en Solana para ${w.symbol}: Falta Solana Private Key en Config o Pool.`, 'warn');
     return { ok: false };
   }
   
@@ -674,7 +680,7 @@ async function runCycle() {
           const realRes = await executeOrder(w, 'SELL', inv + pnl, cp);
           if (realRes && realRes.ok) {
             if(mode!=='real') SIM.balance += inv + pnl;
-            SIM.pnl += pnl; 
+            SIM.pnl += pnl; distributePnL(pnl);
             SIM.losses++;
           } else continue;
           SIM.trades.push({ symbol: w.symbol, avgEntry: avg, exit: cp, pnl, pnlPct: pnlP.toFixed(2), at: Date.now() });
@@ -695,7 +701,7 @@ async function runCycle() {
           }
           if (realRes && realRes.ok) {
             if(mode!=='real') SIM.balance += inv + pnl;
-            SIM.pnl += pnl; 
+            SIM.pnl += pnl; distributePnL(pnl);
             SIM.wins++;
           } else continue;
           SIM.trades.push({ symbol: w.symbol, avgEntry: avg, exit: cp, pnl, pnlPct: pnlP.toFixed(2), at: Date.now() });
@@ -717,7 +723,7 @@ async function runCycle() {
           }
           if (realRes && realRes.ok) {
             if(mode!=='real') SIM.balance += inv + pnl;
-            SIM.pnl += pnl; 
+            SIM.pnl += pnl; distributePnL(pnl);
             SIM.wins++;
           } else continue;
           SIM.trades.push({ symbol: w.symbol, avgEntry: avg, exit: cp, pnl, pnlPct: pnlP.toFixed(2), at: Date.now() });
@@ -817,7 +823,7 @@ async function runSolanaCycle() {
                 SIM.balance += inv + pnl;
                 SIM.solBalance -= (inv / avg);
             }
-            SIM.pnl += pnl; 
+            SIM.pnl += pnl; distributePnL(pnl);
             SIM.losses++;
             SIM.trades.push({ symbol: w.symbol, avgEntry: avg, exit: cp, pnl, pnlPct: pnlP.toFixed(2), at: Date.now() });
             
@@ -839,7 +845,7 @@ async function runSolanaCycle() {
                 SIM.balance += inv + pnl;
                 SIM.solBalance -= (inv / avg);
             }
-            SIM.pnl += pnl; 
+            SIM.pnl += pnl; distributePnL(pnl);
             SIM.wins++;
             SIM.trades.push({ symbol: w.symbol, avgEntry: avg, exit: cp, pnl, pnlPct: pnlP.toFixed(2), at: Date.now() });
             
@@ -862,7 +868,7 @@ async function runSolanaCycle() {
                 SIM.balance += inv + pnl;
                 SIM.solBalance -= (inv / avg);
             }
-            SIM.pnl += pnl; 
+            SIM.pnl += pnl; distributePnL(pnl);
             SIM.wins++;
             SIM.trades.push({ symbol: w.symbol, avgEntry: avg, exit: cp, pnl, pnlPct: pnlP.toFixed(2), at: Date.now() });
             
@@ -904,21 +910,326 @@ startLoop();
 
 
 // ============================================
-// API ENDPOINTS PARA LA INTERFAZ WEB
-// ============================================
-app.use('/api', (req, res, next) => {
-  if (req.path === '/login') return next();
-  const pwd = appConfig.appPassword || process.env.APP_PASSWORD || 'admin123';
-  const auth = req.headers.authorization;
-  if (auth !== `Bearer ${pwd}`) return res.status(401).json({error: 'Unauthorized'});
-  next();
-});
+// PUBLIC ENDPOINTS
 
 app.post('/api/login', (req, res) => {
   const pwd = appConfig.appPassword || process.env.APP_PASSWORD || 'admin123';
   if (req.body.password === pwd) res.json({status: 'ok', token: pwd});
   else res.status(401).json({error: 'Invalid password'});
 });
+
+app.post('/api/investor/login', (req, res) => {
+  const { name, password } = req.body;
+  if (!name || !password) return res.status(400).json({ error: 'Faltan datos' });
+  const inv = poolConfig.investors.find(i => i.name.toLowerCase() === name.toLowerCase());
+  if (inv && inv.password === password) {
+    const token = Buffer.from(`${name}:${password}`).toString('base64');
+    res.json({ status: 'ok', token, name: inv.name });
+  } else {
+    res.status(401).json({ error: 'Credenciales inválidas' });
+  }
+});
+
+// ============================================
+// INVESTOR MIDDLEWARE & ENDPOINTS
+const investorAuth = (req, res, next) => {
+  const auth = req.headers.authorization;
+  if (!auth || !auth.startsWith('Bearer ')) return res.status(401).json({error: 'Unauthorized Investor'});
+  const token = auth.substring(7);
+  try {
+    const decoded = Buffer.from(token, 'base64').toString('utf8');
+    const [name, password] = decoded.split(':');
+    const inv = poolConfig.investors.find(i => i.name.toLowerCase() === name.toLowerCase());
+    if (inv && inv.password === password) {
+      req.investor = inv;
+      return next();
+    }
+  } catch (e) {}
+  res.status(401).json({error: 'Unauthorized Investor'});
+};
+
+app.get('/api/investor/me', investorAuth, (req, res) => {
+  const safePoolConfig = { ...poolConfig };
+  delete safePoolConfig.privateKey;
+  // Send the investor's own data and basic pool config
+  res.json({ poolConfig: safePoolConfig, trades: SIM.trades || [] });
+});
+
+app.post('/api/investor/deposit', investorAuth, (req, res) => {
+  const { amount } = req.body;
+  if (amount <= 0) return res.json({ error: 'Datos inválidos' });
+  const inv = req.investor;
+  inv.deposit += Number(amount);
+  saveState();
+  res.json({ success: true });
+});
+
+app.post('/api/investor/confirm_deposit', investorAuth, (req, res) => {
+  const inv = req.investor;
+  if (inv.depositStatus === 'pending_user') {
+    inv.depositStatus = 'pending_admin';
+    saveState();
+  }
+  res.json({ success: true });
+});
+
+app.post('/api/investor/request_withdraw', investorAuth, (req, res) => {
+  const { amount, destinationWallet } = req.body;
+  const inv = req.investor;
+  const withdrawAmount = Number(amount);
+  if (withdrawAmount <= 0) return res.json({ error: 'Monto inválido' });
+  if (inv.profit + inv.deposit < withdrawAmount) return res.json({ error: 'Fondos insuficientes' });
+  
+  if (!poolConfig.withdrawalRequests) poolConfig.withdrawalRequests = [];
+  
+  poolConfig.withdrawalRequests.push({
+    id: Date.now().toString() + Math.floor(Math.random()*1000),
+    name: inv.name,
+    amount: withdrawAmount,
+    destinationWallet,
+    status: 'pending',
+    createdAt: Date.now()
+  });
+  
+  saveState();
+  res.json({ success: true });
+});
+
+
+// ============================================
+// ADMIN MIDDLEWARE
+app.use('/api', (req, res, next) => {
+  // If it's a public or investor route that we already matched, skip this (Express already processed it above if matched)
+  // Actually, express will hit this for any /api route not matched above.
+  const pwd = appConfig.appPassword || process.env.APP_PASSWORD || 'admin123';
+  const auth = req.headers.authorization;
+  if (auth !== `Bearer ${pwd}`) return res.status(401).json({error: 'Unauthorized'});
+  next();
+});
+
+// ADMIN ENDPOINTS
+
+app.get('/api/pool', (req, res) => {
+  const safePoolConfig = { ...poolConfig };
+  delete safePoolConfig.privateKey;
+  res.json({ poolConfig: safePoolConfig, trades: SIM.trades || [] });
+});
+
+app.post('/api/pool/investor', (req, res) => {
+  const { name, amount, password } = req.body;
+  if (!name) return res.json({ error: 'Falta el nombre' });
+  
+  let inv = poolConfig.investors.find(i => i.name.toLowerCase() === name.toLowerCase());
+  if (!inv) {
+    inv = { 
+      name, 
+      deposit: 0, 
+      profit: 0, 
+      joinedAt: Date.now(), 
+      password: password || '1234',
+      expectedDeposit: Number(amount) || 0,
+      depositStatus: (Number(amount) > 0) ? 'pending_user' : 'active'
+    };
+    poolConfig.investors.push(inv);
+  } else {
+    if (password) inv.password = password;
+    if (amount && Number(amount) > 0) {
+      inv.expectedDeposit = (inv.expectedDeposit || 0) + Number(amount);
+      inv.depositStatus = 'pending_user';
+    }
+  }
+  
+  saveState();
+  res.json({ success: true, poolConfig });
+});
+
+app.post('/api/pool/approve_deposit', (req, res) => {
+  const { name } = req.body;
+  let inv = poolConfig.investors.find(i => i.name.toLowerCase() === name.toLowerCase());
+  if (inv && inv.depositStatus === 'pending_admin') {
+    inv.deposit += inv.expectedDeposit || 0;
+    inv.expectedDeposit = 0;
+    inv.depositStatus = 'active';
+    saveState();
+  }
+  res.json({ success: true, poolConfig });
+});
+
+app.post('/api/pool/config', (req, res) => {
+  const { walletAddress, commissionRate } = req.body;
+  if (walletAddress !== undefined) poolConfig.walletAddress = walletAddress;
+  if (commissionRate !== undefined) poolConfig.commissionRate = Number(commissionRate);
+  saveState();
+  res.json({ success: true, poolConfig });
+});
+
+app.post('/api/pool/request_withdraw', (req, res) => {
+  const { name, amount, destinationWallet } = req.body;
+  const inv = poolConfig.investors.find(i => i.name.toLowerCase() === name.toLowerCase());
+  if (!inv) return res.json({ error: 'Inversor no encontrado' });
+  const withdrawAmount = Number(amount);
+  if (withdrawAmount <= 0) return res.json({ error: 'Monto inválido' });
+  if (inv.profit + inv.deposit < withdrawAmount) return res.json({ error: 'Fondos insuficientes' });
+  
+  if (!poolConfig.withdrawalRequests) poolConfig.withdrawalRequests = [];
+  
+  poolConfig.withdrawalRequests.push({
+    id: Date.now().toString() + Math.floor(Math.random()*1000),
+    name: inv.name,
+    amount: withdrawAmount,
+    destinationWallet,
+    status: 'pending',
+    createdAt: Date.now()
+  });
+  
+  saveState();
+  res.json({ success: true, poolConfig });
+});
+
+app.post('/api/pool/approve_withdraw', async (req, res) => {
+  const { id } = req.body;
+  if (!poolConfig.withdrawalRequests) poolConfig.withdrawalRequests = [];
+  const reqIdx = poolConfig.withdrawalRequests.findIndex(r => r.id === id);
+  if (reqIdx === -1) return res.json({ error: 'Solicitud no encontrada' });
+  
+  const request = poolConfig.withdrawalRequests[reqIdx];
+  if (request.status !== 'pending') return res.json({ error: 'La solicitud ya fue procesada' });
+
+  const inv = poolConfig.investors.find(i => i.name === request.name);
+  if (!inv) return res.json({ error: 'Inversor no encontrado' });
+  
+  const withdrawAmount = request.amount;
+  if (inv.profit + inv.deposit < withdrawAmount) return res.json({ error: 'Fondos insuficientes al momento de procesar' });
+  
+  // Si la pool tiene una wallet y la solicitud tiene wallet de destino, enviamos en la red real
+  if (poolConfig.privateKey && request.destinationWallet) {
+    try {
+      const rpcUrl = appConfig.solanaRpcUrl || process.env.SOLANA_RPC_URL || 'https://api.mainnet-beta.solana.com';
+      const connection = new Connection(rpcUrl, 'confirmed');
+      const kp = Keypair.fromSecretKey(bs58.decode(poolConfig.privateKey));
+      const destPubkey = new PublicKey(request.destinationWallet);
+      
+      let solPrice = 150;
+      try {
+        const jup = await fetch('https://price.jup.ag/v6/price?ids=SOL');
+        const jupData = await jup.json();
+        if (jupData.data && jupData.data.SOL && jupData.data.SOL.price) {
+          solPrice = jupData.data.SOL.price;
+        }
+      } catch (e) {}
+
+      const solAmount = withdrawAmount / solPrice;
+      const lamports = Math.floor(solAmount * 1e9);
+
+      const bal = await connection.getBalance(kp.publicKey);
+      if (bal < lamports + 5000) {
+        return res.json({ error: `La wallet del Pool no tiene saldo suficiente en SOL. Saldo actual: ${bal/1e9} SOL. Necesario: ${(lamports+5000)/1e9} SOL` });
+      }
+
+      const tx = new Transaction().add(
+        SystemProgram.transfer({
+          fromPubkey: kp.publicKey,
+          toPubkey: destPubkey,
+          lamports
+        })
+      );
+      
+      const signature = await sendAndConfirmTransaction(connection, tx, [kp]);
+      console.log('✅ Retiro procesado on-chain:', signature);
+      request.txSignature = signature;
+    } catch (e) {
+      console.error('Error enviando retiro en Solana:', e);
+      return res.json({ error: 'Error on-chain: ' + e.message });
+    }
+  }
+
+  let remaining = withdrawAmount;
+  if (inv.profit >= remaining) {
+    inv.profit -= remaining;
+  } else {
+    remaining -= inv.profit;
+    inv.profit = 0;
+    inv.deposit -= remaining;
+  }
+  
+  request.status = 'approved';
+  saveState();
+  res.json({ success: true, poolConfig });
+});
+
+app.post('/api/pool/withdraw_admin', async (req, res) => {
+  const { destinationWallet, amount } = req.body;
+  if (!destinationWallet || !amount || amount <= 0) return res.json({ error: 'Datos inválidos' });
+  
+  if (!poolConfig.totalCommissionEarned || poolConfig.totalCommissionEarned < amount) {
+    return res.json({ error: 'Comisión insuficiente' });
+  }
+
+  if (poolConfig.privateKey) {
+    try {
+      const rpcUrl = appConfig.solanaRpcUrl || process.env.SOLANA_RPC_URL || 'https://api.mainnet-beta.solana.com';
+      const connection = new Connection(rpcUrl, 'confirmed');
+      const kp = Keypair.fromSecretKey(bs58.decode(poolConfig.privateKey));
+      const destPubkey = new PublicKey(destinationWallet);
+      
+      let solPrice = 150;
+      try {
+        const jup = await fetch('https://price.jup.ag/v6/price?ids=SOL');
+        const jupData = await jup.json();
+        if (jupData.data && jupData.data.SOL && jupData.data.SOL.price) {
+          solPrice = jupData.data.SOL.price;
+        }
+      } catch (e) {}
+
+      const solAmount = amount / solPrice;
+      const lamports = Math.floor(solAmount * 1e9);
+
+      const bal = await connection.getBalance(kp.publicKey);
+      if (bal < lamports + 5000) {
+        return res.json({ error: `La wallet del Pool no tiene saldo suficiente en SOL. Saldo actual: ${bal/1e9} SOL. Necesario: ${(lamports+5000)/1e9} SOL` });
+      }
+
+      const tx = new Transaction().add(
+        SystemProgram.transfer({
+          fromPubkey: kp.publicKey,
+          toPubkey: destPubkey,
+          lamports
+        })
+      );
+      
+      const signature = await sendAndConfirmTransaction(connection, tx, [kp]);
+      console.log('✅ Retiro de comisión admin procesado on-chain:', signature);
+    } catch (e) {
+      console.error('Error enviando retiro admin en Solana:', e);
+      return res.json({ error: 'Error on-chain: ' + e.message });
+    }
+  }
+
+  poolConfig.totalCommissionEarned -= amount;
+  saveState();
+  res.json({ success: true, poolConfig });
+});
+
+app.post('/api/pool/reject_withdraw', (req, res) => {
+  const { id } = req.body;
+  if (!poolConfig.withdrawalRequests) poolConfig.withdrawalRequests = [];
+  const reqIdx = poolConfig.withdrawalRequests.findIndex(r => r.id === id);
+  if (reqIdx === -1) return res.json({ error: 'Solicitud no encontrada' });
+  
+  poolConfig.withdrawalRequests[reqIdx].status = 'rejected';
+  saveState();
+  res.json({ success: true, poolConfig });
+});
+
+app.post('/api/pool/reset_investor', (req, res) => {
+  const { name } = req.body;
+  poolConfig.investors = poolConfig.investors.filter(i => i.name !== name);
+  saveState();
+  res.json({ success: true, poolConfig });
+});
+
+// ============================================
+
 app.get('/api/state', async (req, res) => {
   res.setHeader('Cache-Control', 'no-store, no-cache, must-revalidate, proxy-revalidate');
   res.setHeader('Pragma', 'no-cache');
@@ -930,8 +1241,8 @@ app.get('/api/state', async (req, res) => {
     try {
       const nowMs = Date.now();
       // Si el monitor está encendido, ya actualiza en background cada 1s, por lo que no es necesario forzar
-      // la petición aquí a menos que lleve más de 5 segundos desactualizado.
-      const needsSync = !monitorOn || solanaItems.some(w => !w.lastUpdate || (nowMs - w.lastUpdate > 5000));
+      // la petición aquí a menos que lleve más de 2 segundos desactualizado.
+      const needsSync = !monitorOn || solanaItems.some(w => !w.lastUpdate || (nowMs - w.lastUpdate > 2000));
       
       if (needsSync) {
         const addresses = solanaItems.map(w => w.address).filter(Boolean);
@@ -1126,7 +1437,7 @@ app.post('/api/action', async (req, res) => {
            if (mode !== 'real') SIM.balance += inv + pnl;
         }
         
-        SIM.pnl += pnl;
+        SIM.pnl += pnl; distributePnL(pnl);
         if (pnl > 0) SIM.wins++; else SIM.losses++;
         SIM.trades.push({ symbol: w.symbol, avgEntry: avg, exit: cp, pnl, pnlPct: ((cp - avg) / avg * 100).toFixed(2), at: Date.now() });
         
@@ -1280,9 +1591,11 @@ async function startServer() {
     const distPath = path.join(__dirname, "dist");
     if (fs.existsSync(distPath)) {
       app.use(express.static(distPath));
+      app.get('/investor', (req, res) => res.sendFile(path.join(__dirname, 'investor.html')));
       app.get('*', (req, res) => res.sendFile(path.join(distPath, 'index.html')));
     } else {
       app.use(express.static(__dirname));
+      app.get('/investor', (req, res) => res.sendFile(path.join(__dirname, 'investor.html')));
       app.get('*', (req, res) => res.sendFile(path.join(__dirname, 'index.html')));
     }
   }

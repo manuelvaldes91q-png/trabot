@@ -238,6 +238,7 @@ select.inp{cursor:pointer}
   <div class="hctrls">
     <button class="btn btn-d btn-sm" id="btnSound" onclick="toggleSound()">🔇 Sonido</button>
     <button class="btn btn-d btn-sm" id="btnNotif" onclick="requestNotif()">🔔 Notif.</button>
+    <button class="btn btn-d btn-sm" onclick="openPoolModal()">🏦 Pool</button>
     <button class="btn btn-d btn-sm" onclick="showTrades()">📋 Historial</button>
     <button class="btn btn-d btn-sm" onclick="openConfigModal()">⚙️ Config</button>
     <button class="btn btn-r btn-sm" id="btnStop" style="display:none" onclick="stopMonitor()">⏹ Parar monitor</button>
@@ -750,6 +751,212 @@ async function initServerState(){
   }
 }
 function showTrades(){if(!SIM.trades.length){alert('Sin operaciones');return;}alert('HISTORIAL:\n\n'+SIM.trades.map((t,i)=>`#${i+1} ${t.symbol}: ${t.pnl>=0?'+':''}$${(+t.pnl).toFixed(2)} (${t.pnlPct}%) · ${t.at?new Date(t.at).toLocaleDateString('es'):''}`).join('\n'));}
+
+async function openPoolModal() {
+  const p = document.createElement('div');
+  p.style.cssText = 'position:fixed;inset:0;background:rgba(0,0,0,0.8);z-index:9000;display:flex;align-items:center;justify-content:center';
+  p.innerHTML = `
+    <div style="background:var(--bg2);width:500px;max-width:95%;border:1px solid var(--bdr);border-radius:8px;padding:25px;font-family:var(--sans);max-height:90vh;overflow-y:auto">
+      <div style="font-weight:700;margin-bottom:15px;color:var(--t);font-size:16px;">🏦 Gestión del Pool de Inversores</div>
+      <div style="margin-bottom:15px;font-size:11px;color:var(--t2)">
+        Configura la wallet central y la comisión del sistema. Los inversores verán esto en su panel (/investor). La billetera es generada automáticamente por el sistema para procesar retiros reales.
+      </div>
+      <div style="margin-bottom:10px">
+        <div style="font-size:10px;color:var(--t2);margin-bottom:4px">Billetera del Sistema (Pool) - Auto-generada</div>
+        <input type="text" id="cfgPoolWallet" class="inp" readonly style="width:100%; opacity: 0.7; cursor: not-allowed;">
+      </div>
+      <div style="margin-bottom:15px">
+        <div style="font-size:10px;color:var(--t2);margin-bottom:4px">Comisión del Administrador (%)</div>
+        <input type="number" id="cfgPoolCom" class="inp" placeholder="Ej: 20 para 20%" style="width:100%">
+      </div>
+      <div style="display:flex;gap:10px;margin-bottom:20px;">
+        <button class="btn btn-g" style="flex:1" onclick="savePoolConfig(this)">💾 Guardar Config</button>
+        <button class="btn btn-d" style="flex:1" onclick="this.closest('div').parentElement.parentElement.remove()">❌ Cerrar</button>
+      </div>
+
+      <div style="font-weight:700;margin-bottom:10px;color:var(--t);font-size:14px;border-top:1px solid var(--bdr);padding-top:15px">👥 Inversores Actuales</div>
+      <div id="poolInvestorsList" style="font-family:var(--mono);font-size:11px;color:var(--t2);margin-bottom:15px;max-height:150px;overflow-y:auto">
+        Cargando...
+      </div>
+      
+      <div style="background:var(--bg3);padding:10px;border-radius:6px;margin-bottom:15px">
+        <div style="font-size:11px;margin-bottom:5px;font-weight:bold;color:var(--t)">Añadir / Actualizar Inversor</div>
+        <div style="display:flex;gap:4px;margin-bottom:5px">
+          <input type="text" id="addInvName" class="inp" placeholder="Nombre" style="flex:1">
+          <input type="number" id="addInvDeposit" class="inp" placeholder="Sumar Depósito" style="width:100px">
+        </div>
+        <div style="display:flex;gap:4px">
+          <input type="text" id="addInvPwd" class="inp" placeholder="Contraseña (opc, 1234 dflt)" style="flex:1">
+          <button class="btn btn-g btn-sm" onclick="savePoolInvestor()">Añadir/Editar</button>
+        </div>
+      </div>
+      
+      <div style="font-weight:700;margin-bottom:10px;color:var(--t);font-size:14px;border-top:1px solid var(--bdr);padding-top:15px">💰 Tus Ganancias (Admin)</div>
+      <div style="margin-bottom:15px;font-size:12px;color:var(--g);font-family:var(--mono);font-weight:bold">
+        Comisiones acumuladas: $<span id="lblAdminCom">0.00</span>
+      </div>
+      <div style="display:flex;gap:4px;margin-bottom:15px">
+        <input type="text" id="inpAdminWallet" class="inp" placeholder="Tu wallet personal" style="flex:1">
+        <input type="number" id="inpAdminAmt" class="inp" placeholder="Cantidad" style="width:100px">
+        <button class="btn btn-g btn-sm" onclick="withdrawAdmin()">Retirar a mi wallet</button>
+      </div>
+
+      <div style="font-weight:700;margin-bottom:10px;color:var(--t);font-size:14px;border-top:1px solid var(--bdr);padding-top:15px">💸 Solicitudes de Retiro</div>
+      <div id="poolRequestsList" style="font-family:var(--sans);font-size:11px;color:var(--t2);margin-bottom:15px;max-height:150px;overflow-y:auto">
+        Cargando solicitudes...
+      </div>
+    </div>
+  `;
+  document.body.appendChild(p);
+
+  try {
+    const res = await myFetch('/api/pool');
+    const data = await res.json();
+    if(data.poolConfig) {
+      document.getElementById('cfgPoolWallet').value = data.poolConfig.walletAddress || '';
+      document.getElementById('cfgPoolCom').value = (data.poolConfig.commissionRate * 100).toFixed(1);
+      document.getElementById('lblAdminCom').innerText = (data.poolConfig.totalCommissionEarned || 0).toFixed(2);
+      
+      const list = document.getElementById('poolInvestorsList');
+      if (!data.poolConfig.investors || data.poolConfig.investors.length === 0) {
+        list.innerHTML = 'No hay inversores aún.';
+      } else {
+        list.innerHTML = data.poolConfig.investors.map(i => {
+          let statusBadge = '';
+          if (i.depositStatus === 'pending_user') {
+            statusBadge = `<span style="font-size:9px;color:var(--t2);background:var(--bg3);padding:2px 4px;border-radius:4px;margin-left:5px">Esperando al usr</span>`;
+          } else if (i.depositStatus === 'pending_admin') {
+            statusBadge = `<button onclick="approveDeposit('${i.name}')" class="btn btn-g btn-sm" style="font-size:9px;padding:2px 5px;margin-left:5px">Verificar Depósito</button>`;
+          }
+          return `
+          <div style="display:flex;justify-content:space-between;border-bottom:1px solid var(--bg3);padding:4px 0;align-items:center;">
+            <div><strong style="color:var(--t)">${i.name}</strong> <span style="font-size:9px">(Deposit: $${(i.deposit||0).toFixed(2)})</span>${statusBadge}</div>
+            <div style="color:${(i.profit||0)>0?'var(--g)':'var(--r)'}">${(i.profit||0)>=0?'+':''}$${(i.profit||0).toFixed(2)} PNL</div>
+          </div>
+        `}).join('');
+      }
+
+      const reqList = document.getElementById('poolRequestsList');
+      if (!data.poolConfig.withdrawalRequests || data.poolConfig.withdrawalRequests.filter(r => r.status === 'pending').length === 0) {
+        reqList.innerHTML = 'No hay solicitudes pendientes.';
+      } else {
+        reqList.innerHTML = data.poolConfig.withdrawalRequests.filter(r => r.status === 'pending').map(r => `
+          <div style="border:1px solid var(--bdr);border-radius:4px;padding:8px;margin-bottom:8px;background:var(--bg3)">
+            <div style="display:flex;justify-content:space-between;margin-bottom:6px">
+              <strong style="color:var(--t);font-size:13px">${r.name}</strong>
+              <strong style="color:var(--t);font-size:13px">$${r.amount}</strong>
+            </div>
+            <div style="font-family:var(--mono);font-size:9px;color:var(--t2);margin-bottom:8px;word-break:break-all">
+              Wallet: ${r.destinationWallet}
+            </div>
+            <div style="display:flex;gap:4px">
+              <button class="btn btn-g btn-sm" style="flex:1" onclick="processWithdraw('${r.id}', 'approve')">Aprobar (Retirar)</button>
+              <button class="btn btn-r btn-sm" style="flex:1" onclick="processWithdraw('${r.id}', 'reject')">Rechazar</button>
+            </div>
+          </div>
+        `).join('');
+      }
+    }
+  } catch(e) {
+    document.getElementById('poolInvestorsList').innerHTML = 'Error al cargar';
+    document.getElementById('poolRequestsList').innerHTML = 'Error al cargar';
+  }
+}
+
+async function savePoolConfig(btn) {
+  const w = document.getElementById('cfgPoolWallet').value;
+  const c = document.getElementById('cfgPoolCom').value;
+  btn.textContent = 'Guardando...';
+  try {
+    await myFetch('/api/pool/config', {
+      method: 'POST',
+      headers: {'Content-Type':'application/json'},
+      body: JSON.stringify({ walletAddress: w, commissionRate: Number(c)/100 })
+    });
+    btn.textContent = '¡Guardado!';
+    setTimeout(() => btn.textContent = '💾 Guardar Config', 1500);
+  } catch(e) {
+    btn.textContent = 'Error';
+    setTimeout(() => btn.textContent = '💾 Guardar Config', 1500);
+  }
+}
+
+async function withdrawAdmin() {
+  const w = document.getElementById('inpAdminWallet').value;
+  const a = document.getElementById('inpAdminAmt').value;
+  if(!w || !a) return alert('Datos inválidos');
+  
+  if(!confirm(`¿Seguro que deseas retirar $${a} de tus ganancias a la wallet ${w}?`)) return;
+  
+  const res = await myFetch('/api/pool/withdraw_admin', {
+    method: 'POST',
+    headers: {'Content-Type':'application/json'},
+    body: JSON.stringify({ destinationWallet: w, amount: Number(a) })
+  });
+  const data = await res.json();
+  if (data.error) alert('Error: ' + data.error);
+  else {
+    alert('Retiro on-chain exitoso.');
+    document.getElementById('inpAdminWallet').value = '';
+    document.getElementById('inpAdminAmt').value = '';
+  }
+}
+
+async function approveDeposit(name) {
+  if(!confirm(`¿Seguro que verificaste el depósito de ${name}?`)) return;
+  const res = await myFetch('/api/pool/approve_deposit', {
+    method: 'POST',
+    headers: {'Content-Type':'application/json'},
+    body: JSON.stringify({ name })
+  });
+  const data = await res.json();
+  if (data.error) alert('Error: ' + data.error);
+  else {
+    alert('Depósito aprobado.');
+    const el = document.getElementById('addInvName');
+    if (el) el.closest('div').parentElement.parentElement.remove();
+    openPoolModal();
+  }
+}
+
+async function processWithdraw(id, action) {
+  if(!confirm(`¿Seguro que deseas ${action === 'approve' ? 'APROBAR y descontar' : 'RECHAZAR'} esta solicitud?`)) return;
+  const endpoint = action === 'approve' ? '/api/pool/approve_withdraw' : '/api/pool/reject_withdraw';
+  const res = await myFetch(endpoint, {
+    method: 'POST',
+    headers: {'Content-Type':'application/json'},
+    body: JSON.stringify({ id })
+  });
+  const data = await res.json();
+  if (data.error) alert('Error: ' + data.error);
+  else {
+    alert('Solicitud procesada.');
+    const el = document.getElementById('addInvName');
+    if (el) el.closest('div').parentElement.parentElement.remove();
+    openPoolModal();
+  }
+}
+
+async function savePoolInvestor() {
+  const name = document.getElementById('addInvName').value;
+  const amount = document.getElementById('addInvDeposit').value;
+  const password = document.getElementById('addInvPwd').value;
+  
+  if (!name) return alert('Ingresa el nombre del inversor');
+  
+  const res = await myFetch('/api/pool/investor', {
+    method: 'POST',
+    headers: { 'Content-Type': 'application/json' },
+    body: JSON.stringify({ name, amount: Number(amount) || 0, password })
+  });
+  const data = await res.json();
+  if (data.error) alert('Error: ' + data.error);
+  else {
+    alert('Inversor guardado exitosamente.');
+    document.getElementById('addInvName').closest('div').parentElement.parentElement.remove();
+    openPoolModal();
+  }
+}
 
 async function openConfigModal() {
   const p = document.createElement('div');
@@ -1945,6 +2152,9 @@ function stopMonitor(){
 setInterval(async () => {
   try {
     const res = await myFetch('/api/state');
+    if (!res.ok && res.headers.get('content-type')?.includes('text/html')) {
+      return;
+    }
     const data = await res.json();
     
     SIM = data.SIM || SIM;
