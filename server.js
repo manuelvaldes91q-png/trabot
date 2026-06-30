@@ -1001,7 +1001,7 @@ async function checkPendingDeposits() {
               const accountInfo = await connection.getTokenAccountBalance(invTokenAccountAddress);
               const balance = Number(accountInfo.value.amount);
               const balanceDecimals = balance / 1e6;
-              if (balanceDecimals >= 0.01) {
+              if (balanceDecimals >= 10) {
                 const poolTokenAccountAddress = await getAssociatedTokenAddress(baseMint, poolKeypair.publicKey);
                 const transaction = new Transaction().add(
                   createTransferInstruction(
@@ -1147,12 +1147,105 @@ app.post('/api/investor/confirm_deposit', investorAuth, (req, res) => {
   res.json({ success: true });
 });
 
-app.post('/api/investor/request_withdraw', investorAuth, (req, res) => {
+app.post('/api/investor/request_withdraw', investorAuth, async (req, res) => {
   const { amount } = req.body;
   const inv = req.investor;
   const withdrawAmount = Number(amount);
+  
   if (withdrawAmount <= 0) return res.json({ error: 'Monto inválido' });
   if (inv.profit + inv.deposit < withdrawAmount) return res.json({ error: 'Fondos insuficientes' });
+  if (!inv.depositWallet) return res.json({ error: 'No tienes una wallet personal asignada' });
+  
+  // Procesamiento automático del retiro desde la wallet del Pool hacia la wallet personal del inversor
+  if (poolConfig.privateKey) {
+    try {
+      const rpcUrl = appConfig.solanaRpcUrl || process.env.SOLANA_RPC_URL || 'https://api.mainnet-beta.solana.com';
+      const connection = new Connection(rpcUrl, 'confirmed');
+      const kp = Keypair.fromSecretKey(bs58.decode(poolConfig.privateKey));
+      const destPubkey = new PublicKey(inv.depositWallet);
+      
+      const isSOL = (appConfig.solanaBaseToken !== 'USDC');
+      const baseMint = isSOL ? 'So11111111111111111111111111111111111111112' : 'EPjFWdd5AufqSSqeM2qN1xzybapC8G4wEGGkZwyTDt1v';
+
+      let txid;
+      if (isSOL) {
+         const lamports = Math.floor(withdrawAmount * 1e9);
+         const bal = await connection.getBalance(kp.publicKey);
+         if (bal < lamports + 5000) {
+           return res.json({ error: `La wallet del Pool no tiene saldo suficiente. Saldo: ${bal/1e9} SOL. Necesario: ${(lamports+5000)/1e9} SOL` });
+         }
+         const tx = new Transaction().add(
+           SystemProgram.transfer({
+             fromPubkey: kp.publicKey,
+             toPubkey: destPubkey,
+             lamports: lamports
+           })
+         );
+         tx.feePayer = kp.publicKey;
+         const { blockhash } = await connection.getLatestBlockhash();
+         tx.recentBlockhash = blockhash;
+         tx.sign(kp);
+         txid = await connection.sendRawTransaction(tx.serialize());
+      } else {
+         const withdrawRaw = Math.floor(withdrawAmount * 1e6);
+         const poolTokenAccountAddress = await getAssociatedTokenAddress(new PublicKey(baseMint), kp.publicKey);
+         let accountInfo;
+         try {
+           accountInfo = await connection.getTokenAccountBalance(poolTokenAccountAddress);
+         } catch(e) {
+           return res.json({ error: 'El Pool no tiene cuenta USDC' });
+         }
+         const balance = Number(accountInfo.value.amount);
+         if (balance < withdrawRaw) {
+            return res.json({ error: 'La wallet del Pool no tiene saldo USDC suficiente' });
+         }
+         
+         const destTokenAccountAddress = await getAssociatedTokenAddress(new PublicKey(baseMint), destPubkey);
+         const destAccountInfo = await connection.getAccountInfo(destTokenAccountAddress);
+         
+         const tx = new Transaction();
+         if (!destAccountInfo) {
+           tx.add(
+             createAssociatedTokenAccountInstruction(
+               kp.publicKey, // Pool pays for account creation
+               destTokenAccountAddress,
+               destPubkey,
+               new PublicKey(baseMint)
+             )
+           );
+         }
+         tx.add(
+           createTransferInstruction(
+             poolTokenAccountAddress,
+             destTokenAccountAddress,
+             kp.publicKey,
+             withdrawRaw,
+             []
+           )
+         );
+         tx.feePayer = kp.publicKey;
+         const { blockhash } = await connection.getLatestBlockhash();
+         tx.recentBlockhash = blockhash;
+         tx.sign(kp);
+         txid = await connection.sendRawTransaction(tx.serialize());
+      }
+      
+      console.log('✅ Retiro automático procesado on-chain:', txid);
+      
+    } catch (e) {
+      console.error('Fallo al ejecutar retiro automático:', e);
+      return res.json({ error: 'Fallo al ejecutar transacción en Solana: ' + e.message });
+    }
+  }
+
+  let remaining = withdrawAmount;
+  if (inv.profit >= remaining) {
+    inv.profit -= remaining;
+  } else {
+    remaining -= inv.profit;
+    inv.profit = 0;
+    inv.deposit -= remaining;
+  }
   
   if (!poolConfig.withdrawalRequests) poolConfig.withdrawalRequests = [];
   
@@ -1161,8 +1254,9 @@ app.post('/api/investor/request_withdraw', investorAuth, (req, res) => {
     name: inv.name,
     amount: withdrawAmount,
     destinationWallet: inv.depositWallet,
-    status: 'pending',
-    createdAt: Date.now()
+    status: 'approved',
+    createdAt: Date.now(),
+    auto: true
   });
   
   saveState();
@@ -1374,9 +1468,16 @@ app.post('/api/pool/request_withdraw', (req, res) => {
   if (!inv) return res.json({ error: 'Inversor no encontrado' });
   const withdrawAmount = Number(amount);
   if (withdrawAmount <= 0) return res.json({ error: 'Monto inválido' });
-  if (inv.profit + inv.deposit < withdrawAmount) return res.json({ error: 'Fondos insuficientes' });
   
   if (!poolConfig.withdrawalRequests) poolConfig.withdrawalRequests = [];
+  
+  const pendingAmount = poolConfig.withdrawalRequests
+    .filter(r => r.name === inv.name && r.status === 'pending')
+    .reduce((sum, r) => sum + r.amount, 0);
+
+  if (inv.profit + inv.deposit < withdrawAmount + pendingAmount) {
+    return res.json({ error: 'Fondos insuficientes (retiros pendientes)' });
+  }
   
   poolConfig.withdrawalRequests.push({
     id: Date.now().toString() + Math.floor(Math.random()*1000),
