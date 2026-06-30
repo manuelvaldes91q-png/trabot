@@ -463,6 +463,9 @@ async function executeSolanaTrade(w, side, amountUSDT, price) {
     
     let inputMint, outputMint, rawAmount;
     
+    // Check balance before trade to calculate exact PNL
+    const baseBalBefore = await getTokenBalance(connection, userPublicKey, baseMint);
+    
     if (side === 'BUY') {
       inputMint = baseMint;
       outputMint = targetMint;
@@ -542,12 +545,24 @@ async function executeSolanaTrade(w, side, amountUSDT, price) {
       signature: txid
     }, 'confirmed');
     
+    // Check balance after trade
+    const baseBalAfter = await getTokenBalance(connection, userPublicKey, baseMint);
+    const diffRaw = side === 'SELL' ? (baseBalAfter - baseBalBefore) : (baseBalBefore - baseBalAfter);
+    let exactAmountUSDT = 0;
+    
+    if (isSOL) {
+       const solPrice = await mxPrice('SOL') || 140;
+       exactAmountUSDT = (diffRaw / 1e9) * solPrice;
+    } else {
+       exactAmountUSDT = diffRaw / 1e6;
+    }
+    
     addLog(`🎉 Solana trade ${side} confirmado con éxito para ${w.symbol}! TxID: ${txid}`, side==='BUY'?'buy':'sell');
     
     solanaSwapLogs.unshift({ txid, symbol: w.symbol, side, amountUSDT, time: Date.now() });
     if(solanaSwapLogs.length > 50) solanaSwapLogs.pop();
     
-    return { ok: true, txid };
+    return { ok: true, txid, exactAmountUSDT };
   } catch (err) {
     addLog(`❌ Error en ejecución de Solana: ${err.message}`, 'warn');
     return { ok: false };
@@ -677,9 +692,13 @@ async function runCycle() {
           if (w.realSellOrderIds && w.realSellOrderIds.length) {
             for (let id of w.realSellOrderIds) await mxCancelOrder(w.symbol, id);
           }
-          const pnl = inv * pnlP / 100;
+          let pnl = inv * pnlP / 100;
           const realRes = await executeOrder(w, 'SELL', inv + pnl, cp);
           if (realRes && realRes.ok) {
+            if (realRes.exactAmountUSDT !== undefined) {
+               pnl = realRes.exactAmountUSDT - inv;
+               addLog(`ℹ️ [Solana Real] PNL exacto ajustado post-swap: $${pnl.toFixed(2)}`, 'info');
+            }
             if(mode!=='real') SIM.balance += inv + pnl;
             SIM.pnl += pnl; distributePnL(pnl);
             SIM.losses++;
@@ -817,9 +836,13 @@ async function runSolanaCycle() {
         
         if (cp <= w.slPrice) {
           addLog(`⚡ [Solana Instant] Disparando Stop Loss para ${w.symbol} a $${fpZ(cp,cp)}...`, 'info');
-          const pnl = inv * pnlP / 100;
+          let pnl = inv * pnlP / 100;
           const realRes = await executeOrder(w, 'SELL', inv + pnl, cp);
           if (realRes && realRes.ok) {
+            if (realRes.exactAmountUSDT !== undefined) {
+               pnl = realRes.exactAmountUSDT - inv;
+               addLog(`ℹ️ [Solana Real] PNL exacto ajustado post-swap (SL): $${pnl.toFixed(2)}`, 'info');
+            }
             if (solMode !== 'wallet') {
                 SIM.balance += inv + pnl;
                 SIM.solBalance -= (inv / avg);
@@ -839,9 +862,13 @@ async function runSolanaCycle() {
           }
         } else if (w.tp1Price && cp >= w.tp1Price && !w.tp1Hit) {
           addLog(`⚡ [Solana Instant] Disparando Take Profit 1 para ${w.symbol} a $${fpZ(cp,cp)}...`, 'info');
-          const pnl = inv * pnlP / 100;
+          let pnl = inv * pnlP / 100;
           const realRes = await executeOrder(w, 'SELL', inv + pnl, cp);
           if (realRes && realRes.ok) {
+            if (realRes.exactAmountUSDT !== undefined) {
+               pnl = realRes.exactAmountUSDT - inv;
+               addLog(`ℹ️ [Solana Real] PNL exacto ajustado post-swap (TP1): $${pnl.toFixed(2)}`, 'info');
+            }
             if (solMode !== 'wallet') {
                 SIM.balance += inv + pnl;
                 SIM.solBalance -= (inv / avg);
@@ -862,9 +889,13 @@ async function runSolanaCycle() {
           }
         } else if (w.tp2Price && cp >= w.tp2Price && !w.tp2Hit) {
           addLog(`⚡ [Solana Instant] Disparando Take Profit 2 para ${w.symbol} a $${fpZ(cp,cp)}...`, 'info');
-          const pnl = inv * pnlP / 100;
+          let pnl = inv * pnlP / 100;
           const realRes = await executeOrder(w, 'SELL', inv + pnl, cp);
           if (realRes && realRes.ok) {
+            if (realRes.exactAmountUSDT !== undefined) {
+               pnl = realRes.exactAmountUSDT - inv;
+               addLog(`ℹ️ [Solana Real] PNL exacto ajustado post-swap (TP2): $${pnl.toFixed(2)}`, 'info');
+            }
             if (solMode !== 'wallet') {
                 SIM.balance += inv + pnl;
                 SIM.solBalance -= (inv / avg);
@@ -1155,6 +1186,19 @@ app.post('/api/pool/investor', (req, res) => {
   
   saveState();
   res.json({ success: true, poolConfig });
+});
+
+app.post('/api/pool/delete_investor', (req, res) => {
+  const { name } = req.body;
+  const initialLength = poolConfig.investors.length;
+  poolConfig.investors = poolConfig.investors.filter(i => i.name.toLowerCase() !== name.toLowerCase());
+  
+  if (poolConfig.investors.length === initialLength) {
+    return res.json({ error: 'Inversor no encontrado' });
+  }
+  
+  saveState();
+  res.json({ success: true });
 });
 
 app.post('/api/pool/approve_deposit', (req, res) => {
@@ -1538,13 +1582,19 @@ app.post('/api/action', async (req, res) => {
         const inv = filled.reduce((a, o) => a + o.amount, 0);
         const avg = filled.reduce((a, o) => a + o.price * o.amount, 0) / inv;
         const cp = w.currentPrice || w.cp;
-        const pnl = inv * (cp - avg) / avg;
+        let pnl = inv * (cp - avg) / avg;
         
         if (w.network === 'solana') {
            const res = await executeOrder(w, 'SELL', inv + pnl, cp);
-           if (res.ok && solMode !== 'wallet') {
-              SIM.balance += inv + pnl;
-              SIM.solBalance -= (inv / avg);
+           if (res.ok) {
+              if (res.exactAmountUSDT !== undefined) {
+                 pnl = res.exactAmountUSDT - inv;
+                 addLog(`ℹ️ [Solana Real] PNL exacto ajustado post-swap (Manual): $${pnl.toFixed(2)}`, 'info');
+              }
+              if (solMode !== 'wallet') {
+                 SIM.balance += inv + pnl;
+                 SIM.solBalance -= (inv / avg);
+              }
            }
         } else {
            if (mode === 'real') await executeOrder(w, 'SELL', inv + pnl, cp);

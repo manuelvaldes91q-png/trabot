@@ -838,7 +838,10 @@ async function openPoolModal() {
           <div style="border-bottom:1px solid var(--bg3);padding:6px 0;align-items:center;">
             <div style="display:flex;justify-content:space-between;align-items:center;">
               <div><strong style="color:var(--t)">${i.name}</strong> <span style="font-size:9px">(Deposit: $${(i.deposit||0).toFixed(2)})</span>${statusBadge}</div>
-              <div style="color:${(i.profit||0)>0?'var(--g)':'var(--r)'}">${(i.profit||0)>=0?'+':''}$${(i.profit||0).toFixed(2)} PNL</div>
+              <div style="display:flex;align-items:center;gap:10px;">
+                <div style="color:${(i.profit||0)>0?'var(--g)':'var(--r)'}">${(i.profit||0)>=0?'+':''}$${(i.profit||0).toFixed(2)} PNL</div>
+                <button onclick="deletePoolInvestor('${i.name}')" class="btn" style="background:var(--r);font-size:9px;padding:2px 5px;">Eliminar</button>
+              </div>
             </div>
             ${walletInfo}
           </div>
@@ -957,6 +960,23 @@ async function processWithdraw(id, action) {
   if (data.error) alert('Error: ' + data.error);
   else {
     alert('Solicitud procesada.');
+    const el = document.getElementById('addInvName');
+    if (el) el.closest('div').parentElement.parentElement.remove();
+    openPoolModal();
+  }
+}
+
+async function deletePoolInvestor(name) {
+  if(!confirm(`¿Seguro que deseas eliminar al inversor ${name}? Esta acción es irreversible.`)) return;
+  const res = await myFetch('/api/pool/delete_investor', {
+    method: 'POST',
+    headers: {'Content-Type':'application/json'},
+    body: JSON.stringify({ name })
+  });
+  const data = await res.json();
+  if (data.error) alert('Error: ' + data.error);
+  else {
+    alert('Inversor eliminado exitosamente.');
     const el = document.getElementById('addInvName');
     if (el) el.closest('div').parentElement.parentElement.remove();
     openPoolModal();
