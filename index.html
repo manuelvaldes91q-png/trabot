@@ -753,7 +753,11 @@ async function initServerState(){
 function showTrades(){if(!SIM.trades.length){alert('Sin operaciones');return;}alert('HISTORIAL:\n\n'+SIM.trades.map((t,i)=>`#${i+1} ${t.symbol}: ${t.pnl>=0?'+':''}$${(+t.pnl).toFixed(2)} (${t.pnlPct}%) · ${t.at?new Date(t.at).toLocaleDateString('es'):''}`).join('\n'));}
 
 async function openPoolModal() {
+  const existing = document.getElementById('poolModalOverlay');
+  if (existing) existing.remove();
+  
   const p = document.createElement('div');
+  p.id = 'poolModalOverlay';
   p.style.cssText = 'position:fixed;inset:0;background:rgba(0,0,0,0.8);z-index:9000;display:flex;align-items:center;justify-content:center';
   p.innerHTML = `
     <div style="background:var(--bg2);width:500px;max-width:95%;border:1px solid var(--bdr);border-radius:8px;padding:25px;font-family:var(--sans);max-height:90vh;overflow-y:auto">
@@ -774,7 +778,7 @@ async function openPoolModal() {
       <div style="display:flex;gap:10px;margin-bottom:20px;">
         <button class="btn btn-g" style="flex:1" onclick="savePoolConfig(this)">💾 Guardar</button>
         <button class="btn btn-a" style="flex:1" onclick="backupPoolWallet(this)">🔐 Backup (Key)</button>
-        <button class="btn btn-d" style="flex:1" onclick="this.closest('div').parentElement.parentElement.remove()">❌ Cerrar</button>
+        <button class="btn btn-d" style="flex:1" onclick="document.getElementById('poolModalOverlay').remove()">❌ Cerrar</button>
       </div>
 
       <div style="font-weight:700;margin-bottom:10px;color:var(--t);font-size:14px;border-top:1px solid var(--bdr);padding-top:15px">👥 Inversores Actuales</div>
@@ -942,8 +946,8 @@ async function approveDeposit(name) {
   if (data.error) alert('Error: ' + data.error);
   else {
     alert('Depósito aprobado.');
-    const el = document.getElementById('addInvName');
-    if (el) el.closest('div').parentElement.parentElement.remove();
+    const el = document.getElementById('poolModalOverlay');
+    if (el) el.remove();
     openPoolModal();
   }
 }
@@ -960,8 +964,8 @@ async function processWithdraw(id, action) {
   if (data.error) alert('Error: ' + data.error);
   else {
     alert('Solicitud procesada.');
-    const el = document.getElementById('addInvName');
-    if (el) el.closest('div').parentElement.parentElement.remove();
+    const el = document.getElementById('poolModalOverlay');
+    if (el) el.remove();
     openPoolModal();
   }
 }
@@ -977,8 +981,8 @@ async function deletePoolInvestor(name) {
   if (data.error) alert('Error: ' + data.error);
   else {
     alert('Inversor eliminado exitosamente.');
-    const el = document.getElementById('addInvName');
-    if (el) el.closest('div').parentElement.parentElement.remove();
+    const el = document.getElementById('poolModalOverlay');
+    if (el) el.remove();
     openPoolModal();
   }
 }
@@ -1000,13 +1004,18 @@ async function savePoolInvestor() {
   if (data.error) alert('Error: ' + data.error);
   else {
     alert('Inversor guardado exitosamente.');
-    document.getElementById('addInvName').closest('div').parentElement.parentElement.remove();
+    const el = document.getElementById('poolModalOverlay');
+    if (el) el.remove();
     openPoolModal();
   }
 }
 
 async function openConfigModal() {
+  const existing = document.getElementById('configModalOverlay');
+  if (existing) existing.remove();
+
   const p = document.createElement('div');
+  p.id = 'configModalOverlay';
   p.style.cssText = 'position:fixed;inset:0;background:rgba(0,0,0,0.8);z-index:9000;display:flex;align-items:center;justify-content:center';
   p.innerHTML = `
     <div style="background:var(--bg2);width:450px;max-width:95%;border:1px solid var(--bdr);border-radius:8px;padding:25px;font-family:var(--sans);max-height:90vh;overflow-y:auto">
@@ -1087,7 +1096,7 @@ async function openConfigModal() {
       </div>
       
       <div style="display:flex;gap:10px;justify-content:flex-end;margin-top:20px">
-        <button class="btn btn-d" onclick="this.parentElement.parentElement.parentElement.remove()">Cancelar</button>
+        <button class="btn btn-d" onclick="document.getElementById('configModalOverlay').remove()">Cancelar</button>
         <button class="btn btn-b" id="btnSaveCfg">Guardar Settings</button>
       </div>
     </div>

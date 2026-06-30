@@ -101,11 +101,14 @@
     <div class="card fade-in border-investor-accent/30 bg-investor-accent/5" style="animation-delay: 0.4s">
       <div class="flex flex-col md:flex-row items-start md:items-center justify-between gap-4">
         <div>
-          <h3 class="font-medium flex items-center gap-2"><i data-lucide="building-2" class="w-4 h-4 text-investor-accent"></i> Bóveda Central / Pool de Inversión</h3>
-          <p class="text-sm text-gray-400 mt-1">Para añadir fondos a tu cuenta, transfiere USDT a esta dirección y notifica al administrador.</p>
+          <h3 class="font-medium flex items-center gap-2"><i data-lucide="wallet" class="w-4 h-4 text-investor-accent"></i> Tu Wallet Personal de Inversión</h3>
+          <p class="text-sm text-gray-400 mt-1">Esta es tu billetera personal generada por el sistema. Transfiere USDC aquí para que el Bot lo opere.</p>
         </div>
-        <div class="bg-[#1e1e2d] px-4 py-2 rounded-lg border border-[#323249] flex items-center gap-3">
-          <span class="font-mono text-sm text-gray-300 select-all" id="pool-wallet">Cargando...</span>
+        <div class="bg-[#1e1e2d] px-4 py-2 rounded-lg border border-[#323249] flex items-center justify-between">
+          <div>
+            <span class="font-mono text-sm text-gray-300 select-all" id="pool-wallet">Cargando...</span>
+            <div id="pool-wallet-subtitle"></div>
+          </div>
           <button onclick="copyWallet()" class="text-gray-400 hover:text-white" title="Copiar">
             <i data-lucide="copy" class="w-4 h-4"></i>
           </button>
@@ -119,13 +122,24 @@
       <div class="card fade-in lg:col-span-1 flex flex-col gap-6" style="animation-delay: 0.5s">
         
         <div>
-          <h3 class="font-medium mb-4 flex items-center gap-2"><i data-lucide="arrow-down-circle" class="w-4 h-4 text-investor-success"></i> Solicitar Retiro</h3>
-          <p class="text-sm text-gray-400 mb-4">Pide al administrador que te envíe fondos.</p>
+          <h3 class="font-medium mb-4 flex items-center gap-2"><i data-lucide="arrow-down-circle" class="w-4 h-4 text-investor-success"></i> Retirar Ganancias</h3>
+          <p class="text-sm text-gray-400 mb-4">Solicita transferir ganancias a tu Billetera Personal.</p>
           <div class="space-y-3">
-            <input type="number" id="withdraw-amount" placeholder="Cantidad (USD)" class="w-full bg-[#1e1e2d] border border-[#323249] rounded-lg px-3 py-2 text-white focus:outline-none focus:border-investor-accent">
-            <input type="text" id="withdraw-wallet" placeholder="Tu dirección de wallet (USDT)" class="w-full bg-[#1e1e2d] border border-[#323249] rounded-lg px-3 py-2 text-white focus:outline-none focus:border-investor-accent">
+            <input type="number" id="withdraw-amount" placeholder="Cantidad (USDC)" class="w-full bg-[#1e1e2d] border border-[#323249] rounded-lg px-3 py-2 text-white focus:outline-none focus:border-investor-accent">
             <button onclick="requestWithdraw()" class="w-full bg-investor-success/20 text-investor-success hover:bg-investor-success/30 px-4 py-2 rounded-lg font-medium transition-colors border border-investor-success/50">
-              Solicitar
+              Mover a Billetera Personal
+            </button>
+          </div>
+        </div>
+        
+        <div class="pt-4 border-t border-[#323249]">
+          <h3 class="font-medium mb-4 flex items-center gap-2"><i data-lucide="send" class="w-4 h-4 text-investor-accent"></i> Transferir a Externa</h3>
+          <p class="text-sm text-gray-400 mb-4">Transfiere USDC de tu Billetera Personal a otra red (ej: Binance). Las comisiones las paga el Pool.</p>
+          <div class="space-y-3">
+            <input type="number" id="transfer-amount" placeholder="Cantidad (USDC)" class="w-full bg-[#1e1e2d] border border-[#323249] rounded-lg px-3 py-2 text-white focus:outline-none focus:border-investor-accent">
+            <input type="text" id="transfer-wallet" placeholder="Tu dirección de destino" class="w-full bg-[#1e1e2d] border border-[#323249] rounded-lg px-3 py-2 text-white focus:outline-none focus:border-investor-accent">
+            <button onclick="transferExternal()" class="w-full bg-investor-accent/20 text-investor-accent hover:bg-investor-accent/30 px-4 py-2 rounded-lg font-medium transition-colors border border-investor-accent/50">
+              Transferir
             </button>
           </div>
         </div>
@@ -221,12 +235,17 @@
         }
         const data = await res.json();
         
-        if (data.poolConfig) {
-          document.getElementById('pool-wallet').textContent = data.poolConfig.walletAddress || 'No configurada por admin';
+        if (data.poolConfig && data.me) {
+          const me = data.me;
           
-          let me = data.poolConfig.investors.find(i => i.name.toLowerCase() === currentInvestor.toLowerCase());
-          if (!me) {
-            me = { deposit: 0, profit: 0 };
+          document.getElementById('pool-wallet').textContent = me.depositWallet || 'No generada';
+          
+          if (document.getElementById('pool-wallet-subtitle')) {
+             document.getElementById('pool-wallet-subtitle').innerHTML = `
+               <div style="font-size:12px;margin-top:5px;color:var(--t2);">
+                 Balance Real: <b style="color:var(--t);">$${(me.usdcBalance||0).toFixed(2)} USDC</b> | <b style="color:var(--t);">${(me.solBalance||0).toFixed(4)} SOL</b>
+               </div>
+             `;
           }
           
           const deposit = me.deposit || 0;
@@ -342,14 +361,12 @@
 
     async function requestWithdraw() {
       const amt = document.getElementById('withdraw-amount').value;
-      const wallet = document.getElementById('withdraw-wallet').value;
       if (!amt || amt <= 0) return alert('Ingresa una cantidad válida');
-      if (!wallet) return alert('Ingresa tu dirección de wallet de destino');
 
       const res = await myFetch('/api/investor/request_withdraw', {
         method: 'POST',
         headers: { 'Content-Type': 'application/json' },
-        body: JSON.stringify({ amount: Number(amt), destinationWallet: wallet })
+        body: JSON.stringify({ amount: Number(amt) })
       });
       
       const data = await res.json();
@@ -357,9 +374,33 @@
         alert(data.error);
       } else {
         document.getElementById('withdraw-amount').value = '';
-        document.getElementById('withdraw-wallet').value = '';
         loadData();
-        alert('Solicitud enviada al administrador.');
+        alert('Solicitud de retiro enviada al administrador.');
+      }
+    }
+
+    async function transferExternal() {
+      const amt = document.getElementById('transfer-amount').value;
+      const wallet = document.getElementById('transfer-wallet').value;
+      if (!amt || amt <= 0) return alert('Ingresa una cantidad válida');
+      if (!wallet) return alert('Ingresa tu dirección de wallet de destino');
+
+      if (!confirm('¿Seguro que deseas transferir ' + amt + ' USDC a ' + wallet + '?')) return;
+
+      const res = await myFetch('/api/investor/transfer_external', {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({ amount: Number(amt), destinationWallet: wallet })
+      });
+      
+      const data = await res.json();
+      if (data.error) {
+        alert('Error: ' + data.error);
+      } else {
+        document.getElementById('transfer-amount').value = '';
+        document.getElementById('transfer-wallet').value = '';
+        loadData();
+        alert('Transferencia exitosa. TxID: ' + data.txid);
       }
     }
 

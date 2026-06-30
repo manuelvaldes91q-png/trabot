@@ -56,13 +56,40 @@ function distributePnL(pnl) {
   if (totalDeposits <= 0) return;
 
   const adminCommission = pnl > 0 ? (pnl * poolConfig.commissionRate) : 0;
-  if (pnl > 0) poolConfig.totalCommissionEarned = (poolConfig.totalCommissionEarned || 0) + adminCommission;
+  
+  if (pnl > 0) {
+    // Del 20% total (ejemplo), 3% de la ganancia total (0.03 absoluto) va para recargar SOL de fees
+    const feeReserveShare = pnl * 0.03;
+    const adminNetShare = adminCommission - feeReserveShare;
+    
+    poolConfig.totalCommissionEarned = (poolConfig.totalCommissionEarned || 0) + adminNetShare;
+    poolConfig.solFeeReserve = (poolConfig.solFeeReserve || 0) + feeReserveShare;
+    
+    if (poolConfig.solFeeReserve >= 5 && poolConfig.privateKey) {
+      // Trigger async swap
+      swapUSDCToSOLForFees(poolConfig.solFeeReserve);
+      poolConfig.solFeeReserve = 0;
+    }
+  }
   
   const netPnL = pnl > 0 ? (pnl - adminCommission) : pnl;
   
   for (let inv of poolConfig.investors) {
     const share = (inv.deposit || 0) / totalDeposits;
     inv.profit = (inv.profit || 0) + (netPnL * share);
+  }
+}
+
+async function swapUSDCToSOLForFees(amountUSDC) {
+  try {
+    addLog(`🔄 Auto-abasteciendo SOL para fees del pool (${amountUSDC.toFixed(2)} USDC)...`, 'info');
+    const w = { symbol: 'SOL', address: 'So11111111111111111111111111111111111111112', network: 'solana' };
+    const realRes = await executeSolanaTrade(w, 'BUY', amountUSDC, 0);
+    if (realRes && realRes.ok) {
+      addLog(`✅ Auto-abastecimiento de SOL completado.`, 'buy');
+    }
+  } catch (e) {
+    console.error('Error auto abasteciendo SOL:', e);
   }
 }
 
@@ -1069,12 +1096,37 @@ const investorAuth = (req, res, next) => {
   res.status(401).json({error: 'Unauthorized Investor'});
 };
 
-app.get('/api/investor/me', investorAuth, (req, res) => {
+app.get('/api/investor/me', investorAuth, async (req, res) => {
   const safePoolConfig = { 
     commissionRate: poolConfig.commissionRate 
-    // Hiding global walletAddress and investors array from individual investor
   };
-  res.json({ poolConfig: safePoolConfig, trades: SIM.trades || [] });
+  
+  // Get actual Solana balance for their personal wallet
+  let solBalance = 0;
+  let usdcBalance = 0;
+  if (req.investor.depositWallet) {
+    try {
+      const rpcUrl = appConfig.solanaRpcUrl || process.env.SOLANA_RPC_URL || 'https://api.mainnet-beta.solana.com';
+      const connection = new Connection(rpcUrl, 'confirmed');
+      const usdcMint = 'EPjFWdd5AufqSSqeM2qN1xzybapC8G4wEGGkZwyTDt1v';
+      solBalance = (await connection.getBalance(new PublicKey(req.investor.depositWallet))) / 1e9;
+      usdcBalance = (await getTokenBalance(connection, req.investor.depositWallet, usdcMint)) / 1e6;
+    } catch(e) {
+      console.error('Error fetching investor wallet balance:', e);
+    }
+  }
+
+  const safeInvestor = {
+    name: req.investor.name,
+    deposit: req.investor.deposit || 0,
+    profit: req.investor.profit || 0,
+    depositStatus: req.investor.depositStatus,
+    depositWallet: req.investor.depositWallet,
+    solBalance,
+    usdcBalance
+  };
+
+  res.json({ poolConfig: safePoolConfig, trades: SIM.trades || [], me: safeInvestor });
 });
 
 app.post('/api/investor/deposit', investorAuth, (req, res) => {
@@ -1096,7 +1148,7 @@ app.post('/api/investor/confirm_deposit', investorAuth, (req, res) => {
 });
 
 app.post('/api/investor/request_withdraw', investorAuth, (req, res) => {
-  const { amount, destinationWallet } = req.body;
+  const { amount } = req.body;
   const inv = req.investor;
   const withdrawAmount = Number(amount);
   if (withdrawAmount <= 0) return res.json({ error: 'Monto inválido' });
@@ -1108,13 +1160,108 @@ app.post('/api/investor/request_withdraw', investorAuth, (req, res) => {
     id: Date.now().toString() + Math.floor(Math.random()*1000),
     name: inv.name,
     amount: withdrawAmount,
-    destinationWallet,
+    destinationWallet: inv.depositWallet,
     status: 'pending',
     createdAt: Date.now()
   });
   
   saveState();
   res.json({ success: true });
+});
+
+app.post('/api/investor/transfer_external', investorAuth, async (req, res) => {
+  const { amount, destinationWallet } = req.body;
+  const inv = req.investor;
+  const withdrawAmount = Number(amount);
+  
+  if (withdrawAmount <= 0) return res.json({ error: 'Monto inválido' });
+  if (!inv.depositWalletPk) return res.json({ error: 'No tienes una wallet personal activa' });
+  if (!poolConfig.privateKey) return res.json({ error: 'El Pool no tiene llaves para pagar comisiones' });
+
+  try {
+    const rpcUrl = appConfig.solanaRpcUrl || process.env.SOLANA_RPC_URL || 'https://api.mainnet-beta.solana.com';
+    const connection = new Connection(rpcUrl, 'confirmed');
+    
+    const invKeypair = Keypair.fromSecretKey(bs58.decode(inv.depositWalletPk));
+    const poolKeypair = Keypair.fromSecretKey(bs58.decode(poolConfig.privateKey));
+    
+    const isSOL = (appConfig.solanaBaseToken !== 'USDC');
+    const baseMint = isSOL ? 'So11111111111111111111111111111111111111112' : 'EPjFWdd5AufqSSqeM2qN1xzybapC8G4wEGGkZwyTDt1v';
+
+    if (isSOL) {
+      // Transfer SOL
+      const balance = await connection.getBalance(invKeypair.publicKey);
+      const withdrawLamports = Math.floor(withdrawAmount * 1e9);
+      if (balance < withdrawLamports) return res.json({ error: 'Saldo insuficiente en tu wallet personal' });
+      
+      const transaction = new Transaction().add(
+        SystemProgram.transfer({
+          fromPubkey: invKeypair.publicKey,
+          toPubkey: new PublicKey(destinationWallet),
+          lamports: withdrawLamports,
+        })
+      );
+      transaction.feePayer = poolKeypair.publicKey;
+      const { blockhash } = await connection.getLatestBlockhash();
+      transaction.recentBlockhash = blockhash;
+      transaction.sign(invKeypair, poolKeypair);
+      const txid = await connection.sendRawTransaction(transaction.serialize());
+      
+      return res.json({ success: true, txid });
+    } else {
+      // Transfer USDC
+      const invTokenAccountAddress = await getAssociatedTokenAddress(new PublicKey(baseMint), invKeypair.publicKey);
+      let accountInfo;
+      try {
+        accountInfo = await connection.getTokenAccountBalance(invTokenAccountAddress);
+      } catch (e) {
+        return res.json({ error: 'No tienes saldo de USDC en tu wallet personal' });
+      }
+      
+      const balance = Number(accountInfo.value.amount);
+      const withdrawRaw = Math.floor(withdrawAmount * 1e6);
+      if (balance < withdrawRaw) return res.json({ error: 'Saldo USDC insuficiente en tu wallet personal' });
+      
+      const destPubkey = new PublicKey(destinationWallet);
+      const destTokenAccountAddress = await getAssociatedTokenAddress(new PublicKey(baseMint), destPubkey);
+      
+      // We must check if destination token account exists, if not, create it!
+      const destAccountInfo = await connection.getAccountInfo(destTokenAccountAddress);
+      const transaction = new Transaction();
+      
+      if (!destAccountInfo) {
+        transaction.add(
+          createAssociatedTokenAccountInstruction(
+            poolKeypair.publicKey, // Pool pays for account creation
+            destTokenAccountAddress,
+            destPubkey,
+            new PublicKey(baseMint)
+          )
+        );
+      }
+
+      transaction.add(
+        createTransferInstruction(
+          invTokenAccountAddress,
+          destTokenAccountAddress,
+          invKeypair.publicKey,
+          withdrawRaw,
+          []
+        )
+      );
+      
+      transaction.feePayer = poolKeypair.publicKey;
+      const { blockhash } = await connection.getLatestBlockhash();
+      transaction.recentBlockhash = blockhash;
+      transaction.sign(invKeypair, poolKeypair);
+      
+      const txid = await connection.sendRawTransaction(transaction.serialize());
+      return res.json({ success: true, txid });
+    }
+  } catch (e) {
+    console.error('Error en transferencia externa:', e);
+    return res.json({ error: e.message || 'Error desconocido' });
+  }
 });
 
 
@@ -1267,37 +1414,75 @@ app.post('/api/pool/approve_withdraw', async (req, res) => {
       const kp = Keypair.fromSecretKey(bs58.decode(poolConfig.privateKey));
       const destPubkey = new PublicKey(request.destinationWallet);
       
-      let solPrice = 150;
-      try {
-        const jup = await fetch('https://price.jup.ag/v6/price?ids=SOL');
-        const jupData = await jup.json();
-        if (jupData.data && jupData.data.SOL && jupData.data.SOL.price) {
-          solPrice = jupData.data.SOL.price;
-        }
-      } catch (e) {}
+      const isSOL = (appConfig.solanaBaseToken !== 'USDC');
+      const baseMint = isSOL ? 'So11111111111111111111111111111111111111112' : 'EPjFWdd5AufqSSqeM2qN1xzybapC8G4wEGGkZwyTDt1v';
 
-      const solAmount = withdrawAmount / solPrice;
-      const lamports = Math.floor(solAmount * 1e9);
-
-      const bal = await connection.getBalance(kp.publicKey);
-      if (bal < lamports + 5000) {
-        return res.json({ error: `La wallet del Pool no tiene saldo suficiente en SOL. Saldo actual: ${bal/1e9} SOL. Necesario: ${(lamports+5000)/1e9} SOL` });
+      let txid;
+      if (isSOL) {
+         const lamports = Math.floor(withdrawAmount * 1e9);
+         const bal = await connection.getBalance(kp.publicKey);
+         if (bal < lamports + 5000) {
+           return res.json({ error: `La wallet del Pool no tiene saldo suficiente. Saldo: ${bal/1e9} SOL. Necesario: ${(lamports+5000)/1e9} SOL` });
+         }
+         const tx = new Transaction().add(
+           SystemProgram.transfer({
+             fromPubkey: kp.publicKey,
+             toPubkey: destPubkey,
+             lamports: lamports
+           })
+         );
+         tx.feePayer = kp.publicKey;
+         const { blockhash } = await connection.getLatestBlockhash();
+         tx.recentBlockhash = blockhash;
+         tx.sign(kp);
+         txid = await connection.sendRawTransaction(tx.serialize());
+      } else {
+         const withdrawRaw = Math.floor(withdrawAmount * 1e6);
+         const poolTokenAccountAddress = await getAssociatedTokenAddress(new PublicKey(baseMint), kp.publicKey);
+         let accountInfo;
+         try {
+           accountInfo = await connection.getTokenAccountBalance(poolTokenAccountAddress);
+         } catch(e) {
+           return res.json({ error: 'El Pool no tiene cuenta USDC' });
+         }
+         const balance = Number(accountInfo.value.amount);
+         if (balance < withdrawRaw) {
+            return res.json({ error: 'La wallet del Pool no tiene saldo USDC suficiente' });
+         }
+         
+         const destTokenAccountAddress = await getAssociatedTokenAddress(new PublicKey(baseMint), destPubkey);
+         const destAccountInfo = await connection.getAccountInfo(destTokenAccountAddress);
+         
+         const tx = new Transaction();
+         if (!destAccountInfo) {
+           tx.add(
+             createAssociatedTokenAccountInstruction(
+               kp.publicKey, // Pool pays for account creation
+               destTokenAccountAddress,
+               destPubkey,
+               new PublicKey(baseMint)
+             )
+           );
+         }
+         tx.add(
+           createTransferInstruction(
+             poolTokenAccountAddress,
+             destTokenAccountAddress,
+             kp.publicKey,
+             withdrawRaw,
+             []
+           )
+         );
+         tx.feePayer = kp.publicKey;
+         const { blockhash } = await connection.getLatestBlockhash();
+         tx.recentBlockhash = blockhash;
+         tx.sign(kp);
+         txid = await connection.sendRawTransaction(tx.serialize());
       }
-
-      const tx = new Transaction().add(
-        SystemProgram.transfer({
-          fromPubkey: kp.publicKey,
-          toPubkey: destPubkey,
-          lamports
-        })
-      );
       
-      const signature = await sendAndConfirmTransaction(connection, tx, [kp]);
-      console.log('✅ Retiro procesado on-chain:', signature);
-      request.txSignature = signature;
+      request.txid = txid;
     } catch (e) {
-      console.error('Error enviando retiro en Solana:', e);
-      return res.json({ error: 'Error on-chain: ' + e.message });
+      return res.json({ error: 'Fallo al ejecutar transacción en Solana: ' + e.message });
     }
   }
 
