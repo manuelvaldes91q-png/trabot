@@ -242,8 +242,8 @@
             banner.classList.remove('hidden');
             banner.classList.replace('border-green-500', 'border-blue-500');
             actTitle.textContent = `Activación Pendiente ($${(me.expectedDeposit || 0).toFixed(2)})`;
-            actDesc.innerHTML = `Para iniciar las operaciones del bot, envía <strong>$${(me.expectedDeposit || 0).toFixed(2)} USDC</strong> a la wallet de la pool: <code class="bg-[#1e1e2d] px-1 rounded">${data.poolConfig.walletAddress || '...'}</code>`;
-            btnConfirm.style.display = 'block';
+            actDesc.innerHTML = `Para iniciar las operaciones, envía <strong>$${(me.expectedDeposit || 0).toFixed(2)} USDC</strong> (en Solana) a tu wallet de depósito asignada:<br/><br/><code class="bg-[#1e1e2d] px-2 py-1 rounded text-blue-300" style="word-break:break-all;user-select:all">${me.depositWallet || data.poolConfig.walletAddress || 'Contacta al admin'}</code><br/><br/><span class="text-xs text-gray-400">El sistema verificará y aprobará el depósito automáticamente en unos minutos. No es necesario enviar comprobante.</span>`;
+            btnConfirm.style.display = 'none';
           } else if (me.depositStatus === 'pending_admin') {
             banner.classList.remove('hidden');
             banner.classList.replace('border-blue-500', 'border-green-500');

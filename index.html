@@ -759,7 +759,9 @@ async function openPoolModal() {
     <div style="background:var(--bg2);width:500px;max-width:95%;border:1px solid var(--bdr);border-radius:8px;padding:25px;font-family:var(--sans);max-height:90vh;overflow-y:auto">
       <div style="font-weight:700;margin-bottom:15px;color:var(--t);font-size:16px;">🏦 Gestión del Pool de Inversores</div>
       <div style="margin-bottom:15px;font-size:11px;color:var(--t2)">
-        Configura la wallet central y la comisión del sistema. Los inversores verán esto en su panel (/investor). La billetera es generada automáticamente por el sistema para procesar retiros reales.
+        Configura la wallet central y la comisión del sistema. Los inversores verán esto en su panel (/investor). La billetera es generada automáticamente por el sistema.<br/><br/>
+        <strong>¿Cómo funciona USDC en Solana?</strong><br/>
+        El bot usa Júpiter Aggregator para sus trades. Aunque las comisiones de red ("gas") se pagan en SOL, el bot puede tener el saldo principal en USDC e intercambiar (hacer swap) directamente de USDC a otros tokens de Solana de forma transparente, y de regreso a USDC. Solo asegúrate de enviar un poco de SOL (~0.05 SOL) a la wallet del Pool para cubrir los fees transaccionales y la creación de cuentas de tokens.
       </div>
       <div style="margin-bottom:10px">
         <div style="font-size:10px;color:var(--t2);margin-bottom:4px">Billetera del Sistema (Pool) - Auto-generada</div>
@@ -770,7 +772,8 @@ async function openPoolModal() {
         <input type="number" id="cfgPoolCom" class="inp" placeholder="Ej: 20 para 20%" style="width:100%">
       </div>
       <div style="display:flex;gap:10px;margin-bottom:20px;">
-        <button class="btn btn-g" style="flex:1" onclick="savePoolConfig(this)">💾 Guardar Config</button>
+        <button class="btn btn-g" style="flex:1" onclick="savePoolConfig(this)">💾 Guardar</button>
+        <button class="btn btn-a" style="flex:1" onclick="backupPoolWallet(this)">🔐 Backup (Key)</button>
         <button class="btn btn-d" style="flex:1" onclick="this.closest('div').parentElement.parentElement.remove()">❌ Cerrar</button>
       </div>
 
@@ -785,10 +788,11 @@ async function openPoolModal() {
           <input type="text" id="addInvName" class="inp" placeholder="Nombre" style="flex:1">
           <input type="number" id="addInvDeposit" class="inp" placeholder="Sumar Depósito" style="width:100px">
         </div>
-        <div style="display:flex;gap:4px">
-          <input type="text" id="addInvPwd" class="inp" placeholder="Contraseña (opc, 1234 dflt)" style="flex:1">
-          <button class="btn btn-g btn-sm" onclick="savePoolInvestor()">Añadir/Editar</button>
+        <div style="display:flex;gap:4px;margin-bottom:5px">
+          <input type="text" id="addInvPwd" class="inp" placeholder="Contraseña" style="flex:1">
+          <input type="text" id="addInvDepWallet" class="inp" placeholder="Wallet depósito (auto si vacío)" style="flex:2">
         </div>
+        <button class="btn btn-g btn-sm" style="width:100%" onclick="savePoolInvestor()">Añadir/Editar</button>
       </div>
       
       <div style="font-weight:700;margin-bottom:10px;color:var(--t);font-size:14px;border-top:1px solid var(--bdr);padding-top:15px">💰 Tus Ganancias (Admin)</div>
@@ -823,15 +827,20 @@ async function openPoolModal() {
       } else {
         list.innerHTML = data.poolConfig.investors.map(i => {
           let statusBadge = '';
-          if (i.depositStatus === 'pending_user') {
-            statusBadge = `<span style="font-size:9px;color:var(--t2);background:var(--bg3);padding:2px 4px;border-radius:4px;margin-left:5px">Esperando al usr</span>`;
-          } else if (i.depositStatus === 'pending_admin') {
-            statusBadge = `<button onclick="approveDeposit('${i.name}')" class="btn btn-g btn-sm" style="font-size:9px;padding:2px 5px;margin-left:5px">Verificar Depósito</button>`;
+          if (i.depositStatus === 'pending_user' || i.depositStatus === 'pending_admin') {
+            statusBadge = `<span style="font-size:9px;color:var(--t2);background:var(--bg3);padding:2px 4px;border-radius:4px;margin-left:5px">Esperando</span> <button onclick="approveDeposit('${i.name}')" class="btn btn-g btn-sm" style="font-size:9px;padding:2px 5px;margin-left:5px">Forzar</button>`;
+          }
+          let walletInfo = '';
+          if (i.depositWallet) {
+             walletInfo = `<div style="font-size:9px;color:var(--t2);margin-top:4px;">Depósito en: ${i.depositWallet} ${i.depositWalletPk ? `<a href="#" onclick="alert('Private Key de ${i.name}: ${i.depositWalletPk}')" style="color:var(--g)">[Ver PK]</a>` : ''}</div>`;
           }
           return `
-          <div style="display:flex;justify-content:space-between;border-bottom:1px solid var(--bg3);padding:4px 0;align-items:center;">
-            <div><strong style="color:var(--t)">${i.name}</strong> <span style="font-size:9px">(Deposit: $${(i.deposit||0).toFixed(2)})</span>${statusBadge}</div>
-            <div style="color:${(i.profit||0)>0?'var(--g)':'var(--r)'}">${(i.profit||0)>=0?'+':''}$${(i.profit||0).toFixed(2)} PNL</div>
+          <div style="border-bottom:1px solid var(--bg3);padding:6px 0;align-items:center;">
+            <div style="display:flex;justify-content:space-between;align-items:center;">
+              <div><strong style="color:var(--t)">${i.name}</strong> <span style="font-size:9px">(Deposit: $${(i.deposit||0).toFixed(2)})</span>${statusBadge}</div>
+              <div style="color:${(i.profit||0)>0?'var(--g)':'var(--r)'}">${(i.profit||0)>=0?'+':''}$${(i.profit||0).toFixed(2)} PNL</div>
+            </div>
+            ${walletInfo}
           </div>
         `}).join('');
       }
@@ -878,6 +887,23 @@ async function savePoolConfig(btn) {
   } catch(e) {
     btn.textContent = 'Error';
     setTimeout(() => btn.textContent = '💾 Guardar Config', 1500);
+  }
+}
+
+async function backupPoolWallet(btn) {
+  const original = btn.textContent;
+  btn.textContent = 'Cargando...';
+  try {
+    const res = await myFetch('/api/pool/backup');
+    const data = await res.json();
+    btn.textContent = original;
+    if (data.error) alert('Error: ' + data.error);
+    else {
+      prompt('Guarda esta Private Key en un lugar seguro (NO la compartas con nadie):', data.privateKey);
+    }
+  } catch (e) {
+    btn.textContent = original;
+    alert('Error conectando al servidor');
   }
 }
 
@@ -941,13 +967,14 @@ async function savePoolInvestor() {
   const name = document.getElementById('addInvName').value;
   const amount = document.getElementById('addInvDeposit').value;
   const password = document.getElementById('addInvPwd').value;
+  const depositWallet = document.getElementById('addInvDepWallet').value;
   
   if (!name) return alert('Ingresa el nombre del inversor');
   
   const res = await myFetch('/api/pool/investor', {
     method: 'POST',
     headers: { 'Content-Type': 'application/json' },
-    body: JSON.stringify({ name, amount: Number(amount) || 0, password })
+    body: JSON.stringify({ name, amount: Number(amount) || 0, password, depositWallet })
   });
   const data = await res.json();
   if (data.error) alert('Error: ' + data.error);

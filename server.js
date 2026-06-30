@@ -6,6 +6,7 @@ import { createServer as createViteServer } from "vite";
 import crypto from "crypto";
 import "dotenv/config";
 import { Connection, Keypair, VersionedTransaction, PublicKey, SystemProgram, Transaction, sendAndConfirmTransaction } from '@solana/web3.js';
+import { getAssociatedTokenAddress, createTransferInstruction, getAccount } from '@solana/spl-token';
 import bs58 from 'bs58';
 
 const __filename = fileURLToPath(import.meta.url);
@@ -892,6 +893,90 @@ async function runSolanaCycle() {
 }
 
 let solanaTimer = null;
+let depositTimer = null;
+
+async function checkPendingDeposits() {
+  if (solMode !== 'wallet') return;
+  const poolPk = poolConfig.privateKey || appConfig.solanaPrivateKey || process.env.SOLANA_PRIVATE_KEY;
+  if (!poolPk) return;
+  
+  const rpcUrl = appConfig.solanaRpcUrl || process.env.SOLANA_RPC_URL || 'https://api.mainnet-beta.solana.com';
+  
+  try {
+    const connection = new Connection(rpcUrl, 'confirmed');
+    const poolKeypair = Keypair.fromSecretKey(bs58.decode(poolPk));
+    const isSOL = (appConfig.solanaBaseToken !== 'USDC');
+    const baseMintStr = isSOL ? 'So11111111111111111111111111111111111111112' : 'EPjFWdd5AufqSSqeM2qN1xzybapC8G4wEGGkZwyTDt1v';
+    const baseMint = new PublicKey(baseMintStr);
+    
+    for (let inv of poolConfig.investors) {
+      if (inv.depositStatus === 'pending_user' && inv.depositWalletPk) {
+        try {
+          const invKeypair = Keypair.fromSecretKey(bs58.decode(inv.depositWalletPk));
+          
+          if (isSOL) {
+            const balance = await connection.getBalance(invKeypair.publicKey);
+            const balanceDecimals = balance / 1e9;
+            if (balanceDecimals > 0.005) { // Needs some SOL for fee if not using fee payer, but we use pool as fee payer anyway
+              // Transfer SOL
+              const transaction = new Transaction().add(
+                SystemProgram.transfer({
+                  fromPubkey: invKeypair.publicKey,
+                  toPubkey: poolKeypair.publicKey,
+                  lamports: balance,
+                })
+              );
+              transaction.feePayer = poolKeypair.publicKey;
+              const { blockhash } = await connection.getLatestBlockhash();
+              transaction.recentBlockhash = blockhash;
+              transaction.sign(invKeypair, poolKeypair);
+              await connection.sendRawTransaction(transaction.serialize());
+              inv.depositStatus = 'active';
+              inv.deposit += balanceDecimals;
+              saveState();
+              addLog(`Depósito detectado y transferido de ${inv.name}: ${balanceDecimals} SOL`, 'info');
+            }
+          } else {
+            // USDC Check
+            const invTokenAccountAddress = await getAssociatedTokenAddress(baseMint, invKeypair.publicKey);
+            try {
+              const accountInfo = await connection.getTokenAccountBalance(invTokenAccountAddress);
+              const balance = Number(accountInfo.value.amount);
+              const balanceDecimals = balance / 1e6;
+              if (balanceDecimals >= 0.01) {
+                const poolTokenAccountAddress = await getAssociatedTokenAddress(baseMint, poolKeypair.publicKey);
+                const transaction = new Transaction().add(
+                  createTransferInstruction(
+                    invTokenAccountAddress,
+                    poolTokenAccountAddress,
+                    invKeypair.publicKey,
+                    balance,
+                    []
+                  )
+                );
+                transaction.feePayer = poolKeypair.publicKey;
+                const { blockhash } = await connection.getLatestBlockhash();
+                transaction.recentBlockhash = blockhash;
+                transaction.sign(invKeypair, poolKeypair);
+                const txid = await connection.sendRawTransaction(transaction.serialize());
+                inv.depositStatus = 'active';
+                inv.deposit += balanceDecimals;
+                saveState();
+                addLog(`Depósito detectado y transferido de ${inv.name}: $${balanceDecimals} USDC`, 'info');
+              }
+            } catch (e) {
+              // Token account might not exist if they haven't deposited yet, ignore
+            }
+          }
+        } catch (e) {
+          console.error('Error procesando depósito para ' + inv.name, e.message);
+        }
+      }
+    }
+  } catch (e) {
+    console.error('Error en checkPendingDeposits:', e.message);
+  }
+}
 
 function startLoop() {
   if (loopTimer) clearInterval(loopTimer);
@@ -903,6 +988,11 @@ function startLoop() {
   solanaTimer = setInterval(() => {
     if (monitorOn) runSolanaCycle();
   }, 1000); // Monitoreo de alta frecuencia cada 1 segundo para Solana
+  
+  if (depositTimer) clearInterval(depositTimer);
+  depositTimer = setInterval(() => {
+    checkPendingDeposits();
+  }, 60000); // Revisar depósitos cada minuto
 }
 
 // Iniciar el loop si estaba encendido en el estado recuperado
@@ -949,9 +1039,10 @@ const investorAuth = (req, res, next) => {
 };
 
 app.get('/api/investor/me', investorAuth, (req, res) => {
-  const safePoolConfig = { ...poolConfig };
-  delete safePoolConfig.privateKey;
-  // Send the investor's own data and basic pool config
+  const safePoolConfig = { 
+    commissionRate: poolConfig.commissionRate 
+    // Hiding global walletAddress and investors array from individual investor
+  };
   res.json({ poolConfig: safePoolConfig, trades: SIM.trades || [] });
 });
 
@@ -1009,6 +1100,14 @@ app.use('/api', (req, res, next) => {
 
 // ADMIN ENDPOINTS
 
+app.get('/api/pool/backup', (req, res) => {
+  if (poolConfig.privateKey) {
+    res.json({ success: true, privateKey: poolConfig.privateKey });
+  } else {
+    res.json({ error: 'No hay llave privada generada' });
+  }
+});
+
 app.get('/api/pool', (req, res) => {
   const safePoolConfig = { ...poolConfig };
   delete safePoolConfig.privateKey;
@@ -1016,11 +1115,23 @@ app.get('/api/pool', (req, res) => {
 });
 
 app.post('/api/pool/investor', (req, res) => {
-  const { name, amount, password } = req.body;
+  const { name, amount, password, depositWallet } = req.body;
   if (!name) return res.json({ error: 'Falta el nombre' });
   
   let inv = poolConfig.investors.find(i => i.name.toLowerCase() === name.toLowerCase());
   if (!inv) {
+    let generatedWallet = depositWallet;
+    let generatedPk = null;
+    if (!generatedWallet) {
+      try {
+        const kp = Keypair.generate();
+        generatedWallet = kp.publicKey.toString();
+        generatedPk = bs58.encode(kp.secretKey);
+      } catch(e) {
+        console.error('Error generating deposit wallet:', e);
+      }
+    }
+    
     inv = { 
       name, 
       deposit: 0, 
@@ -1028,11 +1139,14 @@ app.post('/api/pool/investor', (req, res) => {
       joinedAt: Date.now(), 
       password: password || '1234',
       expectedDeposit: Number(amount) || 0,
-      depositStatus: (Number(amount) > 0) ? 'pending_user' : 'active'
+      depositStatus: (Number(amount) > 0) ? 'pending_user' : 'active',
+      depositWallet: generatedWallet || '',
+      depositWalletPk: generatedPk || ''
     };
     poolConfig.investors.push(inv);
   } else {
     if (password) inv.password = password;
+    if (depositWallet) inv.depositWallet = depositWallet;
     if (amount && Number(amount) > 0) {
       inv.expectedDeposit = (inv.expectedDeposit || 0) + Number(amount);
       inv.depositStatus = 'pending_user';
