@@ -1002,25 +1002,39 @@ async function checkPendingDeposits() {
               const balance = Number(accountInfo.value.amount);
               const balanceDecimals = balance / 1e6;
               if (balanceDecimals >= 10) {
-                const poolTokenAccountAddress = await getAssociatedTokenAddress(baseMint, poolKeypair.publicKey);
-                const transaction = new Transaction().add(
-                  createTransferInstruction(
-                    invTokenAccountAddress,
-                    poolTokenAccountAddress,
-                    invKeypair.publicKey,
-                    balance,
-                    []
-                  )
-                );
-                transaction.feePayer = poolKeypair.publicKey;
-                const { blockhash } = await connection.getLatestBlockhash();
-                transaction.recentBlockhash = blockhash;
-                transaction.sign(invKeypair, poolKeypair);
-                const txid = await connection.sendRawTransaction(transaction.serialize());
-                inv.depositStatus = 'active';
-                inv.deposit += balanceDecimals;
-                saveState();
-                addLog(`Depósito detectado y transferido de ${inv.name}: $${balanceDecimals} USDC`, 'info');
+                let transferDecimals = balanceDecimals;
+                if (inv.deposit + transferDecimals > 50) {
+                  transferDecimals = 50 - inv.deposit;
+                }
+                
+                if (transferDecimals > 0) {
+                  const poolTokenAccountAddress = await getAssociatedTokenAddress(baseMint, poolKeypair.publicKey);
+                  const transferRaw = Math.floor(transferDecimals * 1e6);
+                  const transaction = new Transaction().add(
+                    createTransferInstruction(
+                      invTokenAccountAddress,
+                      poolTokenAccountAddress,
+                      invKeypair.publicKey,
+                      transferRaw,
+                      []
+                    )
+                  );
+                  transaction.feePayer = poolKeypair.publicKey;
+                  const { blockhash } = await connection.getLatestBlockhash();
+                  transaction.recentBlockhash = blockhash;
+                  transaction.sign(invKeypair, poolKeypair);
+                  const txid = await connection.sendRawTransaction(transaction.serialize());
+                  inv.depositStatus = 'active';
+                  inv.deposit += transferDecimals;
+                  saveState();
+                  addLog(`Depósito detectado y transferido de ${inv.name}: $${transferDecimals} USDC`, 'info');
+                } else {
+                  // Ya alcanzó el límite máximo de $50
+                  if (inv.depositStatus === 'pending_user') {
+                    inv.depositStatus = 'active';
+                    saveState();
+                  }
+                }
               }
             } catch (e) {
               // Token account might not exist if they haven't deposited yet, ignore
