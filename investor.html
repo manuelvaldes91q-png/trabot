@@ -233,6 +233,7 @@
           if (res.status === 401) logout();
           return;
         }
+        if (res.headers.get('content-type')?.includes('text/html')) return;
         const data = await res.json();
         
         if (data.poolConfig && data.me) {

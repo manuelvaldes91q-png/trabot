@@ -290,6 +290,7 @@ select.inp{cursor:pointer}
           <option value="any">Cualquiera</option>
           <option value="bull" selected>Alcista</option>
           <option value="strong">Alcista fuerte</option>
+          <option value="acc">Acumulación (Post-Crash)</option>
         </select>
       </div>
       <div class="sf"><div class="lbl">Ordenar</div>
@@ -591,6 +592,25 @@ function detectTrend(klines){
   let label,emoji,bull;
   if(score>=70){label='ALCISTA FUERTE';emoji='🟢🟢';bull=true;}else if(score>=45){label='ALCISTA';emoji='🟢';bull=true;}else if(score>=25){label='LATERAL+';emoji='🟡';bull=false;}else{label='BAJISTA';emoji='🔴';bull=false;}
   return{label,emoji,score,bull,ema20,ema50,cp,distEMA20:ema20>0?+((cp-ema20)/ema20*100).toFixed(2):0};
+}
+function detectAccumulation(klines){
+  if(!klines||klines.length<20)return{isAcc:false,score:0};
+  const H=klines.map(k=>+k[2]),L=klines.map(k=>+k[3]),C=klines.map(k=>+k[4]),n=klines.length,cp=C[n-1];
+  const half=Math.floor(n/2),qtr=Math.floor(n/4);
+  const maxHigh=Math.max(...H.slice(0,half)); // Max in first half (ATH)
+  const minLow=Math.min(...L);
+  const recentMax=Math.max(...H.slice(-qtr));
+  const recentMin=Math.min(...L.slice(-qtr));
+  const hasDumped = maxHigh > cp * 2.0; // Dropped at least 50% from first half high
+  const isNearBottom = recentMin <= minLow * 1.3;
+  const isRelativelyFlat = recentMax <= recentMin * 1.4;
+  const isAcc = hasDumped && isNearBottom && isRelativelyFlat;
+  let score = 0;
+  if (isAcc) {
+    score = 80;
+    if (recentMax <= recentMin * 1.2) score += 20; // Very tight
+  }
+  return { isAcc, score, label: isAcc ? 'ACUMULACIÓN' : 'NEUTRAL', emoji: isAcc ? '🧲' : '🟡' };
 }
 function findDips(klines,cp){
   if(!klines||klines.length<20)return[];
@@ -1620,9 +1640,14 @@ async function startScan(){
         const kl1h = generateSimulatedKlines(cp, p.priceChange, 120, address);
         const kl1d = generateSimulatedKlines(cp, p.priceChange, 60, address);
         
-        const trend = detectTrend(kl1h);
+        let trend = detectTrend(kl1h);
         if (trendReq === 'bull' && !trend.bull) continue;
         if (trendReq === 'strong' && trend.score < 70) continue;
+        if (trendReq === 'acc') {
+           const acc = detectAccumulation(kl1h);
+           if (!acc.isAcc) continue;
+           trend = acc;
+        }
         
         const zz = detectZigzag(kl1h);
         const dips = findDips(kl1h, cp);
@@ -1699,9 +1724,14 @@ async function startScan(){
           const kl1h=await mxKlines(t.symbol,'h1',120);
           if(kl1h.length<15)return;
           // Tendencia 1H
-          const trend=detectTrend(kl1h);
+          let trend=detectTrend(kl1h);
           if(trendReq==='bull'&&!trend.bull)return;
           if(trendReq==='strong'&&trend.score<70)return;
+          if(trendReq==='acc'){
+             const acc = detectAccumulation(kl1h);
+             if (!acc.isAcc) return;
+             trend = acc; // override trend with accumulation details
+          }
           // Zigzag 1H: ciclos + swing
           const zz=detectZigzag(kl1h);
           // Dips históricos 1H
@@ -2208,7 +2238,7 @@ function stopMonitor(){
 setInterval(async () => {
   try {
     const res = await myFetch('/api/state');
-    if (!res.ok && res.headers.get('content-type')?.includes('text/html')) {
+    if (res.headers.get('content-type')?.includes('text/html')) {
       return;
     }
     const data = await res.json();

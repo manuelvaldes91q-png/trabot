@@ -734,7 +734,7 @@ async function runCycle() {
           
           w.orders.forEach(o => { if (o.status === 'pending') o.status = 'cancelled'; });
           w.slPrice = null; w.tp1Price = null; w.tp2Price = null;
-          addLog(`❌ SL ${w.symbol}: $${fpZ(cp,cp)} · P&L $${pnl.toFixed(2)} (${pnlP.toFixed(1)}%)`, 'sl_');
+          addLog(`❌ SL ${w.symbol} (Entrada: $${fpZ(avg,avg)} ➡ Salida: $${fpZ(cp,cp)}) · P&L $${pnl.toFixed(2)} (${pnlP.toFixed(1)}%)`, 'sl_');
           
           watchItems.splice(wi, 1);
           wi--;
@@ -756,7 +756,7 @@ async function runCycle() {
           w.orders.forEach(o => { if (o.status === 'pending') o.status = 'cancelled'; });
           w.tp1Hit = true;
           w.slPrice = null; w.tp1Price = null; w.tp2Price = null;
-          addLog(`🎯 TP1 CERRADO ${w.symbol}: $${fpZ(cp,cp)} · P&L $${pnl.toFixed(2)} (+${pnlP.toFixed(1)}%)`, 'tp');
+          addLog(`🎯 TP1 CERRADO ${w.symbol} (Entrada: $${fpZ(avg,avg)} ➡ Salida: $${fpZ(cp,cp)}) · P&L $${pnl.toFixed(2)} (+${pnlP.toFixed(1)}%)`, 'tp');
           
           watchItems.splice(wi, 1);
           wi--;
@@ -778,7 +778,7 @@ async function runCycle() {
           w.orders.forEach(o => { if (o.status === 'pending') o.status = 'cancelled'; });
           w.tp2Hit = true;
           w.slPrice = null; w.tp1Price = null; w.tp2Price = null;
-          addLog(`🚀 TP2 CERRADO ${w.symbol}: $${fpZ(cp,cp)} · P&L $${pnl.toFixed(2)} (+${pnlP.toFixed(1)}%)`, 'tp');
+          addLog(`🚀 TP2 CERRADO ${w.symbol} (Entrada: $${fpZ(avg,avg)} ➡ Salida: $${fpZ(cp,cp)}) · P&L $${pnl.toFixed(2)} (+${pnlP.toFixed(1)}%)`, 'tp');
           
           watchItems.splice(wi, 1);
           wi--;
@@ -880,7 +880,7 @@ async function runSolanaCycle() {
             
             w.orders.forEach(o => { if (o.status === 'pending') o.status = 'cancelled'; });
             w.slPrice = null; w.tp1Price = null; w.tp2Price = null;
-            addLog(`❌ SL SOLANA CERRADO ${w.symbol}: $${fpZ(cp,cp)} · P&L $${pnl.toFixed(2)} (${pnlP.toFixed(1)}%)`, 'sl_');
+            addLog(`❌ SL SOLANA CERRADO ${w.symbol} (Entrada: $${fpZ(avg,avg)} ➡ Salida: $${fpZ(cp,cp)}) · P&L $${pnl.toFixed(2)} (${pnlP.toFixed(1)}%)`, 'sl_');
             
             watchItems.splice(wi, 1);
             wi--;
@@ -907,7 +907,7 @@ async function runSolanaCycle() {
             w.orders.forEach(o => { if (o.status === 'pending') o.status = 'cancelled'; });
             w.tp1Hit = true;
             w.slPrice = null; w.tp1Price = null; w.tp2Price = null;
-            addLog(`🎯 TP1 SOLANA CERRADO ${w.symbol}: $${fpZ(cp,cp)} · P&L $${pnl.toFixed(2)} (+${pnlP.toFixed(1)}%)`, 'tp');
+            addLog(`🎯 TP1 SOLANA CERRADO ${w.symbol} (Entrada: $${fpZ(avg,avg)} ➡ Salida: $${fpZ(cp,cp)}) · P&L $${pnl.toFixed(2)} (+${pnlP.toFixed(1)}%)`, 'tp');
             
             watchItems.splice(wi, 1);
             wi--;
@@ -934,7 +934,7 @@ async function runSolanaCycle() {
             w.orders.forEach(o => { if (o.status === 'pending') o.status = 'cancelled'; });
             w.tp2Hit = true;
             w.slPrice = null; w.tp1Price = null; w.tp2Price = null;
-            addLog(`🚀 TP2 SOLANA CERRADO ${w.symbol}: $${fpZ(cp,cp)} · P&L $${pnl.toFixed(2)} (+${pnlP.toFixed(1)}%)`, 'tp');
+            addLog(`🚀 TP2 SOLANA CERRADO ${w.symbol} (Entrada: $${fpZ(avg,avg)} ➡ Salida: $${fpZ(cp,cp)}) · P&L $${pnl.toFixed(2)} (+${pnlP.toFixed(1)}%)`, 'tp');
             
             watchItems.splice(wi, 1);
             wi--;
@@ -1906,7 +1906,7 @@ app.post('/api/action', async (req, res) => {
         SIM.trades.push({ symbol: w.symbol, avgEntry: avg, exit: cp, pnl, pnlPct: ((cp - avg) / avg * 100).toFixed(2), at: Date.now() });
         
         watchItems.splice(wi, 1);
-        addLog(`💰 CERRADO MANUAL ${w.symbol} · P&L $${pnl.toFixed(2)}`, 'sell');
+        addLog(`💰 CERRADO MANUAL ${w.symbol} (Entrada: $${fpZ(avg,avg)} ➡ Salida: $${fpZ(cp,cp)}) · P&L $${pnl.toFixed(2)}`, 'sell');
       }
     }
     
