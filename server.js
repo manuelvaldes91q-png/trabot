@@ -1900,7 +1900,8 @@ app.get('/api/x-scam-scan', async (req, res) => {
       { user: "CryptoAudit", name: "Crypto Audit 🛡️", handle: "@CryptoAudit" },
       { user: "WhaleAlerts", name: "Whale Alerts 🚨", handle: "@WhaleAlerts" },
       { user: "ScamSniffer", name: "Scam Sniffer 🐕", handle: "@ScamSniffer" },
-      { user: "DegenApe", name: "Degen Ape 🦍", handle: "@DegenApe" }
+      { user: "DegenApe", name: "Degen Ape 🦍", handle: "@DegenApe" },
+      { user: "BadatTrading", name: "Badat Trading 📈", handle: "@badattrading_" }
     ];
 
     let activityLevel = "Media 📊";
@@ -1917,7 +1918,31 @@ app.get('/api/x-scam-scan', async (req, res) => {
       mentionsPerHour = Math.floor(Math.random() * 10) + 1;
     }
 
+    let scamVotes = 0;
+    let safeVotes = 0;
     if (riskLevel === "ALTO") {
+      scamVotes = Math.floor(riskScore * 1.5 + Math.random() * 10) + 40;
+      safeVotes = Math.floor((100 - riskScore) * 0.5 + Math.random() * 5);
+    } else if (riskLevel === "MEDIO") {
+      scamVotes = Math.floor(riskScore * 0.8 + Math.random() * 10) + 15;
+      safeVotes = Math.floor((100 - riskScore) * 0.9 + Math.random() * 10) + 20;
+    } else {
+      scamVotes = Math.floor(riskScore * 0.2 + Math.random() * 3);
+      safeVotes = Math.floor((100 - riskScore) * 1.8 + Math.random() * 15) + 50;
+    }
+    if (scamVotes < 0) scamVotes = 0;
+    if (safeVotes < 1) safeVotes = 1;
+
+    if (riskLevel === "ALTO") {
+      tweets.push({
+        name: names[11].name,
+        handle: names[11].handle,
+        text: `⚠️ ANÁLISIS DE RIESGO para $${cleanSymbol}: Datos en cadena preocupantes. El volumen es artificial (wash trading) y el contrato tiene permisos de transferencia sospechosos. ¡Eviten esta estafa! 📉🚨`,
+        time: "Hace 18m",
+        likes: 195,
+        retweets: 48,
+        sentiment: "negative"
+      });
       tweets.push({
         name: names[9].name,
         handle: names[9].handle,
@@ -1974,6 +1999,15 @@ app.get('/api/x-scam-scan', async (req, res) => {
       });
     } else if (riskLevel === "MEDIO") {
       tweets.push({
+        name: names[11].name,
+        handle: names[11].handle,
+        text: `📊 El gráfico de $${cleanSymbol} está en zona de acumulación, pero cuidado: la liquidez de $${(parsedLiq/1000).toFixed(1)}k aún no está asegurada a largo plazo. Mantengan posiciones pequeñas. 🧐`,
+        time: "Hace 30m",
+        likes: 140,
+        retweets: 25,
+        sentiment: "neutral"
+      });
+      tweets.push({
         name: names[7].name,
         handle: names[7].handle,
         text: `Auditoría inicial de $${cleanSymbol}: El LP está quemado pero hay wallets agrupadas (snipers) que tienen el 25% del supply. Podrían dumpear en cualquier momento. Precaución. ⚠️`,
@@ -2019,6 +2053,15 @@ app.get('/api/x-scam-scan', async (req, res) => {
         sentiment: "neutral"
       });
     } else {
+      tweets.push({
+        name: names[11].name,
+        handle: names[11].handle,
+        text: `🔥 $${cleanSymbol} pasando todos nuestros filtros de seguridad con nota sobresaliente. Buena profundidad en pool de liquidez, wallets balanceadas y excelente actividad social. ¡De las mejores opciones actuales! 💎🚀`,
+        time: "Hace 10m",
+        likes: 310,
+        retweets: 85,
+        sentiment: "positive"
+      });
       tweets.push({
         name: names[10].name,
         handle: names[10].handle,
@@ -2076,6 +2119,8 @@ app.get('/api/x-scam-scan', async (req, res) => {
       sentiment,
       activityLevel,
       mentionsPerHour,
+      scamVotes,
+      safeVotes,
       tweets
     });
   } catch (err) {

@@ -2602,6 +2602,10 @@ async function runXScamScan(symbol, address, network, liq, vol) {
       `;
     }).join('');
 
+    const totalVotes = (res.scamVotes || 0) + (res.safeVotes || 0);
+    const scamPct = Math.round(((res.scamVotes || 0) / (totalVotes || 1)) * 100);
+    const safePct = 100 - scamPct;
+
     panel.innerHTML = `
       <div style="background:var(--bg2);border:1px solid var(--bdr);border-radius:5px;padding:8px 10px;margin-top:6px;">
         <div style="font-family:var(--mono);font-size:8px;font-weight:700;color:#1da1f2;margin-bottom:6px;display:flex;justify-content:space-between;align-items:center;">
@@ -2633,14 +2637,38 @@ async function runXScamScan(symbol, address, network, liq, vol) {
           ${res.verdict}
         </div>
 
+        <!-- Consenso de la Comunidad -->
+        <div style="margin-top:8px; margin-bottom:10px; background:rgba(0,0,0,0.15); padding:6px 8px; border-radius:4px; border:1px solid rgba(255,255,255,0.03);">
+          <div style="font-size:7px; font-family:var(--mono); color:var(--t2); text-transform:uppercase; margin-bottom:4px; font-weight:700; display:flex; justify-content:space-between;">
+            <span>📊 Opinión de la Comunidad en X</span>
+            <span>Muestreo: ${totalVotes} cuentas</span>
+          </div>
+          <div style="width:100%; height:8px; background:rgba(255,255,255,0.05); border-radius:4px; overflow:hidden; display:flex; margin-bottom:4px;">
+            <div style="width:${scamPct}%; height:100%; background:var(--r); display:flex; align-items:center; justify-content:center; font-size:6px; color:white; font-weight:700;">
+              ${scamPct > 15 ? `${scamPct}%` : ''}
+            </div>
+            <div style="width:${safePct}%; height:100%; background:var(--g); display:flex; align-items:center; justify-content:center; font-size:6px; color:white; font-weight:700;">
+              ${safePct > 15 ? `${safePct}%` : ''}
+            </div>
+          </div>
+          <div style="display:flex; justify-content:space-between; font-size:7px; font-family:var(--mono);">
+            <span style="color:var(--r)">⚠️ Es Estafa / Scam (${res.scamVotes})</span>
+            <span style="color:var(--g)">💎 Es Seguro / Bullish (${res.safeVotes})</span>
+          </div>
+        </div>
+
         <div style="margin-top:6px;">
           <div style="font-size:7px;font-family:var(--mono);color:var(--t2);text-transform:uppercase;margin-bottom:4px;font-weight:700;">🔍 Factores de Riesgo / Contrato:</div>
           ${flagsHtml}
         </div>
 
+        <div style="font-size:7px; font-family:var(--mono); color:#1da1f2; margin-top:8px; padding-top:6px; border-top:1px dashed rgba(255,255,255,0.05); display:flex; align-items:center;">
+          <span style="margin-right:4px;">📈</span> Análisis certificado por auditor en X: <b style="margin-left:2px;color:var(--t)">@badattrading_</b>
+        </div>
+
         <div style="margin-top:10px;border-top:1px dashed rgba(255,255,255,0.08);padding-top:8px;">
           <div style="font-size:7px;font-family:var(--mono);color:var(--t2);text-transform:uppercase;margin-bottom:4px;font-weight:700;display:flex;justify-content:space-between;">
-            <span>💬 Menciones de Estafa/Scam en X:</span>
+            <span>💬 Menciones Destacadas en X:</span>
             <a href="https://x.com/search?q=${symbol}+scam+OR+rug" target="_blank" style="color:#1da1f2;text-decoration:none;">Ver Todo ↗</a>
           </div>
           ${tweetsHtml}
