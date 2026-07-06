@@ -1131,6 +1131,15 @@ async function openConfigModal() {
         </div>
       </div>
       
+      <!-- SECCIÓN TWITTER -->
+      <div style="border-top:1px solid var(--bdr);margin-top:15px;padding-top:15px;margin-bottom:15px">
+        <div style="font-weight:600;color:#1da1f2;font-size:11px;margin-bottom:10px;text-transform:uppercase;letter-spacing:0.05em">🐦 Twitter (X) API</div>
+        <div style="margin-bottom:10px">
+          <div style="font-size:10px;color:var(--t2);margin-bottom:4px">Twitter Bearer Token (Para análisis de Scam/Bullish)</div>
+          <input type="password" id="cfgTwitterKey" class="inp" placeholder="AAAAAAAAAAAAAAAAAAAAA..." style="width:100%">
+        </div>
+      </div>
+      
       <div style="border-top:1px solid var(--bdr);margin-top:15px;padding-top:15px;margin-bottom:15px">
         <div style="font-size:10px;color:var(--t2);margin-bottom:4px">Contraseña del Panel Web</div>
         <input type="password" id="cfgAppPwd" class="inp" placeholder="Dejar en blanco para mantener la actual" style="width:100%">
@@ -1157,6 +1166,7 @@ async function openConfigModal() {
     document.getElementById('cfgSolSlippage').value = cfg.solanaSlippage || '2.5';
     document.getElementById('cfgSolPriority').value = cfg.solanaPriorityFee || 'auto';
     document.getElementById('cfgDextoolsKey').value = cfg.dextoolsApiKey || '';
+    document.getElementById('cfgTwitterKey').value = cfg.twitterBearerToken || '';
   } catch(e) {}
   
   const solKeyInput = document.getElementById('cfgSolKey');
@@ -1236,7 +1246,8 @@ async function openConfigModal() {
         solanaBaseToken: document.getElementById('cfgSolBase').value,
         solanaSlippage: document.getElementById('cfgSolSlippage').value.trim() || '2.5',
         solanaPriorityFee: document.getElementById('cfgSolPriority').value,
-        dextoolsApiKey: document.getElementById('cfgDextoolsKey').value.trim()
+        dextoolsApiKey: document.getElementById('cfgDextoolsKey').value.trim(),
+        twitterBearerToken: document.getElementById('cfgTwitterKey').value.trim()
       };
       
       const newPwd = document.getElementById('cfgAppPwd').value.trim();
