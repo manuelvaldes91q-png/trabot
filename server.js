@@ -239,7 +239,9 @@ async function getSolanaPrices(addresses) {
               continue;
             }
           } catch (e) {
-            console.warn(`DexTools API fetch failed for ${addr}:`, e.message);
+            if (e.message !== 'fetch failed' && !e.message.includes('timeout') && !e.message.includes('fetch')) {
+              console.warn(`DexTools API fetch failed for ${addr}:`, e.message);
+            }
           }
           
           // Fallback to cache or fallback parser for this address
@@ -325,7 +327,9 @@ async function getSolanaPrices(addresses) {
               }
             }
           } catch (e) {
-             console.warn(`Jupiter fetch failed, fallback to DexScreener:`, e.message);
+            if (e.message !== 'fetch failed' && !e.message.includes('timeout') && !e.message.includes('fetch')) {
+              console.warn(`Jupiter fetch failed, fallback to DexScreener:`, e.message);
+            }
           }
 
           if (!jupiterSuccess) {
