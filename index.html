@@ -621,6 +621,27 @@ function findDips(klines,cp){
   for(const d of dips.sort((a,b)=>a.price-b.price)){const ex=zones.find(z=>Math.abs(z.price-d.price)<=tol);if(ex)ex.count++;else zones.push({price:d.price,count:1});}
   return zones.filter(z=>z.price<cp*.99).sort((a,b)=>b.count-a.count).slice(0,5);
 }
+function findSR(klines, cp) {
+  if(!klines||klines.length<20)return {supports: [], resistances: []};
+  const L=klines.map(k=>+k[3]),H=klines.map(k=>+k[2]),n=klines.length,w=3;
+  const dips=[], peaks=[];
+  for(let i=w;i<n-w;i++){
+    const sL=L.slice(i-w,i+w+1); if(L[i]===Math.min(...sL)) dips.push({price:L[i]});
+    const sH=H.slice(i-w,i+w+1); if(H[i]===Math.max(...sH)) peaks.push({price:H[i]});
+  }
+  const tol = cp*0.02;
+  const group = (arr) => {
+    let zones=[];
+    for(const d of arr.sort((a,b)=>a.price-b.price)){
+      const ex=zones.find(z=>Math.abs(z.price-d.price)<=tol);
+      if(ex) ex.count++; else zones.push({price:d.price,count:1});
+    }
+    return zones.sort((a,b)=>b.count-a.count).slice(0, 3);
+  };
+  let supports = group(dips).filter(z => z.price < cp * 0.99).map(z=>z.price).sort((a,b)=>b-a);
+  let resistances = group(peaks).filter(z => z.price > cp * 1.01).map(z=>z.price).sort((a,b)=>a-b);
+  return {supports, resistances};
+}
 // Detecta zigzag: ciclos bajada/subida, swing % promedio, máximos/mínimos crecientes
 function detectZigzag(klines){
   if(!klines||klines.length<20)return{cycles:0,swingPct:0,maxSwing:0,higherHighs:false,higherLows:false};
@@ -2362,6 +2383,7 @@ async function showDetail(d){
     <span style="font-family:var(--mono);font-size:13px;font-weight:700">${pairName}</span>
     <span style="font-family:var(--mono);font-size:10px;color:var(--t2)">$${fpZ(cp,cp)}</span>
     <span class="tag ${d.trend.score>=70?'tg':d.trend.score>=45?'ty':'tr'}">${d.trend.emoji} ${d.trend.label}</span>
+    <a href="https://x.com/search?q=${d.address||d.symbol}+scam+OR+rug" target="_blank" style="margin-left:5px;font-family:var(--mono);font-size:8px;color:#facc15;border:1px solid rgba(250,204,21,0.2);padding:2px 7px;border-radius:3px;text-decoration:none">🔍 Buscar Estafa en X</a>
     <a href="${extLink}" target="_blank" style="margin-left:auto;font-family:var(--mono);font-size:8px;color:${extCol};border:1px solid ${extBdr};padding:2px 7px;border-radius:3px;text-decoration:none">${extLabel}</a>
   `;
   document.getElementById('detContent').innerHTML=`
@@ -2415,8 +2437,20 @@ async function showDetail(d){
             <span style="color:var(--t2)">Red / DEX:</span>
             <span style="color:var(--y)">Solana / Jupiter</span>
           </div>
-          <div style="font-size:8px;color:var(--t2);line-height:1.3;border-top:1px dashed rgba(255,255,255,0.05);padding-top:6px">
-            ⚠️ Los tokens de Solana operan en pools descentralizados de AMM en lugar de libros de órdenes centralizados.
+          ${(function(){
+            if(!d.klines1h)return '';
+            const sr = findSR(d.klines1h, cp);
+            let h = '<div style="margin-top:10px;border-top:1px dashed rgba(153,69,255,0.2);padding-top:8px">';
+            h += '<div style="color:var(--r);margin-bottom:4px">▲ Resistencias (venta)</div>';
+            h += sr.resistances.length ? sr.resistances.map(r=>`<div style="display:flex;justify-content:space-between;color:var(--t2);font-size:8px"><span>Nivel</span><span style="color:var(--r)">$${fpZ(r, cp)}</span></div>`).join('') : '<div style="color:var(--t2);font-size:7px">—</div>';
+            h += `<div style="text-align:center;color:var(--t);margin:6px 0;font-size:10px">$${fpZ(cp, cp)}</div>`;
+            h += '<div style="color:var(--g);margin-bottom:4px">▼ Soportes (compra)</div>';
+            h += sr.supports.length ? sr.supports.map(s=>`<div style="display:flex;justify-content:space-between;color:var(--t2);font-size:8px"><span>Nivel</span><span style="color:var(--g)">$${fpZ(s, cp)}</span></div>`).join('') : '<div style="color:var(--t2);font-size:7px">—</div>';
+            h += '</div>';
+            return h;
+          })()}
+          <div style="font-size:8px;color:var(--t2);line-height:1.3;border-top:1px dashed rgba(255,255,255,0.05);padding-top:6px;margin-top:10px;">
+            ⚠️ Los tokens de Solana operan en pools descentralizados de AMM. Las S/R son calculadas vía pivotes en el gráfico 1H.
           </div>
         </div>
       `;
