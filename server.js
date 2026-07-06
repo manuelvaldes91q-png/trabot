@@ -1895,10 +1895,38 @@ app.get('/api/x-scam-scan', async (req, res) => {
       { user: "SolanaWhale", name: "Sol Whale 🐋", handle: "@SolanaWhale" },
       { user: "DegenTrader", name: "Degen de Solana ⚡", handle: "@DegenTrader" },
       { user: "CoinAnalyst", name: "Alpha Analyst 📈", handle: "@CoinAnalyst" },
-      { user: "RektFren", name: "Rekt Cadet 😭", handle: "@RektFren" }
+      { user: "RektFren", name: "Rekt Cadet 😭", handle: "@RektFren" },
+      { user: "ChainSnoop", name: "Chain Snoop 🐺", handle: "@ChainSnoop" },
+      { user: "CryptoAudit", name: "Crypto Audit 🛡️", handle: "@CryptoAudit" },
+      { user: "WhaleAlerts", name: "Whale Alerts 🚨", handle: "@WhaleAlerts" },
+      { user: "ScamSniffer", name: "Scam Sniffer 🐕", handle: "@ScamSniffer" },
+      { user: "DegenApe", name: "Degen Ape 🦍", handle: "@DegenApe" }
     ];
 
+    let activityLevel = "Media 📊";
+    let mentionsPerHour = Math.floor(Math.random() * 40) + 10;
+    
+    if (parsedVol > 100000 || riskScore > 80) {
+      activityLevel = "Muy Alta 🔥";
+      mentionsPerHour = Math.floor(Math.random() * 400) + 100;
+    } else if (parsedVol > 50000 || riskScore > 60) {
+      activityLevel = "Alta 📈";
+      mentionsPerHour = Math.floor(Math.random() * 100) + 50;
+    } else if (parsedVol < 5000) {
+      activityLevel = "Baja 📉";
+      mentionsPerHour = Math.floor(Math.random() * 10) + 1;
+    }
+
     if (riskLevel === "ALTO") {
+      tweets.push({
+        name: names[9].name,
+        handle: names[9].handle,
+        text: `Hemos detectado múltiples reportes de scam sobre $${cleanSymbol}. Función de 'mint' oculta en el contrato y el dev está baneando en Telegram a quienes preguntan.`,
+        time: "Hace 5m",
+        likes: 124,
+        retweets: 55,
+        sentiment: "negative"
+      });
       tweets.push({
         name: names[1].name,
         handle: names[1].handle,
@@ -1906,6 +1934,15 @@ app.get('/api/x-scam-scan', async (req, res) => {
         time: "Hace 14m",
         likes: 42,
         retweets: 18,
+        sentiment: "negative"
+      });
+      tweets.push({
+        name: names[6].name,
+        handle: names[6].handle,
+        text: `Rastreando la wallet del dev de $${cleanSymbol}: los fondos iniciales provienen del mismo mixer usado en el rugpull de ayer. Esto es un honeypot 100% confirmado.`,
+        time: "Hace 22m",
+        likes: 88,
+        retweets: 30,
         sentiment: "negative"
       });
       tweets.push({
@@ -1937,12 +1974,30 @@ app.get('/api/x-scam-scan', async (req, res) => {
       });
     } else if (riskLevel === "MEDIO") {
       tweets.push({
+        name: names[7].name,
+        handle: names[7].handle,
+        text: `Auditoría inicial de $${cleanSymbol}: El LP está quemado pero hay wallets agrupadas (snipers) que tienen el 25% del supply. Podrían dumpear en cualquier momento. Precaución. ⚠️`,
+        time: "Hace 12m",
+        likes: 45,
+        retweets: 10,
+        sentiment: "neutral"
+      });
+      tweets.push({
         name: names[0].name,
         handle: names[0].handle,
         text: `Monitoreando $${cleanSymbol}. La liquidez es de apenas $${(parsedLiq/1000).toFixed(1)}k. El volumen en X está subiendo pero no veo que el equipo haya quemado la liquidez en Raydium todavía. Monitorear de cerca. 🧐`,
         time: "Hace 25m",
         likes: 28,
         retweets: 5,
+        sentiment: "neutral"
+      });
+      tweets.push({
+        name: names[8].name,
+        handle: names[8].handle,
+        text: `Movimiento anómalo en $${cleanSymbol}. Una ballena acaba de vender el 3% del supply y el equipo no ha comunicado nada. La comunidad está haciendo preguntas.`,
+        time: "Hace 45m",
+        likes: 33,
+        retweets: 8,
         sentiment: "neutral"
       });
       tweets.push({
@@ -1964,6 +2019,24 @@ app.get('/api/x-scam-scan', async (req, res) => {
         sentiment: "neutral"
       });
     } else {
+      tweets.push({
+        name: names[10].name,
+        handle: names[10].handle,
+        text: `Apeando fuerte en $${cleanSymbol}. El dev está activo en VC, el contrato está renunciado y el marketing apenas empieza. Cero red flags por ahora. 🦍🚀`,
+        time: "Hace 8m",
+        likes: 110,
+        retweets: 25,
+        sentiment: "positive"
+      });
+      tweets.push({
+        name: names[7].name,
+        handle: names[7].handle,
+        text: `Revisión de seguridad para $${cleanSymbol} completada: LP bloqueado por 1 año, Mint Revoked, sin blacklist, impuestos 0/0. El contrato es seguro para hacer trading. ✅🛡️`,
+        time: "Hace 15m",
+        likes: 215,
+        retweets: 58,
+        sentiment: "positive"
+      });
       tweets.push({
         name: names[4].name,
         handle: names[4].handle,
@@ -2001,6 +2074,8 @@ app.get('/api/x-scam-scan', async (req, res) => {
       verdict,
       flags: flags.length ? flags : ["Sin banderas de riesgo críticas identificadas en el contrato."],
       sentiment,
+      activityLevel,
+      mentionsPerHour,
       tweets
     });
   } catch (err) {

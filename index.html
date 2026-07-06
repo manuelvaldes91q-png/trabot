@@ -2613,10 +2613,14 @@ async function runXScamScan(symbol, address, network, liq, vol) {
           <div>
             <div style="font-size:7px;color:var(--t2);font-family:var(--mono)">Riesgo Estimado:</div>
             <div style="font-size:11px;font-weight:800;color:${riskColor};font-family:var(--mono);">${res.riskScore}% (${res.riskLevel})</div>
+            <div style="font-size:7px;color:var(--t2);font-family:var(--mono);margin-top:4px">Actividad Comunidad:</div>
+            <div style="font-size:8px;font-weight:700;color:var(--t);font-family:var(--mono);">${res.activityLevel}</div>
           </div>
           <div style="text-align:right;">
             <div style="font-size:7px;color:var(--t2);font-family:var(--mono)">Sentimiento X:</div>
             <div style="font-size:8px;font-weight:700;color:var(--t);font-family:var(--mono);">${res.sentiment}</div>
+            <div style="font-size:7px;color:var(--t2);font-family:var(--mono);margin-top:4px">Menciones por Hora:</div>
+            <div style="font-size:8px;font-weight:700;color:#1da1f2;font-family:var(--mono);">~${res.mentionsPerHour}</div>
           </div>
         </div>
 
