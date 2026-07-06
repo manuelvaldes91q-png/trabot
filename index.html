@@ -2563,7 +2563,9 @@ async function runXScamScan(symbol, address, network, liq, vol) {
   `;
   try {
     const qs = new URLSearchParams({ symbol, address: address || 'N/A', network, liq: liq || 0, vol: vol || 0 }).toString();
-    const res = await myFetch(`/api/x-scam-scan?${qs}`);
+    const fetchRes = await myFetch(`/api/x-scam-scan?${qs}`);
+    if (!fetchRes.ok) throw new Error("Error en servidor");
+    const res = await fetchRes.json();
     if (!res) throw new Error("Error al obtener datos");
     
     let riskColor = "var(--g)";
