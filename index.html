@@ -1204,6 +1204,9 @@ async function openConfigModal() {
           <div style="font-size:10px;color:var(--t2);margin-bottom:4px">Telegram Chat ID</div>
           <input type="text" id="cfgTgChat" class="inp" placeholder="-100xxxxxxx" style="width:100%">
         </div>
+        <div style="margin-bottom:10px">
+          <button id="btnTestTg" class="btn btn-b" style="width:100%;font-size:10px;padding:6px 12px;margin-top:5px" onclick="testTelegramConnection(this)">🔌 Probar Mensaje de Telegram</button>
+        </div>
       </div>
 
       <!-- SECCIÓN DEXTOOLS -->
@@ -1353,6 +1356,44 @@ async function openConfigModal() {
     }
   };
 }
+
+async function testTelegramConnection(btn) {
+  const originalText = btn.textContent;
+  const tgBotToken = document.getElementById('cfgTgToken').value.trim();
+  const tgChatId = document.getElementById('cfgTgChat').value.trim();
+
+  if (!tgBotToken) {
+    alert('⚠️ Por favor ingresa el Telegram Bot Token antes de realizar la prueba.');
+    return;
+  }
+  if (!tgChatId) {
+    alert('⚠️ Por favor ingresa el Telegram Chat ID antes de realizar la prueba.');
+    return;
+  }
+
+  btn.disabled = true;
+  btn.textContent = '⏳ Enviando mensaje de prueba...';
+
+  try {
+    const res = await myFetch('/api/config/test_telegram', {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({ tgBotToken, tgChatId })
+    });
+    const data = await res.json();
+    if (data.success) {
+      alert('✅ ¡Mensaje de prueba enviado con éxito! Revisa tu chat o grupo de Telegram.');
+    } else {
+      alert('❌ Error: ' + (data.error || 'No se pudo enviar el mensaje'));
+    }
+  } catch(e) {
+    alert('❌ Error al intentar conectar con el servidor para probar Telegram.');
+  } finally {
+    btn.disabled = false;
+    btn.textContent = originalText;
+  }
+}
+
 function updateSolanaVpsWalletUI(vpsSolWallet) {
   const el = document.getElementById('solanaVpsWallet');
   if (!el) return;

@@ -2256,6 +2256,37 @@ app.post('/api/config', (req, res) => {
   res.json({ status: 'ok', config: appConfig });
 });
 
+app.post('/api/config/test_telegram', async (req, res) => {
+  const { tgBotToken, tgChatId } = req.body;
+  const token = tgBotToken || appConfig.tgBotToken || process.env.TELEGRAM_BOT_TOKEN;
+  const chatId = tgChatId || appConfig.tgChatId || process.env.TELEGRAM_CHAT_ID;
+
+  if (!token) return res.json({ error: 'Falta el Token del Bot de Telegram' });
+  if (!chatId) return res.json({ error: 'Falta el Chat ID de Telegram' });
+
+  try {
+    const response = await fetch(`https://api.telegram.org/bot${token}/sendMessage`, {
+      method: 'POST',
+      headers: {'Content-Type': 'application/json'},
+      body: JSON.stringify({
+        chat_id: chatId,
+        text: `🔌 <b>Mensaje de Prueba de Conexión</b>\n\n¡La conexión entre tu Bot de trading y Telegram está funcionando correctamente! ✅\n\n<i>Hora local: ${new Date().toLocaleTimeString('es')}</i>`,
+        parse_mode: 'HTML'
+      })
+    });
+
+    const data = await response.json();
+    if (data.ok) {
+      return res.json({ success: true });
+    } else {
+      return res.json({ error: `Error de Telegram: ${data.description || 'Desconocido'}` });
+    }
+  } catch (e) {
+    console.error('Error testing Telegram connection:', e);
+    return res.json({ error: `Error de conexión: ${e.message}` });
+  }
+});
+
 app.get('/api/dexscreener/*', async (req, res) => {
   try {
     const endpoint = req.params[0];
