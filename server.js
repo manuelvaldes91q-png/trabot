@@ -951,7 +951,7 @@ async function executeSolanaTradeInternal(w, side, amountUSDT, price, pk, feePay
     const slippageBps = Math.floor(slipPercent * 100);
     addLog(`🌀 Consultando cotización Jupiter para ${side} ${w.symbol} (Monto: ${rawAmount}, Slippage: ${slipPercent}%)...`, 'info');
     
-    const quoteUrl = `https://quote-api.jup.ag/v6/quote?inputMint=${inputMint}&outputMint=${outputMint}&amount=${rawAmount}&slippageBps=${slippageBps}`;
+    const quoteUrl = `https://api.jup.ag/swap/v1/quote?inputMint=${inputMint}&outputMint=${outputMint}&amount=${rawAmount}&slippageBps=${slippageBps}`;
     const qr = await fetchWithRetry(quoteUrl, { timeout: 8000 }, 3, 1500);
     if (!qr.ok) {
       const errTxt = await qr.text();
@@ -982,7 +982,7 @@ async function executeSolanaTradeInternal(w, side, amountUSDT, price, pk, feePay
        } catch(e) {}
     }
 
-    const sr = await fetchWithRetry('https://quote-api.jup.ag/v6/swap', {
+    const sr = await fetchWithRetry('https://api.jup.ag/swap/v1/swap', {
       method: 'POST',
       headers: { 'Content-Type': 'application/json' },
       timeout: 10000,
