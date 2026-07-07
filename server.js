@@ -17,6 +17,35 @@ app.use(express.json());
 
 const PORT = process.env.PORT || 3000;
 
+async function fetchWithRetry(url, options = {}, retries = 3, delay = 1000) {
+  const timeoutMs = options.timeout || 10000;
+  const fetchOptions = { ...options };
+  delete fetchOptions.timeout;
+  delete fetchOptions.signal;
+
+  for (let i = 0; i < retries; i++) {
+    const controller = new AbortController();
+    const id = setTimeout(() => controller.abort(), timeoutMs);
+    try {
+      const response = await fetch(url, { ...fetchOptions, signal: controller.signal });
+      clearTimeout(id);
+      if (response.ok) {
+        return response;
+      }
+      if (response.status === 429 || response.status >= 500) {
+        console.warn(`Fetch to ${url} returned status ${response.status}. Retrying... (${i + 1}/${retries})`);
+      } else {
+        return response;
+      }
+    } catch (err) {
+      clearTimeout(id);
+      if (i === retries - 1) throw err;
+      console.warn(`Fetch to ${url} failed: ${err.message}. Retrying in ${delay}ms... (${i + 1}/${retries})`);
+    }
+    await new Promise(resolve => setTimeout(resolve, delay));
+  }
+}
+
 // ============================================
 // STATE DEL BOT (SE MANTIENE EN LA MEMORIA RAM Y SE GUARDA EN ARCHIVO)
 // ============================================
@@ -860,7 +889,7 @@ async function executeSolanaTradeInternal(w, side, amountUSDT, price, pk, feePay
     addLog(`🌀 Consultando cotización Jupiter para ${side} ${w.symbol} (Monto: ${rawAmount}, Slippage: ${slipPercent}%)...`, 'info');
     
     const quoteUrl = `https://quote-api.jup.ag/v6/quote?inputMint=${inputMint}&outputMint=${outputMint}&amount=${rawAmount}&slippageBps=${slippageBps}`;
-    const qr = await fetch(quoteUrl, { signal: AbortSignal.timeout(8000) });
+    const qr = await fetchWithRetry(quoteUrl, { timeout: 8000 }, 3, 1500);
     if (!qr.ok) {
       const errTxt = await qr.text();
       addLog(`❌ Error Jupiter Quote: ${errTxt}`, 'warn');
@@ -890,12 +919,12 @@ async function executeSolanaTradeInternal(w, side, amountUSDT, price, pk, feePay
        } catch(e) {}
     }
 
-    const sr = await fetch('https://quote-api.jup.ag/v6/swap', {
+    const sr = await fetchWithRetry('https://quote-api.jup.ag/v6/swap', {
       method: 'POST',
       headers: { 'Content-Type': 'application/json' },
-      signal: AbortSignal.timeout(10000),
+      timeout: 10000,
       body: JSON.stringify(bodyPayload)
-    });
+    }, 3, 1500);
 
     
     if (!sr.ok) {
@@ -1185,18 +1214,24 @@ async function runSolanaCycle() {
           addLog(`⚡ [Solana Instant] Disparando swap compra para ${w.symbol} a $${fpZ(cp,cp)}...`, 'info');
           const realRes = await executeOrder(w, 'BUY', o.amount, cp);
           if (realRes && realRes.ok) {
+            o.retryCount = 0;
             if (solMode !== 'wallet' && solMode !== 'pool') {
                 SIM.balance -= o.amount;
                 SIM.solBalance += o.amount / cp;
             }
             SIM.totalExec++;
           } else {
-            // Si falla la transacción real en Solana, revertimos estado a pending para intentar de nuevo
-            o.status = 'pending';
+            o.retryCount = (o.retryCount || 0) + 1;
             o.filledAt = null;
             o.filledPrice = null;
             w.filledBuys.pop();
-            addLog(`⚠️ Falló swap real en Solana para ${w.symbol}. Reintentando en el próximo tick rápido.`, 'warn');
+            if (o.retryCount >= 3) {
+              o.status = 'paused';
+              addLog(`🚨 Swap real en Solana para ${w.symbol} falló 3 veces. Orden pausada automáticamente para evitar spam. Por favor, revisa tus fondos, RPC o configuración de red y reactívala.`, 'warn');
+            } else {
+              o.status = 'pending';
+              addLog(`⚠️ Falló swap real en Solana para ${w.symbol} (Intento ${o.retryCount}/3). Reintentando en el próximo tick rápido.`, 'warn');
+            }
             continue; 
           }
           
@@ -2702,11 +2737,22 @@ app.post('/api/action', async (req, res) => {
     const w = watchItems[payload.wi];
     const o = w.orders[payload.oi];
     Object.assign(o, payload.updates);
+    if (o.status === 'paused') {
+       o.status = 'pending';
+       o.retryCount = 0;
+    }
     if (payload.slHits && w.filledBuys?.length) {
        w.slPrice = (w.filledBuys[0].price || o.price) * (1 - o.sl / 100);
        w.tp1Price = (w.filledBuys[0].price || o.price) * (1 + o.tp1 / 100);
     }
     addLog(`✏️ Orden #${o.level} de ${w.symbol} editada.`, 'info');
+    
+  } else if (action === 'resumeOrder') {
+    const w = watchItems[payload.wi];
+    const o = w.orders[payload.oi];
+    o.status = 'pending';
+    o.retryCount = 0;
+    addLog(`▶️ Orden #${o.level} de ${w.symbol} reactivada por el usuario. Reintentando swap...`, 'info');
     
   } else if (action === 'addOrder') {
     const w = watchItems[payload.wi];

@@ -2237,16 +2237,18 @@ function renderWatchList(){
           ${w.orders.map((o,oi)=>{
             const isNext=nextOrd===o;
             const isActive=hot&&isNext;
-            const cls=o.status==='filled'?'oi-filled':o.status==='cancelled'?'oi-cancelled':isActive?'oi-active':isNext?'oi-next':'oi-pending';
+            const cls=o.status==='filled'?'oi-filled':o.status==='cancelled'?'oi-cancelled':o.status==='paused'?'oi-cancelled':isActive?'oi-active':isNext?'oi-next':'oi-pending';
             return `<div class="order-item ${cls}" onclick="editOrder(${wi},${oi})">
               <span class="oi-badge" style="background:${o.type==='entry'?'rgba(0,229,160,.15)':'rgba(139,92,246,.15)'};color:${o.type==='entry'?'var(--g)':'var(--pu)'}">${o.type==='entry'?'ENT':'DCA'}#${o.level}</span>
               <span class="oi-info">
                 <b>$${fpZ(o.price,o.price)}</b> · $${o.amount}
                 ${o.level===1?` · SL−${o.sl}% TP+${o.tp1}%` :''}
                 ${o.note?` · <span style="color:var(--t2)">${o.note}</span>` :''}
+                ${o.status==='paused'?` · <span style="color:var(--r);font-weight:bold">⚠️ Error (Pausada)</span>` :''}
                 ${o.status==='filled'?` ✅ $${fpZ(o.filledPrice||o.price,o.price)}` :''}
               </span>
               <span class="oi-actions">
+                ${o.status==='paused'?`<button class="btn btn-y btn-xs" style="padding:1px 5px;font-size:7px;font-weight:bold" title="Reactivar y reintentar orden" onclick="event.stopPropagation();resumeOrder(${wi},${oi})">▶️ Reintentar</button>` :''}
                 ${o.status==='pending'?`<button class="btn btn-g btn-xs" style="padding:1px 5px;font-size:7px" onclick="event.stopPropagation();manualFill(${wi},${oi})">✓</button>` :''}
                 ${o.status==='filled'?`<button class="btn btn-r btn-xs" style="padding:1px 5px;font-size:7px" onclick="event.stopPropagation();unFill(${wi},${oi})">↩</button>` :''}
               </span>
@@ -2308,6 +2310,9 @@ function addOrderToWatch(wi){
 
 function manualFill(wi,oi){
   myFetch('/api/action', {method: 'POST', headers: {'Content-Type': 'application/json'}, body: JSON.stringify({action: 'manualFill', payload: {wi, oi}})});
+}
+function resumeOrder(wi,oi){
+  myFetch('/api/action', {method: 'POST', headers: {'Content-Type': 'application/json'}, body: JSON.stringify({action: 'resumeOrder', payload: {wi, oi}})});
 }
 function unFill(wi,oi){
   if(!confirm('¿Deshacer esta ejecución?'))return;
