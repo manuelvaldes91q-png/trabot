@@ -818,10 +818,11 @@ async function openPoolModal() {
         <div style="font-size:10px;color:var(--t2);margin-bottom:4px">Comisión del Administrador (%)</div>
         <input type="number" id="cfgPoolCom" class="inp" placeholder="Ej: 20 para 20%" style="width:100%">
       </div>
-      <div style="display:flex;gap:10px;margin-bottom:20px;">
-        <button class="btn btn-g" style="flex:1" onclick="savePoolConfig(this)">💾 Guardar</button>
-        <button class="btn btn-a" style="flex:1" onclick="backupPoolWallet(this)">🔐 Backup (Key)</button>
-        <button class="btn btn-d" style="flex:1" onclick="document.getElementById('poolModalOverlay').remove()">❌ Cerrar</button>
+      <div style="display:flex;gap:10px;margin-bottom:20px;flex-wrap:wrap;">
+        <button class="btn btn-g" style="flex:1;min-width:110px;" onclick="savePoolConfig(this)">💾 Guardar</button>
+        <button class="btn btn-y" style="flex:1;min-width:110px;" onclick="recoverPoolRent(this)">🧹 Limpiar Rent</button>
+        <button class="btn btn-a" style="flex:1;min-width:110px;" onclick="backupPoolWallet(this)">🔐 Backup (Key)</button>
+        <button class="btn btn-d" style="flex:1;min-width:110px;" onclick="document.getElementById('poolModalOverlay').remove()">❌ Cerrar</button>
       </div>
 
       <div style="font-weight:700;margin-bottom:10px;color:var(--t);font-size:14px;border-top:1px solid var(--bdr);padding-top:15px">👥 Inversores Actuales</div>
@@ -940,6 +941,38 @@ async function savePoolConfig(btn) {
   } catch(e) {
     btn.textContent = 'Error';
     setTimeout(() => btn.textContent = '💾 Guardar Config', 1500);
+  }
+}
+
+async function recoverPoolRent(btn) {
+  const original = btn.textContent;
+  btn.textContent = '⏳ Limpiando...';
+  btn.disabled = true;
+  try {
+    const res = await myFetch('/api/pool/recover_rent', {
+      method: 'POST',
+      headers: {'Content-Type': 'application/json'}
+    });
+    const data = await res.json();
+    if (data.error) {
+      alert('Error: ' + data.error);
+    } else {
+      if (data.closedCount > 0) {
+        alert('¡Éxito! Se incineraron ' + data.closedCount + ' cuentas de tokens vacías del Pool, recuperando +' + data.solRecovered.toFixed(5) + ' SOL directamente a la billetera central.');
+      } else {
+        alert('No se encontraron cuentas de tokens vacías para incinerar en la billetera del Pool. Está limpia.');
+      }
+      const pRes = await myFetch('/api/pool');
+      const pData = await pRes.json();
+      if(pData.poolConfig) {
+        document.getElementById('poolWalletBalances').innerText = `Balance: ${pData.solBalance ? pData.solBalance.toFixed(4) : '0.0000'} SOL | $${pData.usdcBalance ? pData.usdcBalance.toFixed(2) : '0.00'} USDC`;
+      }
+    }
+  } catch(e) {
+    alert('Ocurrió un error conectando al servidor');
+  } finally {
+    btn.textContent = original;
+    btn.disabled = false;
   }
 }
 

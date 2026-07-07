@@ -6,7 +6,7 @@ import { createServer as createViteServer } from "vite";
 import crypto from "crypto";
 import "dotenv/config";
 import { Connection, Keypair, VersionedTransaction, PublicKey, SystemProgram, Transaction, sendAndConfirmTransaction } from '@solana/web3.js';
-import { getAssociatedTokenAddress, createTransferInstruction, getAccount } from '@solana/spl-token';
+import { getAssociatedTokenAddress, createTransferInstruction, getAccount, createCloseAccountInstruction } from '@solana/spl-token';
 import bs58 from 'bs58';
 
 const __filename = fileURLToPath(import.meta.url);
@@ -125,13 +125,150 @@ async function sendTelegram(msg) {
   } catch (e) {}
 }
 
+function formatTradeTelegramMessage(msg, type) {
+  try {
+    const isBuy = type === 'buy' || msg.includes('COMPRA') || msg.includes('Buy') || msg.includes('buy');
+    const isSell = type === 'sell' || type === 'sl_' || type === 'tp' || msg.includes('CERRADO') || msg.includes('Stop Loss') || msg.includes('SL') || msg.includes('Cerrado');
+
+    if (!isBuy && !isSell) {
+      return `[⚙️ ${mode.toUpperCase()}] ${msg}`;
+    }
+
+    let platform = 'MEXC';
+    if (msg.includes('SOLANA') || msg.includes('Solana')) {
+      platform = 'Solana';
+    }
+
+    const currentMode = mode === 'real' ? 'REAL' : 'SIMULADO';
+    let solanaSubmode = '';
+    if (platform === 'Solana' && mode === 'real') {
+      solanaSubmode = ` (${solMode === 'pool' ? 'Pool' : 'Wallet'})`;
+    }
+
+    let symbol = 'N/A';
+    let actionText = '';
+    let priceText = 'N/A';
+    let amountText = 'N/A';
+    let pnlText = '';
+    let emoji = '🔔';
+
+    if (isBuy) {
+      emoji = '🟢';
+      actionText = 'COMPRA (BUY) 📈';
+      
+      if (msg.includes('COMPRA INSTANTÁNEA')) {
+        const match = msg.match(/de\s+([A-Za-z0-9\-\/]+)\s+por\s+\$([0-9\.]+)\s+a\s+\$([0-9\.]+)/);
+        if (match) {
+          symbol = match[1];
+          amountText = `$${match[2]}`;
+          priceText = `$${match[3]}`;
+        }
+      } else if (msg.includes('AUTO-COMPRA SOLANA COMPLETADA')) {
+        const match = msg.match(/COMPLETADA:\s+([A-Za-z0-9\-\/]+)\s+#\d+\s+·\s+\$([0-9\.]+)/);
+        if (match) {
+          symbol = match[1];
+          amountText = `$${match[2]}`;
+        }
+      } else if (msg.includes('AUTO-COMPRA')) {
+        const match = msg.match(/AUTO-COMPRA\s+([A-Za-z0-9\-\/]+)\s+#\d+:\s+\$([0-9\.]+)\s+·\s+\$([0-9\.]+)/);
+        if (match) {
+          symbol = match[1];
+          priceText = `$${match[2]}`;
+          amountText = `$${match[3]}`;
+        }
+      } else if (msg.includes('Manual')) {
+        const match = msg.match(/Manual\s+([A-Za-z0-9\-\/]+)\s+#\d+:\s+\$([0-9\.]+)/);
+        if (match) {
+          symbol = match[1];
+          priceText = `$${match[2]}`;
+        }
+      } else if (msg.includes('Market Buy real exitoso')) {
+        const match = msg.match(/exitoso para\s+([A-Za-z0-9\-\/]+)/);
+        if (match) {
+          symbol = match[1];
+        }
+      }
+      
+      if (symbol === 'N/A') {
+        for (let w of watchItems) {
+          if (msg.includes(w.symbol)) {
+            symbol = w.symbol;
+            break;
+          }
+        }
+      }
+    } else {
+      if (type === 'sl_' || msg.includes('SL') || msg.includes('Stop Loss')) {
+        emoji = '🔴';
+        actionText = 'VENTA / STOP LOSS ❌';
+      } else if (type === 'tp' || msg.includes('TP') || msg.includes('Take Profit')) {
+        emoji = '🎯';
+        actionText = 'VENTA / TAKE PROFIT ⭐';
+      } else {
+        emoji = '🔵';
+        actionText = 'VENTA / CIERRE 📉';
+      }
+
+      const sellRegex = /(?:SL|TP\d+|CERRADO|CERRADO MANUAL)(?:\s+SOLANA)?(?:\s+CERRADO)?\s+([A-Za-z0-9\-\/]+)\s+\(Entrada:\s+\$([0-9\.]+)\s+➡\s+Salida:\s+\$([0-9\.]+)\)\s+·\s+P&L\s+([^\s]+)(?:\s+\(([^\s]+)\))?/i;
+      const match = msg.match(sellRegex);
+      if (match) {
+        symbol = match[1];
+        const entryVal = match[2];
+        const exitVal = match[3];
+        const pnlVal = match[4].replace('$', '').trim();
+        const pnlPctVal = match[5] ? match[5].trim() : '';
+
+        priceText = `Entrada: $${entryVal} ➡ Salida: $${exitVal}`;
+        
+        const isPositive = !pnlVal.includes('-');
+        const pnlSign = isPositive ? '+' : '';
+        const pnlColor = isPositive ? '🟩' : '🟥';
+        
+        pnlText = `${pnlColor} <b>P&L:</b> ${pnlSign}$${pnlVal.replace('-', '')} (${pnlPctVal ? pnlPctVal : ''})`;
+      } else {
+        for (let w of watchItems) {
+          if (msg.includes(w.symbol)) {
+            symbol = w.symbol;
+            break;
+          }
+        }
+      }
+    }
+
+    let text = `${emoji} <b>NOTIFICACIÓN DE OPERACIÓN (${currentMode}${solanaSubmode})</b>\n\n`;
+    text += `<b>📈 Acción:</b> ${actionText}\n`;
+    text += `<b>🌐 Red:</b> ${platform}\n`;
+    text += `<b>🪙 Token:</b> <b>${symbol}</b>\n`;
+    if (priceText !== 'N/A') {
+      if (isSell) {
+        text += `<b>🚪 Precios:</b> <code>${priceText}</code>\n`;
+      } else {
+        text += `<b>💰 Precio:</b> <code>${priceText}</code>\n`;
+      }
+    }
+    if (amountText !== 'N/A') {
+      text += `<b>💵 Monto:</b> <code>${amountText}</code>\n`;
+    }
+    if (pnlText) {
+      text += `${pnlText}\n`;
+    }
+    
+    text += `\n<i>🤖 Original: ${msg.replace(/</g, '&lt;').replace(/>/g, '&gt;')}</i>`;
+    return text;
+  } catch (e) {
+    console.error('Error formatting Telegram message:', e);
+    return `[⚙️ ${mode.toUpperCase()}] ${msg}`;
+  }
+}
+
 function addLog(msg, type='info') {
   const t = new Date().toLocaleTimeString('es',{hour:'2-digit',minute:'2-digit',second:'2-digit'});
   logs.unshift({ t, msg, type });
   if (logs.length > 200) logs.length = 200;
   console.log(`[${t}] ${msg}`);
   if (['buy', 'sell', 'tp', 'sl_'].includes(type) || msg.includes('Modo cambiado') || msg.includes('activo')) {
-    sendTelegram(`[⚙️ ${mode.toUpperCase()}] ${msg}`);
+    const formatted = formatTradeTelegramMessage(msg, type);
+    sendTelegram(formatted);
   }
 }
 
@@ -436,6 +573,108 @@ async function getTokenBalance(connection, ownerPubKey, tokenMintStr) {
   } catch (e) {
     return 0;
   }
+}
+
+async function getEmptyTokenAccounts(connection, ownerPublicKey) {
+  const emptyAccounts = [];
+  const TOKEN_PROGRAM_ID = new PublicKey('TokenkegQfeZyiNwAJbNbGKPFXCWuBvf9Ss623VQ5DA');
+  const TOKEN_2022_PROGRAM_ID = new PublicKey('Tokenz45L1mCH9Gf8fSZ7Gaq8Tsh7xKcm6ZAnc6q6g7');
+  
+  try {
+    const standardAccounts = await connection.getParsedTokenAccountsByOwner(
+      ownerPublicKey,
+      { programId: TOKEN_PROGRAM_ID }
+    );
+    
+    for (const acc of standardAccounts.value) {
+      const info = acc.account.data.parsed.info;
+      const amount = info.tokenAmount.amount;
+      if (amount === "0") {
+        emptyAccounts.push({
+          pubkey: acc.pubkey,
+          mint: info.mint,
+          programId: TOKEN_PROGRAM_ID
+        });
+      }
+    }
+  } catch (e) {
+    console.error('Error fetching standard token accounts:', e);
+  }
+
+  try {
+    const token2022Accounts = await connection.getParsedTokenAccountsByOwner(
+      ownerPublicKey,
+      { programId: TOKEN_2022_PROGRAM_ID }
+    );
+    
+    for (const acc of token2022Accounts.value) {
+      const info = acc.account.data.parsed.info;
+      const amount = info.tokenAmount.amount;
+      if (amount === "0") {
+        emptyAccounts.push({
+          pubkey: acc.pubkey,
+          mint: info.mint,
+          programId: TOKEN_2022_PROGRAM_ID
+        });
+      }
+    }
+  } catch (e) {
+    console.error('Error fetching Token-2022 accounts:', e);
+  }
+
+  return emptyAccounts;
+}
+
+async function closeEmptyTokenAccounts(connection, ownerPk, feePayerPk = null) {
+  const ownerKeypair = Keypair.fromSecretKey(bs58.decode(ownerPk));
+  const feePayerKeypair = feePayerPk ? Keypair.fromSecretKey(bs58.decode(feePayerPk)) : ownerKeypair;
+
+  const emptyAccounts = await getEmptyTokenAccounts(connection, ownerKeypair.publicKey);
+  if (emptyAccounts.length === 0) {
+    return { success: true, closedCount: 0, solRecovered: 0, txids: [] };
+  }
+
+  const txids = [];
+  const batchSize = 10;
+  
+  for (let i = 0; i < emptyAccounts.length; i += batchSize) {
+    const batch = emptyAccounts.slice(i, i + batchSize);
+    const transaction = new Transaction();
+    
+    for (const acc of batch) {
+      transaction.add(
+        createCloseAccountInstruction(
+          acc.pubkey,
+          ownerKeypair.publicKey,
+          ownerKeypair.publicKey,
+          [],
+          acc.programId
+        )
+      );
+    }
+    
+    transaction.feePayer = feePayerKeypair.publicKey;
+    const { blockhash } = await connection.getLatestBlockhash('confirmed');
+    transaction.recentBlockhash = blockhash;
+    
+    if (feePayerPk) {
+      transaction.sign(ownerKeypair, feePayerKeypair);
+    } else {
+      transaction.sign(ownerKeypair);
+    }
+    
+    const txid = await connection.sendRawTransaction(transaction.serialize());
+    await connection.confirmTransaction(txid, 'confirmed');
+    txids.push(txid);
+  }
+
+  const solRecovered = emptyAccounts.length * 0.002039;
+  return {
+    success: true,
+    closedCount: emptyAccounts.length,
+    solRecovered,
+    txids
+  };
 }
 
 let solanaWalletAddress = '';
@@ -1489,6 +1728,40 @@ app.post('/api/investor/transfer_external', investorAuth, async (req, res) => {
   }
 });
 
+app.post('/api/investor/recover_rent', investorAuth, async (req, res) => {
+  const inv = req.investor;
+  if (!inv.depositWalletPk) {
+    return res.json({ error: 'No tienes una wallet personal activa' });
+  }
+  if (!poolConfig.privateKey) {
+    return res.json({ error: 'El Pool no tiene llaves configuradas' });
+  }
+
+  try {
+    const rpcUrl = appConfig.solanaRpcUrl || process.env.SOLANA_RPC_URL || 'https://api.mainnet-beta.solana.com';
+    const connection = new Connection(rpcUrl, 'confirmed');
+
+    const result = await closeEmptyTokenAccounts(connection, inv.depositWalletPk, poolConfig.privateKey);
+
+    if (result.success) {
+      if (result.closedCount > 0) {
+        addLog(`🧹 [Rent Recovery] El inversor ${inv.name} liberó ${result.closedCount} cuentas de tokens vacías y recuperó +${result.solRecovered.toFixed(5)} SOL de Rent.`, 'info');
+      }
+      return res.json({
+        success: true,
+        closedCount: result.closedCount,
+        solRecovered: result.solRecovered,
+        txids: result.txids
+      });
+    } else {
+      return res.json({ error: 'No se pudo completar el proceso de recuperación' });
+    }
+  } catch (e) {
+    console.error('Error recovering rent for investor:', e);
+    return res.json({ error: e.message || 'Error desconocido al intentar recuperar Rent' });
+  }
+});
+
 
 // ============================================
 // ADMIN MIDDLEWARE
@@ -1502,6 +1775,36 @@ app.use('/api', (req, res, next) => {
 });
 
 // ADMIN ENDPOINTS
+
+app.post('/api/pool/recover_rent', async (req, res) => {
+  if (!poolConfig.privateKey) {
+    return res.json({ error: 'La wallet del Pool no tiene llaves configuradas' });
+  }
+
+  try {
+    const rpcUrl = appConfig.solanaRpcUrl || process.env.SOLANA_RPC_URL || 'https://api.mainnet-beta.solana.com';
+    const connection = new Connection(rpcUrl, 'confirmed');
+
+    const result = await closeEmptyTokenAccounts(connection, poolConfig.privateKey);
+
+    if (result.success) {
+      if (result.closedCount > 0) {
+        addLog(`🧹 [Pool Rent Recovery] El administrador liberó ${result.closedCount} cuentas de tokens vacías de la wallet central y recuperó +${result.solRecovered.toFixed(5)} SOL de Rent.`, 'info');
+      }
+      return res.json({
+        success: true,
+        closedCount: result.closedCount,
+        solRecovered: result.solRecovered,
+        txids: result.txids
+      });
+    } else {
+      return res.json({ error: 'No se pudo completar el proceso de recuperación del Pool' });
+    }
+  } catch (e) {
+    console.error('Error recovering rent for pool:', e);
+    return res.json({ error: e.message || 'Error de red o de RPC al recuperar Rent del Pool' });
+  }
+});
 
 app.get('/api/pool/backup', (req, res) => {
   if (poolConfig.privateKey) {

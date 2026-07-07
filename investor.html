@@ -144,6 +144,14 @@
           </div>
         </div>
 
+        <div class="pt-4 border-t border-[#323249]">
+          <h3 class="font-medium mb-2 flex items-center gap-2"><i data-lucide="sparkles" class="w-4 h-4 text-investor-success"></i> Recuperar SOL Rent</h3>
+          <p class="text-xs text-gray-400 mb-4">Cierra de forma segura las cuentas de tokens vacías creadas por el bot de trading y recupera el depósito de "Rent" (~0.002 SOL por cuenta) de vuelta a tu balance de SOL libre. Las comisiones las paga el Pool.</p>
+          <button id="btn-recover-rent" onclick="recoverRent()" class="w-full bg-investor-success/20 text-investor-success hover:bg-investor-success/30 px-4 py-2 rounded-lg font-medium transition-colors border border-investor-success/50 flex items-center justify-center gap-2">
+            <i data-lucide="trash-2" class="w-4 h-4"></i> Incinerar Cuentas Vacías
+          </button>
+        </div>
+
       </div>
 
       <!-- Historial de Trades / Retiros -->
@@ -409,6 +417,37 @@
       const text = document.getElementById('pool-wallet').innerText;
       navigator.clipboard.writeText(text);
       alert('Dirección copiada');
+    }
+
+    async function recoverRent() {
+      const btn = document.getElementById('btn-recover-rent');
+      const originalText = btn.innerHTML;
+      btn.disabled = true;
+      btn.innerHTML = '⏳ Incinerando...';
+      
+      try {
+        const res = await myFetch('/api/investor/recover_rent', {
+          method: 'POST',
+          headers: { 'Content-Type': 'application/json' }
+        });
+        
+        const data = await res.json();
+        if (data.error) {
+          alert('Error: ' + data.error);
+        } else {
+          if (data.closedCount > 0) {
+            alert('¡Éxito! Se incineraron ' + data.closedCount + ' cuentas de tokens vacías, recuperando +' + data.solRecovered.toFixed(5) + ' SOL directamente a tu balance.');
+          } else {
+            alert('No se encontraron cuentas de tokens vacías para incinerar. Tu wallet está perfectamente limpia.');
+          }
+          loadData();
+        }
+      } catch(e) {
+        alert('Ocurrió un error conectando al servidor');
+      } finally {
+        btn.disabled = false;
+        btn.innerHTML = originalText;
+      }
     }
 
     setInterval(loadData, 5000);
