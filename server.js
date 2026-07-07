@@ -949,53 +949,111 @@ async function executeSolanaTradeInternal(w, side, amountUSDT, price, pk, feePay
     
     const slipPercent = appConfig.solanaSlippage || 2.5;
     const slippageBps = Math.floor(slipPercent * 100);
-    addLog(`🌀 Consultando cotización Jupiter para ${side} ${w.symbol} (Monto: ${rawAmount}, Slippage: ${slipPercent}%)...`, 'info');
     
-    const quoteUrl = `https://api.jup.ag/swap/v1/quote?inputMint=${inputMint}&outputMint=${outputMint}&amount=${rawAmount}&slippageBps=${slippageBps}`;
-    const qr = await fetchWithRetry(quoteUrl, { timeout: 8000 }, 3, 1500);
-    if (!qr.ok) {
-      const errTxt = await qr.text();
-      addLog(`❌ Error Jupiter Quote: ${errTxt}`, 'warn');
-      return { ok: false };
-    }
-    const quoteResponse = await qr.json();
-    
-    let priorityFee = 'auto';
-    if (appConfig.solanaPriorityFee && appConfig.solanaPriorityFee !== 'auto') {
-      priorityFee = parseInt(appConfig.solanaPriorityFee) || 200000;
-    }
-    
-    
-    const bodyPayload = {
-        quoteResponse,
-        userPublicKey,
-        wrapAndUnwrapSol: true,
-        dynamicComputeUnitLimit: true,
-        prioritizationFeeLamports: priorityFee
-    };
-
+    let swapTransaction = null;
     let adminKeypair = null;
     if (feePayerPk) {
        try {
            adminKeypair = Keypair.fromSecretKey(bs58.decode(feePayerPk));
-           bodyPayload.feePayer = adminKeypair.publicKey.toString();
        } catch(e) {}
     }
 
-    const sr = await fetchWithRetry('https://api.jup.ag/swap/v1/swap', {
-      method: 'POST',
-      headers: { 'Content-Type': 'application/json' },
-      timeout: 10000,
-      body: JSON.stringify(bodyPayload)
-    }, 3, 1500);
-
+    addLog(`🌀 Consultando cotización Raydium para ${side} ${w.symbol} (Monto: ${rawAmount}, Slippage: ${slipPercent}%)...`, 'info');
     
-    if (!sr.ok) {
-      const errTxt = await sr.text();
-      addLog(`❌ Error Jupiter Swap API: ${errTxt}`, 'warn');
-      return { ok: false };
+    try {
+      // 1. Get quote from Raydium
+      const quoteUrl = `https://transaction-v1.raydium.io/compute/swap-base-in?inputMint=${inputMint}&outputMint=${outputMint}&amount=${rawAmount}&slippageBps=${slippageBps}&txVersion=V0`;
+      const qr = await fetchWithRetry(quoteUrl, { timeout: 8000 }, 3, 1500);
+      if (!qr.ok) {
+        throw new Error(`Raydium Quote HTTP ${qr.status}`);
+      }
+      const quoteResponse = await qr.json();
+      if (!quoteResponse.success) {
+        throw new Error(quoteResponse.msg || 'Raydium Quote unsuccesful');
+      }
+      
+      // 2. Prepare transaction payload for Raydium
+      let raydiumPriorityFee = '1000';
+      if (appConfig.solanaPriorityFee && appConfig.solanaPriorityFee !== 'auto') {
+        raydiumPriorityFee = String(parseInt(appConfig.solanaPriorityFee) || 1000);
+      }
+      
+      const bodyPayload = {
+        swapResponse: quoteResponse,
+        wallet: userPublicKey,
+        computeUnitPriceMicroLamports: raydiumPriorityFee,
+        txVersion: 'V0',
+        wrapSol: true,
+        unwrapSol: true
+      };
+      
+      // 3. Post to Raydium transaction API
+      const sr = await fetchWithRetry('https://transaction-v1.raydium.io/transaction/swap-base-in', {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        timeout: 10000,
+        body: JSON.stringify(bodyPayload)
+      }, 3, 1500);
+      
+      if (!sr.ok) {
+        throw new Error(`Raydium Swap HTTP ${sr.status}`);
+      }
+      
+      const swapRes = await sr.json();
+      if (!swapRes.success || !swapRes.data || !swapRes.data[0] || !swapRes.data[0].transaction) {
+        throw new Error(swapRes.msg || 'Raydium transaction generation unsuccessful');
+      }
+      
+      swapTransaction = swapRes.data[0].transaction;
+      addLog(`✅ Cotización y Transacción obtenidas con éxito desde Raydium.`, 'info');
+      
+    } catch (raydiumErr) {
+      addLog(`⚠️ Error Raydium Swap: ${raydiumErr.message}. Intentando fallback con Jupiter...`, 'warn');
+      
+      // FALLBACK TO JUPITER
+      addLog(`🌀 Consultando cotización Jupiter para ${side} ${w.symbol} (Monto: ${rawAmount}, Slippage: ${slipPercent}%)...`, 'info');
+      const quoteUrl = `https://api.jup.ag/swap/v1/quote?inputMint=${inputMint}&outputMint=${outputMint}&amount=${rawAmount}&slippageBps=${slippageBps}`;
+      const qr = await fetchWithRetry(quoteUrl, { timeout: 8000 }, 3, 1500);
+      if (!qr.ok) {
+        const errTxt = await qr.text();
+        addLog(`❌ Error Jupiter Quote (Fallback): ${errTxt}`, 'warn');
+        return { ok: false };
+      }
+      const quoteResponse = await qr.json();
+      
+      let priorityFee = 'auto';
+      if (appConfig.solanaPriorityFee && appConfig.solanaPriorityFee !== 'auto') {
+        priorityFee = parseInt(appConfig.solanaPriorityFee) || 200000;
+      }
+      
+      const bodyPayload = {
+          quoteResponse,
+          userPublicKey,
+          wrapAndUnwrapSol: true,
+          dynamicComputeUnitLimit: true,
+          prioritizationFeeLamports: priorityFee
+      };
+
+      if (adminKeypair) {
+         bodyPayload.feePayer = adminKeypair.publicKey.toString();
+      }
+
+      const sr = await fetchWithRetry('https://api.jup.ag/swap/v1/swap', {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        timeout: 10000,
+        body: JSON.stringify(bodyPayload)
+      }, 3, 1500);
+
+      if (!sr.ok) {
+        const errTxt = await sr.text();
+        addLog(`❌ Error Jupiter Swap API (Fallback): ${errTxt}`, 'warn');
+        return { ok: false };
+      }
+      const jupRes = await sr.json();
+      swapTransaction = jupRes.swapTransaction;
+      addLog(`✅ Cotización y Transacción obtenidas con éxito desde Jupiter (Fallback).`, 'info');
     }
-    const { swapTransaction } = await sr.json();
     
     const swapTransactionBuf = Buffer.from(swapTransaction, 'base64');
     const transaction = VersionedTransaction.deserialize(swapTransactionBuf);
