@@ -84,20 +84,30 @@ function httpsFetch(urlStr, options = {}) {
   });
 }
 
-async function fetchWithRetry(url, options = {}, retries = 3, delay = 1000) {
+async function fetchWithRetry(url, options = {}, retries = 3, initialDelay = 1000) {
   const timeoutMs = options.timeout || 10000;
   const fetchOptions = { ...options };
   delete fetchOptions.timeout;
   delete fetchOptions.signal;
 
+  let lastResponse;
+  let delay = initialDelay;
+
   for (let i = 0; i < retries; i++) {
     try {
       const response = await httpsFetch(url, { ...fetchOptions, timeout: timeoutMs });
+      lastResponse = response;
+
       if (response.ok) {
         return response;
       }
+      
       if (response.status === 429 || response.status >= 500) {
         console.warn(`Fetch to ${url} returned status ${response.status}. Retrying... (${i + 1}/${retries})`);
+        // Exponential backoff for 429
+        if (response.status === 429) {
+          delay *= 2;
+        }
       } else {
         return response;
       }
@@ -105,8 +115,12 @@ async function fetchWithRetry(url, options = {}, retries = 3, delay = 1000) {
       if (i === retries - 1) throw err;
       console.warn(`Fetch to ${url} failed: ${err.message}. Retrying in ${delay}ms... (${i + 1}/${retries})`);
     }
-    await new Promise(resolve => setTimeout(resolve, delay));
+    
+    if (i < retries - 1) {
+      await new Promise(resolve => setTimeout(resolve, delay));
+    }
   }
+  return lastResponse;
 }
 
 // ============================================
