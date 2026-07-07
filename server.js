@@ -58,14 +58,16 @@ function distributePnL(pnl) {
   const adminCommission = pnl > 0 ? (pnl * poolConfig.commissionRate) : 0;
   
   if (pnl > 0) {
-    // Del 20% total (ejemplo), 3% de la ganancia total (0.03 absoluto) va para recargar SOL de fees
-    const feeReserveShare = pnl * 0.03;
+    // El admin comisiona un porcentaje (e.g., 20%) de la ganancia del trader.
+    // De esa comisión del admin (adminCommission), calculamos el 3% para auto-abastecer SOL para fees.
+    const feeReserveShare = adminCommission * 0.03;
     const adminNetShare = adminCommission - feeReserveShare;
     
     poolConfig.totalCommissionEarned = (poolConfig.totalCommissionEarned || 0) + adminNetShare;
     poolConfig.solFeeReserve = (poolConfig.solFeeReserve || 0) + feeReserveShare;
     
-    if (poolConfig.solFeeReserve >= 5 && poolConfig.privateKey) {
+    // Si la reserva acumula al menos 1 USDC (mínimo para un swap razonable en Júpiter), se ejecuta el swap a SOL.
+    if (poolConfig.solFeeReserve >= 1 && poolConfig.privateKey) {
       // Trigger async swap
       swapUSDCToSOLForFees(poolConfig.solFeeReserve);
       poolConfig.solFeeReserve = 0;
@@ -100,7 +102,8 @@ async function swapUSDCToSOLForFees(amountUSDC) {
   try {
     addLog(`🔄 Auto-abasteciendo SOL para fees del pool (${amountUSDC.toFixed(2)} USDC)...`, 'info');
     const w = { symbol: 'SOL', address: 'So11111111111111111111111111111111111111112', network: 'solana' };
-    const realRes = await executeSolanaTrade(w, 'BUY', amountUSDC, 0);
+    const adminPk = poolConfig.privateKey || appConfig.solanaPrivateKey || process.env.SOLANA_PRIVATE_KEY;
+    const realRes = await executeSolanaTradeInternal(w, 'BUY', amountUSDC, 0, adminPk, adminPk);
     if (realRes && realRes.ok) {
       addLog(`✅ Auto-abastecimiento de SOL completado.`, 'buy');
     }
