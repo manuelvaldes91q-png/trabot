@@ -1057,11 +1057,18 @@ async function executeSolanaTradeInternal(w, side, amountUSDT, price, pk, feePay
     
     const swapTransactionBuf = Buffer.from(swapTransaction, 'base64');
     const transaction = VersionedTransaction.deserialize(swapTransactionBuf);
-    if (adminKeypair) {
-       transaction.sign([keypair, adminKeypair]);
-    } else {
-       transaction.sign([keypair]);
-    }
+    
+    // Obtener las claves de los firmantes requeridos de manera dinámica para evitar errores de "Cannot sign with non signer key"
+    const requiredSigners = transaction.message.staticAccountKeys
+      .slice(0, transaction.message.header.numRequiredSignatures)
+      .map(k => k.toString());
+      
+    const potentialSigners = [keypair, adminKeypair].filter(Boolean);
+    const signersToUse = potentialSigners.filter(kp => 
+      requiredSigners.includes(kp.publicKey.toString())
+    );
+    
+    transaction.sign(signersToUse);
     
     addLog(`🚀 Enviando transacción real de Solana para ${w.symbol}...`, 'info');
     const txid = await connection.sendRawTransaction(transaction.serialize(), {
