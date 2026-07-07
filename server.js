@@ -441,11 +441,11 @@ async function updateSolanaWalletInfo() {
     solanaWalletAddress = keypair.publicKey.toString();
     
     const now = Date.now();
-    if (now - lastSolanaBalanceUpdate < 10000 && solMode === 'wallet') {
+    if (now - lastSolanaBalanceUpdate < 10000 && (solMode === 'wallet' || solMode === 'pool')) {
       return;
     }
     
-    if (solMode !== 'wallet') {
+    if (solMode !== 'wallet' && solMode !== 'pool') {
         solanaUsdcBalance = SIM.balance || 1000;
         solanaSolBalance = SIM.solBalance || 10;
         return;
@@ -468,7 +468,7 @@ async function updateSolanaWalletInfo() {
 }
 
 async function executeSolanaTrade(w, side, amountUSDT, price) {
-  if (solMode !== 'wallet') return { ok: true, txid: 'simulated' };
+  if (solMode !== 'wallet' && solMode !== 'pool') return { ok: true, txid: 'simulated' };
   
   const pk = poolConfig.privateKey || appConfig.solanaPrivateKey || process.env.SOLANA_PRIVATE_KEY;
   if (!pk) {
@@ -833,7 +833,7 @@ async function runSolanaCycle() {
           addLog(`⚡ [Solana Instant] Disparando swap compra para ${w.symbol} a $${fpZ(cp,cp)}...`, 'info');
           const realRes = await executeOrder(w, 'BUY', o.amount, cp);
           if (realRes && realRes.ok) {
-            if (solMode !== 'wallet') {
+            if (solMode !== 'wallet' && solMode !== 'pool') {
                 SIM.balance -= o.amount;
                 SIM.solBalance += o.amount / cp;
             }
@@ -874,7 +874,7 @@ async function runSolanaCycle() {
                pnl = realRes.exactAmountUSDT - inv;
                addLog(`ℹ️ [Solana Real] PNL exacto ajustado post-swap (SL): $${pnl.toFixed(2)}`, 'info');
             }
-            if (solMode !== 'wallet') {
+            if (solMode !== 'wallet' && solMode !== 'pool') {
                 SIM.balance += inv + pnl;
                 SIM.solBalance -= (inv / avg);
             }
@@ -900,7 +900,7 @@ async function runSolanaCycle() {
                pnl = realRes.exactAmountUSDT - inv;
                addLog(`ℹ️ [Solana Real] PNL exacto ajustado post-swap (TP1): $${pnl.toFixed(2)}`, 'info');
             }
-            if (solMode !== 'wallet') {
+            if (solMode !== 'wallet' && solMode !== 'pool') {
                 SIM.balance += inv + pnl;
                 SIM.solBalance -= (inv / avg);
             }
@@ -927,7 +927,7 @@ async function runSolanaCycle() {
                pnl = realRes.exactAmountUSDT - inv;
                addLog(`ℹ️ [Solana Real] PNL exacto ajustado post-swap (TP2): $${pnl.toFixed(2)}`, 'info');
             }
-            if (solMode !== 'wallet') {
+            if (solMode !== 'wallet' && solMode !== 'pool') {
                 SIM.balance += inv + pnl;
                 SIM.solBalance -= (inv / avg);
             }
@@ -958,7 +958,7 @@ let solanaTimer = null;
 let depositTimer = null;
 
 async function checkPendingDeposits() {
-  if (solMode !== 'wallet') return;
+  if (solMode !== 'wallet' && solMode !== 'pool') return;
   const poolPk = poolConfig.privateKey || appConfig.solanaPrivateKey || process.env.SOLANA_PRIVATE_KEY;
   if (!poolPk) return;
   
@@ -1472,6 +1472,16 @@ app.post('/api/pool/approve_deposit', (req, res) => {
   res.json({ success: true, poolConfig });
 });
 
+app.post('/api/pool/edit_investor_deposit', (req, res) => {
+  const { name, amount } = req.body;
+  let inv = poolConfig.investors.find(i => i.name.toLowerCase() === name.toLowerCase());
+  if (inv) {
+    inv.deposit = Number(amount) || 0;
+    saveState();
+  }
+  res.json({ success: true, poolConfig });
+});
+
 app.post('/api/pool/config', (req, res) => {
   const { walletAddress, commissionRate } = req.body;
   if (walletAddress !== undefined) poolConfig.walletAddress = walletAddress;
@@ -1741,7 +1751,7 @@ app.get('/api/state', async (req, res) => {
   });
   
   res.json({ 
-    SIM, 
+    SIM: solMode === 'pool' ? { ...SIM, balance: poolConfig.investors.reduce((a, i) => a + (i.deposit || 0), 0) } : SIM, 
     watchItems, 
     logs, 
     monitorOn, 
@@ -2035,7 +2045,7 @@ app.post('/api/action', async (req, res) => {
     }
     if (payload.solMode) {
       solMode = payload.solMode;
-      addLog(`Modo Solana cambiado a: ${solMode === 'wallet' ? 'WALLET REAL' : 'SIMULADO'}`, 'warn');
+      addLog(`Modo Solana cambiado a: ${solMode === 'wallet' ? 'WALLET REAL' : (solMode === 'pool' ? 'POOL REAL' : 'SIMULADO')}`, 'warn');
     }
     saveState();
     return res.json({ ok: true });
@@ -2090,7 +2100,7 @@ app.post('/api/action', async (req, res) => {
                  pnl = res.exactAmountUSDT - inv;
                  addLog(`ℹ️ [Solana Real] PNL exacto ajustado post-swap (Manual): $${pnl.toFixed(2)}`, 'info');
               }
-              if (solMode !== 'wallet') {
+              if (solMode !== 'wallet' && solMode !== 'pool') {
                  SIM.balance += inv + pnl;
                  SIM.solBalance -= (inv / avg);
               }
@@ -2162,7 +2172,7 @@ app.post('/api/action', async (req, res) => {
     }
     
     if (network === 'solana') {
-       if (solMode !== 'wallet') {
+       if (solMode !== 'wallet' && solMode !== 'pool') {
          SIM.balance -= order.amount;
          SIM.solBalance += (order.amount / cp);
        }

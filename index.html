@@ -226,6 +226,7 @@ select.inp{cursor:pointer}
   </select>
   <select id="solModeSel" class="inp" style="width:120px;font-size:9px;padding:2px 4px;margin-left:10px;background:rgba(255,255,255,.05);border-color:var(--bdr2);color:var(--t);" onchange="changeSolMode()">
     <option value="sim">💰 Saldo Simulado</option>
+    <option value="pool">👥 Saldo Pool (Real)</option>
     <option value="wallet">🟣 Wallet Real</option>
   </select>
   <span id="solanaVpsWallet" style="display:none;font-family:var(--mono);font-size:8px;background:rgba(20,241,149,0.12);padding:4px 8px;border-radius:4px;border:1px solid rgba(20,241,149,0.3);color:#14f195;align-items:center;gap:4px;margin-left:8px">
@@ -483,7 +484,7 @@ function changeSolMode() {
     headers:{'Content-Type':'application/json'}, 
     body: JSON.stringify({action: 'setMode', payload: {solMode: m}})
   }).then(() => {
-    addLog(`Solana Balance Mode cambiado a: ${m === 'wallet' ? 'WALLET' : 'SIMULADO'}`, 'info');
+    addLog(`Solana Balance Mode cambiado a: ${m.toUpperCase()}`, 'info');
     // Refresh to update UI immediately
     initServerState();
   });
@@ -887,6 +888,7 @@ async function openPoolModal() {
               <div><strong style="color:var(--t)">${i.name}</strong> <span style="font-size:9px">(Deposit: $${(i.deposit||0).toFixed(2)})</span>${statusBadge}</div>
               <div style="display:flex;align-items:center;gap:10px;">
                 <div style="color:${(i.profit||0)>0?'var(--g)':'var(--r)'}">${(i.profit||0)>=0?'+':''}$${(i.profit||0).toFixed(2)} PNL</div>
+                <button onclick="editInvestorDeposit('${i.name}', ${i.deposit})" class="btn btn-g" style="font-size:9px;padding:2px 5px;">Editar Depósito</button>
                 <button onclick="deletePoolInvestor('${i.name}')" class="btn" style="background:var(--r);font-size:9px;padding:2px 5px;">Eliminar</button>
               </div>
             </div>
@@ -995,6 +997,29 @@ async function approveDeposit(name, expected) {
   if (data.error) alert('Error: ' + data.error);
   else {
     alert('Depósito aprobado.');
+    const el = document.getElementById('poolModalOverlay');
+    if (el) el.remove();
+    openPoolModal();
+  }
+}
+
+async function editInvestorDeposit(name, current) {
+  const amtStr = prompt(`¿Nuevo balance depositado (real) para ${name}?`, current);
+  if (amtStr === null) return;
+  const amount = parseFloat(amtStr);
+  if (isNaN(amount) || amount < 0) {
+    alert("Cantidad inválida");
+    return;
+  }
+  const res = await myFetch('/api/pool/edit_investor_deposit', {
+    method: 'POST',
+    headers: {'Content-Type':'application/json'},
+    body: JSON.stringify({ name, amount })
+  });
+  const data = await res.json();
+  if (data.error) alert('Error: ' + data.error);
+  else {
+    alert('Depósito actualizado.');
     const el = document.getElementById('poolModalOverlay');
     if (el) el.remove();
     openPoolModal();
@@ -1292,7 +1317,7 @@ function updateSolanaVpsWalletUI(vpsSolWallet) {
     const solVal = vpsSolWallet.sol !== undefined ? vpsSolWallet.sol : 0;
     const usdcVal = vpsSolWallet.usdc !== undefined ? vpsSolWallet.usdc : 0;
     const solMode = document.getElementById('solModeSel').value;
-    const solModeLabel = solMode === 'wallet' ? '🟣 Wallet' : '💰 Simulado';
+    const solModeLabel = solMode === 'wallet' ? '🟣 Wallet' : (solMode === 'pool' ? '👥 Pool' : '💰 Simulado');
     
     if (base === 'USDC') {
       balText = usdcVal.toFixed(2) + ' USDC | ' + solVal.toFixed(3) + ' SOL';
