@@ -811,6 +811,7 @@ async function openPoolModal() {
       <div style="margin-bottom:10px">
         <div style="font-size:10px;color:var(--t2);margin-bottom:4px">Billetera del Sistema (Pool) - Auto-generada</div>
         <input type="text" id="cfgPoolWallet" class="inp" readonly style="width:100%; opacity: 0.7; cursor: not-allowed;">
+        <div style="font-family:var(--mono);font-size:10px;color:#14f195;margin-top:4px" id="poolWalletBalances">Balance: --</div>
       </div>
       <div style="margin-bottom:15px">
         <div style="font-size:10px;color:var(--t2);margin-bottom:4px">Comisión del Administrador (%)</div>
@@ -863,6 +864,7 @@ async function openPoolModal() {
     const data = await res.json();
     if(data.poolConfig) {
       document.getElementById('cfgPoolWallet').value = data.poolConfig.walletAddress || '';
+      document.getElementById('poolWalletBalances').innerText = `Balance: ${data.solBalance ? data.solBalance.toFixed(4) : '0.0000'} SOL | $${data.usdcBalance ? data.usdcBalance.toFixed(2) : '0.00'} USDC`;
       document.getElementById('cfgPoolCom').value = (data.poolConfig.commissionRate * 100).toFixed(1);
       document.getElementById('lblAdminCom').innerText = (data.poolConfig.totalCommissionEarned || 0).toFixed(2);
       
@@ -873,7 +875,7 @@ async function openPoolModal() {
         list.innerHTML = data.poolConfig.investors.map(i => {
           let statusBadge = '';
           if (i.depositStatus === 'pending_user' || i.depositStatus === 'pending_admin') {
-            statusBadge = `<span style="font-size:9px;color:var(--t2);background:var(--bg3);padding:2px 4px;border-radius:4px;margin-left:5px">Esperando</span> <button onclick="approveDeposit('${i.name}')" class="btn btn-g btn-sm" style="font-size:9px;padding:2px 5px;margin-left:5px">Forzar</button>`;
+            statusBadge = `<span style="font-size:9px;color:var(--t2);background:var(--bg3);padding:2px 4px;border-radius:4px;margin-left:5px">Esperando</span> <button onclick="approveDeposit('${i.name}', ${i.expectedDeposit || 0})" class="btn btn-g btn-sm" style="font-size:9px;padding:2px 5px;margin-left:5px">Forzar</button>`;
           }
           let walletInfo = '';
           if (i.depositWallet) {
@@ -976,12 +978,18 @@ async function withdrawAdmin() {
   }
 }
 
-async function approveDeposit(name) {
-  if(!confirm(`¿Seguro que verificaste el depósito de ${name}?`)) return;
+async function approveDeposit(name, expected) {
+  const amtStr = prompt(`¿Qué cantidad USDC deseas aprobar para ${name}?`, expected || "50.00");
+  if (!amtStr) return;
+  const amount = parseFloat(amtStr);
+  if (isNaN(amount) || amount <= 0) {
+    alert("Cantidad inválida");
+    return;
+  }
   const res = await myFetch('/api/pool/approve_deposit', {
     method: 'POST',
     headers: {'Content-Type':'application/json'},
-    body: JSON.stringify({ name })
+    body: JSON.stringify({ name, amount })
   });
   const data = await res.json();
   if (data.error) alert('Error: ' + data.error);

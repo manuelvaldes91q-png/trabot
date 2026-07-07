@@ -1401,7 +1401,7 @@ app.get('/api/pool/backup', (req, res) => {
 app.get('/api/pool', (req, res) => {
   const safePoolConfig = { ...poolConfig };
   delete safePoolConfig.privateKey;
-  res.json({ poolConfig: safePoolConfig, trades: SIM.trades || [] });
+  res.json({ poolConfig: safePoolConfig, trades: SIM.trades || [], solBalance: solanaSolBalance, usdcBalance: solanaUsdcBalance });
 });
 
 app.post('/api/pool/investor', (req, res) => {
@@ -1461,10 +1461,10 @@ app.post('/api/pool/delete_investor', (req, res) => {
 });
 
 app.post('/api/pool/approve_deposit', (req, res) => {
-  const { name } = req.body;
+  const { name, amount } = req.body;
   let inv = poolConfig.investors.find(i => i.name.toLowerCase() === name.toLowerCase());
   if (inv && (inv.depositStatus === 'pending_admin' || inv.depositStatus === 'pending_user')) {
-    inv.deposit += inv.expectedDeposit || 0;
+    inv.deposit += (amount !== undefined ? Number(amount) : (inv.expectedDeposit || 0));
     inv.expectedDeposit = 0;
     inv.depositStatus = 'active';
     saveState();
