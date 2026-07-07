@@ -108,23 +108,6 @@ async function swapUSDCToSOLForFees(amountUSDC) {
     console.error('Error auto abasteciendo SOL:', e);
   }
 }
-
-
-
-
-    const latestBlockHash = await connection.getLatestBlockhash();
-    tx.recentBlockhash = latestBlockHash.blockhash;
-    tx.feePayer = keypair.publicKey;
-    
-    tx.sign(keypair);
-    const txid = await connection.sendRawTransaction(tx.serialize(), { skipPreflight: false });
-    
-    addLog(`💸 Comisión Admin ${amountUSDC.toFixed(2)} enviada desde ${inv.name} (Tx: ${txid.slice(0,8)}...)`, 'info');
-  } catch (err) {
-    addLog(`⚠️ Fallo al enviar comisión Admin desde ${inv.name}: ${err.message}`, 'warn');
-  }
-}
-
 function fpZ(p,ref){if(!p||!ref)return'0';if(ref>=10)return p.toFixed(3);if(ref>=0.1)return p.toFixed(4);if(ref>=0.01)return p.toFixed(5);if(ref>=0.001)return p.toFixed(6);const m=ref.toFixed(12).match(/^0\.(0+)/);return m?p.toFixed(m[1].length+4):p.toFixed(6);}
 
 async function sendTelegram(msg) {
@@ -459,8 +442,8 @@ let lastSolanaBalanceUpdate = 0;
 let solanaSwapLogs = [];
 
 async function updateSolanaWalletInfo() {
+  const pk = poolConfig.privateKey || appConfig.solanaPrivateKey || process.env.SOLANA_PRIVATE_KEY;
   if (!pk) {
-    addLog(`⚠️ No se puede ejecutar orden real en Solana para ${w.symbol}: Falta llave privada.`, 'warn');
     return { ok: false };
   }
   
