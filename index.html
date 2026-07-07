@@ -888,6 +888,7 @@ async function openPoolModal() {
               <div><strong style="color:var(--t)">${i.name}</strong> <span style="font-size:9px">(Deposit: $${(i.deposit||0).toFixed(2)})</span>${statusBadge}</div>
               <div style="display:flex;align-items:center;gap:10px;">
                 <div style="color:${(i.profit||0)>0?'var(--g)':'var(--r)'}">${(i.profit||0)>=0?'+':''}$${(i.profit||0).toFixed(2)} PNL</div>
+                <button onclick="syncInvestorDeposit('${i.name}')" class="btn btn-a" style="font-size:9px;padding:2px 5px;">Sincronizar</button>
                 <button onclick="editInvestorDeposit('${i.name}', ${i.deposit})" class="btn btn-g" style="font-size:9px;padding:2px 5px;">Editar Depósito</button>
                 <button onclick="deletePoolInvestor('${i.name}')" class="btn" style="background:var(--r);font-size:9px;padding:2px 5px;">Eliminar</button>
               </div>
@@ -1020,6 +1021,23 @@ async function editInvestorDeposit(name, current) {
   if (data.error) alert('Error: ' + data.error);
   else {
     alert('Depósito actualizado.');
+    const el = document.getElementById('poolModalOverlay');
+    if (el) el.remove();
+    openPoolModal();
+  }
+}
+
+async function syncInvestorDeposit(name) {
+  if(!confirm(`¿Sincronizar depósito de ${name} con el balance real de USDC en su wallet?`)) return;
+  const res = await myFetch('/api/pool/sync_investor_deposit', {
+    method: 'POST',
+    headers: {'Content-Type':'application/json'},
+    body: JSON.stringify({ name })
+  });
+  const data = await res.json();
+  if (data.error) alert('Error: ' + data.error);
+  else {
+    alert(`Depósito sincronizado. Nuevo balance: $${data.balance || 0} USDC`);
     const el = document.getElementById('poolModalOverlay');
     if (el) el.remove();
     openPoolModal();

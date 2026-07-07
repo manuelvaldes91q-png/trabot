@@ -1482,6 +1482,33 @@ app.post('/api/pool/edit_investor_deposit', (req, res) => {
   res.json({ success: true, poolConfig });
 });
 
+app.post('/api/pool/sync_investor_deposit', async (req, res) => {
+  const { name } = req.body;
+  let inv = poolConfig.investors.find(i => i.name.toLowerCase() === name.toLowerCase());
+  if (inv && inv.depositWallet) {
+    try {
+      const rpcUrl = appConfig.solanaRpcUrl || process.env.SOLANA_RPC_URL || 'https://api.mainnet-beta.solana.com';
+      const connection = new Connection(rpcUrl, 'confirmed');
+      const baseMint = new PublicKey('EPjFWdd5AufqSSqeM2qN1xzybapC8G4wEGGkZwyTDt1v'); // USDC
+      const invTokenAccountAddress = await getAssociatedTokenAddress(baseMint, new PublicKey(inv.depositWallet));
+      const accountInfo = await connection.getTokenAccountBalance(invTokenAccountAddress);
+      const balance = Number(accountInfo.value.amount) / 1e6;
+      inv.deposit = balance;
+      inv.depositStatus = 'active';
+      saveState();
+      res.json({ success: true, poolConfig, balance });
+    } catch (e) {
+      console.error('Error syncing deposit:', e.message);
+      // If error (e.g., token account doesn't exist), maybe balance is 0
+      inv.deposit = 0;
+      saveState();
+      res.json({ success: true, poolConfig, balance: 0, note: 'Token account no encontrado (0 USDC)' });
+    }
+  } else {
+    res.json({ error: 'Inversor no encontrado o sin wallet' });
+  }
+});
+
 app.post('/api/pool/config', (req, res) => {
   const { walletAddress, commissionRate } = req.body;
   if (walletAddress !== undefined) poolConfig.walletAddress = walletAddress;
