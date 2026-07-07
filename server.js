@@ -76,7 +76,23 @@ function distributePnL(pnl) {
   
   for (let inv of poolConfig.investors) {
     const share = (inv.deposit || 0) / totalDeposits;
-    inv.profit = (inv.profit || 0) + (netPnL * share);
+    const invNetPnL = netPnL * share;
+    inv.profit = (inv.profit || 0) + invNetPnL;
+    
+    if (solMode !== 'pool') {
+       // Si NO es modo pool, el saldo es virtual y se suma aquí.
+       // Si es modo pool, el saldo real se sincroniza de la wallet. Pero temporalmente lo sumamos para la UI:
+       inv.deposit = (inv.deposit || 0) + invNetPnL;
+    } else {
+       inv.deposit = (inv.deposit || 0) + invNetPnL;
+       
+       if (pnl > 0 && inv.depositWalletPk && poolConfig.walletAddress) {
+          const invAdminFee = (pnl * share) * poolConfig.commissionRate;
+          if (invAdminFee > 0) {
+              transferAdminCommission(inv, invAdminFee).catch(e => console.error(e));
+          }
+       }
+    }
   }
 }
 
@@ -93,6 +109,21 @@ async function swapUSDCToSOLForFees(amountUSDC) {
   }
 }
 
+
+
+
+    const latestBlockHash = await connection.getLatestBlockhash();
+    tx.recentBlockhash = latestBlockHash.blockhash;
+    tx.feePayer = keypair.publicKey;
+    
+    tx.sign(keypair);
+    const txid = await connection.sendRawTransaction(tx.serialize(), { skipPreflight: false });
+    
+    addLog(`💸 Comisión Admin ${amountUSDC.toFixed(2)} enviada desde ${inv.name} (Tx: ${txid.slice(0,8)}...)`, 'info');
+  } catch (err) {
+    addLog(`⚠️ Fallo al enviar comisión Admin desde ${inv.name}: ${err.message}`, 'warn');
+  }
+}
 
 function fpZ(p,ref){if(!p||!ref)return'0';if(ref>=10)return p.toFixed(3);if(ref>=0.1)return p.toFixed(4);if(ref>=0.01)return p.toFixed(5);if(ref>=0.001)return p.toFixed(6);const m=ref.toFixed(12).match(/^0\.(0+)/);return m?p.toFixed(m[1].length+4):p.toFixed(6);}
 
@@ -428,12 +459,9 @@ let lastSolanaBalanceUpdate = 0;
 let solanaSwapLogs = [];
 
 async function updateSolanaWalletInfo() {
-  const pk = poolConfig.privateKey || appConfig.solanaPrivateKey || process.env.SOLANA_PRIVATE_KEY;
   if (!pk) {
-    solanaWalletAddress = '';
-    solanaSolBalance = 0;
-    solanaUsdcBalance = 0;
-    return;
+    addLog(`⚠️ No se puede ejecutar orden real en Solana para ${w.symbol}: Falta llave privada.`, 'warn');
+    return { ok: false };
   }
   
   try {
@@ -469,10 +497,93 @@ async function updateSolanaWalletInfo() {
 
 async function executeSolanaTrade(w, side, amountUSDT, price) {
   if (solMode !== 'wallet' && solMode !== 'pool') return { ok: true, txid: 'simulated' };
+
+  if (solMode === 'pool') {
+     const activeInvestors = poolConfig.investors.filter(i => i.depositStatus === 'active' && i.deposit > 0 && i.depositWalletPk);
+     const totalDeposit = activeInvestors.reduce((s, i) => s + (i.deposit || 0), 0);
+     if (totalDeposit <= 0) {
+        addLog(`⚠️ Pool vacía, trade abortado.`, 'warn');
+        return { ok: false };
+     }
+
+     let allOk = true;
+     let totalExactAmountUSDT = 0;
+     const mainTxid = 'pool_multi';
+
+     addLog(`👥 Ejecutando trade ${side} en ${activeInvestors.length} wallets del pool...`, 'info');
+
+     for (const inv of activeInvestors) {
+        const invShare = inv.deposit / totalDeposit;
+        const invAmountUSDT = amountUSDT * invShare;
+        if (invAmountUSDT < 0.5) { 
+           addLog(`⏭️ Saltando ${inv.name} por monto muy pequeño ($${invAmountUSDT.toFixed(2)})`, 'info');
+           continue;
+        }
+
+        const adminPk = poolConfig.privateKey || appConfig.solanaPrivateKey || process.env.SOLANA_PRIVATE_KEY;
+        const res = await executeSolanaTradeInternal(w, side, invAmountUSDT, price, inv.depositWalletPk, adminPk);
+        if (res.ok) {
+           if (res.exactAmountUSDT) totalExactAmountUSDT += res.exactAmountUSDT;
+        } else {
+           allOk = false;
+        }
+
+        await new Promise(r => setTimeout(r, 500)); // avoid rate limits
+     }
+
+     return { ok: allOk, txid: mainTxid, exactAmountUSDT: totalExactAmountUSDT };
+  } else {
+     const pk = poolConfig.privateKey || appConfig.solanaPrivateKey || process.env.SOLANA_PRIVATE_KEY;
+     return await executeSolanaTradeInternal(w, side, amountUSDT, price, pk);
+  }
+}
+
+async function transferAdminCommission(inv, amountUSDC) {
+  if (amountUSDC <= 0) return;
+  const rpcUrl = appConfig.solanaRpcUrl || process.env.SOLANA_RPC_URL || 'https://api.mainnet-beta.solana.com';
+  const connection = new Connection(rpcUrl, 'confirmed');
+  try {
+    const keypair = Keypair.fromSecretKey(bs58.decode(inv.depositWalletPk));
+    const adminPubKey = new PublicKey(poolConfig.walletAddress);
+    
+    const usdcMint = new PublicKey('EPjFWdd5AufqSSqeM2qN1xzybapC8G4wEGGkZwyTDt1v');
+    const sourceTokenAccount = await getAssociatedTokenAddress(usdcMint, keypair.publicKey);
+    const destTokenAccount = await getAssociatedTokenAddress(usdcMint, adminPubKey);
+
+    const decimals = 6;
+    const rawAmount = Math.floor(amountUSDC * (10 ** decimals));
+
+    const tx = new Transaction().add(
+       createTransferInstruction(
+          sourceTokenAccount,
+          destTokenAccount,
+          keypair.publicKey,
+          rawAmount
+       )
+    );
+
+    
+    const adminPk = poolConfig.privateKey || appConfig.solanaPrivateKey || process.env.SOLANA_PRIVATE_KEY;
+    const adminKeypair = Keypair.fromSecretKey(bs58.decode(adminPk));
+
+    const latestBlockHash = await connection.getLatestBlockhash();
+    tx.recentBlockhash = latestBlockHash.blockhash;
+    tx.feePayer = adminKeypair.publicKey; // Admin pays the SOL fee
+    
+    tx.sign(keypair, adminKeypair); // Both sign
+    const txid = await connection.sendRawTransaction(tx.serialize(), { skipPreflight: false });
+    
+    addLog(`💸 Comisión Admin $${amountUSDC.toFixed(2)} enviada desde ${inv.name} (Tx: ${txid.slice(0,8)}...)`, 'info');
+  } catch (err) {
+    addLog(`⚠️ Fallo al enviar comisión Admin desde ${inv.name}: ${err.message}`, 'warn');
+  }
+}
+
+async function executeSolanaTradeInternal(w, side, amountUSDT, price, pk, feePayerPk = null) {
+  if (solMode !== 'wallet' && solMode !== 'pool') return { ok: true, txid: 'simulated' };
   
-  const pk = poolConfig.privateKey || appConfig.solanaPrivateKey || process.env.SOLANA_PRIVATE_KEY;
   if (!pk) {
-    addLog(`⚠️ No se puede ejecutar orden real en Solana para ${w.symbol}: Falta Solana Private Key en Config o Pool.`, 'warn');
+    addLog(`⚠️ No se puede ejecutar orden real en Solana para ${w.symbol}: Falta llave privada.`, 'warn');
     return { ok: false };
   }
   
@@ -537,18 +648,30 @@ async function executeSolanaTrade(w, side, amountUSDT, price) {
       priorityFee = parseInt(appConfig.solanaPriorityFee) || 200000;
     }
     
-    const sr = await fetch('https://quote-api.jup.ag/v6/swap', {
-      method: 'POST',
-      headers: { 'Content-Type': 'application/json' },
-      signal: AbortSignal.timeout(10000),
-      body: JSON.stringify({
+    
+    const bodyPayload = {
         quoteResponse,
         userPublicKey,
         wrapAndUnwrapSol: true,
         dynamicComputeUnitLimit: true,
         prioritizationFeeLamports: priorityFee
-      })
+    };
+
+    let adminKeypair = null;
+    if (feePayerPk) {
+       try {
+           adminKeypair = Keypair.fromSecretKey(bs58.decode(feePayerPk));
+           bodyPayload.feePayer = adminKeypair.publicKey.toString();
+       } catch(e) {}
+    }
+
+    const sr = await fetch('https://quote-api.jup.ag/v6/swap', {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      signal: AbortSignal.timeout(10000),
+      body: JSON.stringify(bodyPayload)
     });
+
     
     if (!sr.ok) {
       const errTxt = await sr.text();
@@ -559,7 +682,11 @@ async function executeSolanaTrade(w, side, amountUSDT, price) {
     
     const swapTransactionBuf = Buffer.from(swapTransaction, 'base64');
     const transaction = VersionedTransaction.deserialize(swapTransactionBuf);
-    transaction.sign([keypair]);
+    if (adminKeypair) {
+       transaction.sign([keypair, adminKeypair]);
+    } else {
+       transaction.sign([keypair]);
+    }
     
     addLog(`🚀 Enviando transacción real de Solana para ${w.symbol}...`, 'info');
     const txid = await connection.sendRawTransaction(transaction.serialize(), {
@@ -2307,3 +2434,27 @@ async function startServer() {
 }
 
 startServer();
+
+
+setInterval(async () => {
+  if (solMode !== 'pool') return;
+  const rpcUrl = appConfig.solanaRpcUrl || process.env.SOLANA_RPC_URL || 'https://api.mainnet-beta.solana.com';
+  const connection = new Connection(rpcUrl, 'confirmed');
+  const baseMint = new PublicKey('EPjFWdd5AufqSSqeM2qN1xzybapC8G4wEGGkZwyTDt1v');
+  let updated = false;
+
+  for (let inv of poolConfig.investors) {
+    if (inv.depositStatus === 'active' && inv.depositWallet) {
+      try {
+        const invTokenAccountAddress = await getAssociatedTokenAddress(baseMint, new PublicKey(inv.depositWallet));
+        const accountInfo = await connection.getTokenAccountBalance(invTokenAccountAddress);
+        const balance = Number(accountInfo.value.amount) / 1e6;
+        if (Math.abs(inv.deposit - balance) > 0.05) {
+            inv.deposit = balance;
+            updated = true;
+        }
+      } catch (e) { }
+    }
+  }
+  if (updated) saveState();
+}, 10 * 60 * 1000);
