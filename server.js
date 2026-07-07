@@ -8,6 +8,8 @@ import "dotenv/config";
 import { Connection, Keypair, VersionedTransaction, PublicKey, SystemProgram, Transaction, sendAndConfirmTransaction } from '@solana/web3.js';
 import { getAssociatedTokenAddress, createTransferInstruction, getAccount, createCloseAccountInstruction } from '@solana/spl-token';
 import bs58 from 'bs58';
+import https from "https";
+import http from "http";
 
 const __filename = fileURLToPath(import.meta.url);
 const __dirname = path.dirname(__filename);
@@ -17,6 +19,71 @@ app.use(express.json());
 
 const PORT = process.env.PORT || 3000;
 
+function httpsFetch(urlStr, options = {}) {
+  return new Promise((resolve, reject) => {
+    try {
+      const urlObj = new URL(urlStr);
+      const isHttps = urlObj.protocol === 'https:';
+      const lib = isHttps ? https : http;
+      
+      const headers = { ...options.headers };
+      let body = options.body;
+      
+      if (body) {
+        if (typeof body !== 'string' && !Buffer.isBuffer(body)) {
+          body = JSON.stringify(body);
+        }
+        if (!headers['Content-Length'] && !headers['content-length']) {
+          headers['Content-Length'] = Buffer.byteLength(body);
+        }
+      }
+      
+      const reqOptions = {
+        method: options.method || 'GET',
+        headers,
+        timeout: options.timeout || 10000,
+      };
+      
+      const req = lib.request(urlObj, reqOptions, (res) => {
+        const chunks = [];
+        res.on('data', (chunk) => chunks.push(chunk));
+        res.on('end', () => {
+          const buffer = Buffer.concat(chunks);
+          const textContent = buffer.toString('utf8');
+          
+          resolve({
+            ok: res.statusCode >= 200 && res.statusCode < 300,
+            status: res.statusCode,
+            headers: {
+              get: (name) => {
+                const val = res.headers[name.toLowerCase()];
+                return Array.isArray(val) ? val.join(', ') : val;
+              },
+            },
+            text: async () => textContent,
+            json: async () => JSON.parse(textContent),
+          });
+        });
+      });
+      
+      req.on('error', (err) => {
+        reject(err);
+      });
+      
+      req.on('timeout', () => {
+        req.destroy(new Error('Request timeout'));
+      });
+      
+      if (body) {
+        req.write(body);
+      }
+      req.end();
+    } catch (e) {
+      reject(e);
+    }
+  });
+}
+
 async function fetchWithRetry(url, options = {}, retries = 3, delay = 1000) {
   const timeoutMs = options.timeout || 10000;
   const fetchOptions = { ...options };
@@ -24,11 +91,8 @@ async function fetchWithRetry(url, options = {}, retries = 3, delay = 1000) {
   delete fetchOptions.signal;
 
   for (let i = 0; i < retries; i++) {
-    const controller = new AbortController();
-    const id = setTimeout(() => controller.abort(), timeoutMs);
     try {
-      const response = await fetch(url, { ...fetchOptions, signal: controller.signal });
-      clearTimeout(id);
+      const response = await httpsFetch(url, { ...fetchOptions, timeout: timeoutMs });
       if (response.ok) {
         return response;
       }
@@ -38,7 +102,6 @@ async function fetchWithRetry(url, options = {}, retries = 3, delay = 1000) {
         return response;
       }
     } catch (err) {
-      clearTimeout(id);
       if (i === retries - 1) throw err;
       console.warn(`Fetch to ${url} failed: ${err.message}. Retrying in ${delay}ms... (${i + 1}/${retries})`);
     }
