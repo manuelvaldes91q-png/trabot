@@ -811,7 +811,10 @@ async function openPoolModal() {
       </div>
       <div style="margin-bottom:10px">
         <div style="font-size:10px;color:var(--t2);margin-bottom:4px">Billetera del Sistema (Pool)</div>
-        <input type="text" id="cfgPoolWallet" class="inp" style="width:100%;">
+        <div style="display:flex;gap:4px">
+          <input type="text" id="cfgPoolWallet" class="inp" style="width:100%;" readonly>
+          <button class="btn btn-g" onclick="rotatePoolWallet(this)">Rotar</button>
+        </div>
         <div style="font-family:var(--mono);font-size:10px;color:#14f195;margin-top:4px" id="poolWalletBalances">Balance: --</div>
       </div>
       <div style="margin-bottom:15px">
@@ -926,7 +929,7 @@ async function openPoolModal() {
   }
 }
 
-async function savePoolConfig(btn) {
+async function rotatePoolWallet(btn) {  if(!confirm('¿Estás seguro que deseas generar una nueva billetera para el Pool? ESTO NO MOVERÁ TUS FONDOS EXISTENTES.')) return;  const original = btn.textContent;  btn.textContent = 'Generando...';  btn.disabled = true;  try {    const res = await myFetch('/api/pool/rotate_wallet', { method: 'POST' });    const data = await res.json();    if(data.success) {      alert('Nueva billetera generada exitosamente. Asegúrate de respaldarla en Telegram.');      refreshPoolData();    } else {      alert(data.error || 'Error generando billetera');    }  } catch(e) {    alert('Error de conexión');  }  btn.textContent = original;  btn.disabled = false;}async function savePoolConfig(btn) {
   const w = document.getElementById('cfgPoolWallet').value;
   const c = document.getElementById('cfgPoolCom').value;
   btn.textContent = 'Guardando...';

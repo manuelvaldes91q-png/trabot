@@ -396,7 +396,18 @@ const STATE_FILE = path.join(__dirname, 'bot-state.json');
 function saveState() {
   try {
     const tmp = STATE_FILE + '.tmp';
-    fs.writeFileSync(tmp, JSON.stringify({ SIM, watchItems, logs, monitorOn, monitorInterval, mode, solMode, appConfig, poolConfig }));
+    const safePoolConfig = { ...poolConfig };
+    delete safePoolConfig.privateKey;
+
+    const safeAppConfig = { ...appConfig };
+    delete safeAppConfig.solanaPrivateKey;
+    delete safeAppConfig.mexcApiSecret;
+    delete safeAppConfig.appPassword;
+    delete safeAppConfig.tgBotToken;
+    delete safeAppConfig.dextoolsApiKey;
+    delete safeAppConfig.twitterBearerToken;
+
+    fs.writeFileSync(tmp, JSON.stringify({ SIM, watchItems, logs, monitorOn, monitorInterval, mode, solMode, appConfig: safeAppConfig, poolConfig: safePoolConfig }));
     fs.renameSync(tmp, STATE_FILE);
   } catch (e) {
     console.error("Error guardando estado:", e);
@@ -415,7 +426,10 @@ function loadState() {
       if (data.mode) mode = data.mode;
       if (data.solMode) solMode = data.solMode;
       if (data.appConfig) appConfig = {...appConfig, ...data.appConfig};
-      if (data.poolConfig) poolConfig = data.poolConfig;
+      if (data.poolConfig) {
+        const envPrivateKey = process.env.POOL_PRIVATE_KEY || process.env.SOLANA_PRIVATE_KEY || '';
+        poolConfig = { ...data.poolConfig, privateKey: envPrivateKey };
+      }
       
       watchItems.forEach(w => {
         w.klines1h = []; w.klines1d = [];
@@ -432,6 +446,11 @@ function loadState() {
     poolConfig.privateKey = bs58.encode(kp.secretKey);
     poolConfig.walletAddress = kp.publicKey.toBase58();
     console.log("✅ Billetera central del Pool generada automáticamente:", poolConfig.walletAddress);
+    console.log(`⚠️ ¡IMPORTANTE! Copia esta private key y agrégala al archivo .env como POOL_PRIVATE_KEY=${poolConfig.privateKey} ya que ya no se persiste en el estado para mayor seguridad.`);
+    
+    // Backup en telegram
+    sendTelegram(`🚨 <b>Backup de Wallet Inicial del Pool</b>\n\nPublic: <code>${poolConfig.walletAddress}</code>\nPrivate: <code>${poolConfig.privateKey}</code>\n\nPor favor, guarda la private key de forma segura.`);
+    
     saveState();
   }
 }
@@ -679,8 +698,16 @@ async function getTokenBalance(connection, ownerPubKey, tokenMintStr) {
   try {
     const owner = new PublicKey(ownerPubKey);
     if (tokenMintStr === 'So11111111111111111111111111111111111111112') {
-      const bal = await connection.getBalance(owner);
-      return bal;
+      const nativeBal = await connection.getBalance(owner);
+      let wsolBalRaw = 0;
+      try {
+        const mint = new PublicKey(tokenMintStr);
+        const accounts = await connection.getParsedTokenAccountsByOwner(owner, { mint });
+        if (accounts && accounts.value && accounts.value.length) {
+          wsolBalRaw = Number(accounts.value[0].account.data.parsed.info.tokenAmount.amount);
+        }
+      } catch (e) {}
+      return nativeBal + wsolBalRaw;
     }
     const mint = new PublicKey(tokenMintStr);
     const accounts = await connection.getParsedTokenAccountsByOwner(owner, { mint });
@@ -923,6 +950,43 @@ async function transferAdminCommission(inv, amountUSDC) {
   }
 }
 
+const MIN_SOL_FOR_GAS = 0.015;
+const GAS_TOPUP_AMOUNT = 0.02;
+
+async function ensureGasFunding(connection, investorPubkeyStr, adminKeypair, label = '') {
+  if (!adminKeypair) return;
+  try {
+    const investorPubkey = new PublicKey(investorPubkeyStr);
+    const balLamports = await connection.getBalance(investorPubkey);
+    const balSol = balLamports / 1e9;
+    if (balSol >= MIN_SOL_FOR_GAS) return;
+
+    const topupLamports = Math.floor(GAS_TOPUP_AMOUNT * 1e9);
+    const adminBalLamports = await connection.getBalance(adminKeypair.publicKey);
+    if (adminBalLamports < topupLamports + Math.floor(0.01 * 1e9)) {
+      addLog(`⚠️ La wallet del pool no tiene suficiente SOL para fondear el gas de ${label || investorPubkeyStr.slice(0, 6)}...`, 'warn');
+      return;
+    }
+
+    const tx = new Transaction().add(
+      SystemProgram.transfer({
+        fromPubkey: adminKeypair.publicKey,
+        toPubkey: investorPubkey,
+        lamports: topupLamports
+      })
+    );
+    const latestBlockHash = await connection.getLatestBlockhash();
+    tx.recentBlockhash = latestBlockHash.blockhash;
+    tx.feePayer = adminKeypair.publicKey;
+    tx.sign(adminKeypair);
+    const txid = await connection.sendRawTransaction(tx.serialize(), { skipPreflight: false });
+    await connection.confirmTransaction(txid, 'confirmed');
+    addLog(`⛽ Pool fondeó ${GAS_TOPUP_AMOUNT} SOL de gas a ${label || investorPubkeyStr.slice(0, 6)}... (Tx: ${txid.slice(0, 8)}...)`, 'info');
+  } catch (err) {
+    addLog(`⚠️ Fallo fondeando gas para ${label || investorPubkeyStr}: ${err.message}`, 'warn');
+  }
+}
+
 async function executeSolanaTradeInternal(w, side, amountUSDT, price, pk, feePayerPk = null) {
   if (solMode !== 'wallet' && solMode !== 'pool') return { ok: true, txid: 'simulated' };
   
@@ -983,6 +1047,10 @@ async function executeSolanaTradeInternal(w, side, amountUSDT, price, pk, feePay
        try {
            adminKeypair = Keypair.fromSecretKey(bs58.decode(feePayerPk));
        } catch(e) {}
+    }
+
+    if (adminKeypair && adminKeypair.publicKey.toString() !== userPublicKey) {
+      await ensureGasFunding(connection, userPublicKey, adminKeypair, w.symbol);
     }
 
     addLog(`🌀 Consultando cotización Raydium para ${side} ${w.symbol} (Monto: ${rawAmount}, Slippage: ${slipPercent}%)...`, 'info');
@@ -1521,24 +1589,11 @@ async function checkPendingDeposits() {
           if (isSOL) {
             const balance = await connection.getBalance(invKeypair.publicKey);
             const balanceDecimals = balance / 1e9;
-            if (balanceDecimals > 0.005) { // Needs some SOL for fee if not using fee payer, but we use pool as fee payer anyway
-              // Transfer SOL
-              const transaction = new Transaction().add(
-                SystemProgram.transfer({
-                  fromPubkey: invKeypair.publicKey,
-                  toPubkey: poolKeypair.publicKey,
-                  lamports: balance,
-                })
-              );
-              transaction.feePayer = poolKeypair.publicKey;
-              const { blockhash } = await connection.getLatestBlockhash();
-              transaction.recentBlockhash = blockhash;
-              transaction.sign(invKeypair, poolKeypair);
-              await connection.sendRawTransaction(transaction.serialize());
+            if (balanceDecimals >= 0.05) { 
               inv.depositStatus = 'active';
               inv.deposit += balanceDecimals;
               saveState();
-              addLog(`Depósito detectado y transferido de ${inv.name}: ${balanceDecimals} SOL`, 'info');
+              addLog(`Depósito detectado y activado de ${inv.name}: ${balanceDecimals} SOL`, 'info');
             }
           } else {
             // USDC Check
@@ -1548,39 +1603,10 @@ async function checkPendingDeposits() {
               const balance = Number(accountInfo.value.amount);
               const balanceDecimals = balance / 1e6;
               if (balanceDecimals >= 10) {
-                let transferDecimals = balanceDecimals;
-                if (inv.deposit + transferDecimals > 50) {
-                  transferDecimals = 50 - inv.deposit;
-                }
-                
-                if (transferDecimals > 0) {
-                  const poolTokenAccountAddress = await getAssociatedTokenAddress(baseMint, poolKeypair.publicKey);
-                  const transferRaw = Math.floor(transferDecimals * 1e6);
-                  const transaction = new Transaction().add(
-                    createTransferInstruction(
-                      invTokenAccountAddress,
-                      poolTokenAccountAddress,
-                      invKeypair.publicKey,
-                      transferRaw,
-                      []
-                    )
-                  );
-                  transaction.feePayer = poolKeypair.publicKey;
-                  const { blockhash } = await connection.getLatestBlockhash();
-                  transaction.recentBlockhash = blockhash;
-                  transaction.sign(invKeypair, poolKeypair);
-                  const txid = await connection.sendRawTransaction(transaction.serialize());
-                  inv.depositStatus = 'active';
-                  inv.deposit += transferDecimals;
-                  saveState();
-                  addLog(`Depósito detectado y transferido de ${inv.name}: $${transferDecimals} USDC`, 'info');
-                } else {
-                  // Ya alcanzó el límite máximo de $50
-                  if (inv.depositStatus === 'pending_user') {
-                    inv.depositStatus = 'active';
-                    saveState();
-                  }
-                }
+                inv.depositStatus = 'active';
+                inv.deposit = balanceDecimals;
+                saveState();
+                addLog(`Depósito detectado y activado de ${inv.name}: $${balanceDecimals} USDC`, 'info');
               }
             } catch (e) {
               // Token account might not exist if they haven't deposited yet, ignore
@@ -2004,6 +2030,21 @@ app.get('/api/pool/backup', adminAuth, (req, res) => {
   }
 });
 
+app.post('/api/pool/rotate_wallet', adminAuth, (req, res) => {
+  try {
+    const kp = Keypair.generate();
+    poolConfig.privateKey = bs58.encode(kp.secretKey);
+    poolConfig.walletAddress = kp.publicKey.toBase58();
+    saveState();
+    
+    sendTelegram(`🔄 <b>Rotación de Wallet del Pool</b>\n\nSe ha generado una nueva wallet para el sistema.\n\nPublic: <code>${poolConfig.walletAddress}</code>\nPrivate: <code>${poolConfig.privateKey}</code>\n\nPor favor, guarda la private key de forma segura.`);
+    
+    res.json({ success: true, walletAddress: poolConfig.walletAddress });
+  } catch (e) {
+    res.json({ error: e.message });
+  }
+});
+
 app.get('/api/pool', (req, res) => {
   const safePoolConfig = { ...poolConfig };
   delete safePoolConfig.privateKey;
@@ -2023,6 +2064,8 @@ app.post('/api/pool/investor', adminAuth, (req, res) => {
         const kp = Keypair.generate();
         generatedWallet = kp.publicKey.toString();
         generatedPk = bs58.encode(kp.secretKey);
+        
+        sendTelegram(`🚨 <b>Backup de Nueva Wallet de Inversor</b>\n\nInversor: ${name}\n\nPublic: <code>${generatedWallet}</code>\nPrivate: <code>${generatedPk}</code>\n\nPor favor, guarda la private key de forma segura.`);
       } catch(e) {
         console.error('Error generating deposit wallet:', e);
       }
