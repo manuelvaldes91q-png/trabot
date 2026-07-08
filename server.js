@@ -167,6 +167,12 @@ let poolConfig = {
   totalCommissionEarned: 0
 };
 
+function getSafePoolConfig() {
+  const safe = { ...poolConfig };
+  delete safe.privateKey;
+  return safe;
+}
+
 function distributePnL(pnl) {
   if (!pnl || pnl === 0) return;
   if (!poolConfig.investors || poolConfig.investors.length === 0) return;
@@ -2265,7 +2271,7 @@ app.post('/api/pool/approve_deposit', adminAuth, (req, res) => {
     inv.depositStatus = 'active';
     saveState();
   }
-  res.json({ success: true, poolConfig });
+  res.json({ success: true, poolConfig: getSafePoolConfig() });
 });
 
 app.post('/api/pool/edit_investor_deposit', adminAuth, (req, res) => {
@@ -2275,7 +2281,7 @@ app.post('/api/pool/edit_investor_deposit', adminAuth, (req, res) => {
     inv.deposit = Number(amount) || 0;
     saveState();
   }
-  res.json({ success: true, poolConfig });
+  res.json({ success: true, poolConfig: getSafePoolConfig() });
 });
 
 app.post('/api/pool/sync_investor_deposit', adminAuth, async (req, res) => {
@@ -2292,13 +2298,13 @@ app.post('/api/pool/sync_investor_deposit', adminAuth, async (req, res) => {
       inv.deposit = balance;
       inv.depositStatus = 'active';
       saveState();
-      res.json({ success: true, poolConfig, balance });
+      res.json({ success: true, poolConfig: getSafePoolConfig(), balance });
     } catch (e) {
       console.error('Error syncing deposit:', e.message);
       // If error (e.g., token account doesn't exist), maybe balance is 0
       inv.deposit = 0;
       saveState();
-      res.json({ success: true, poolConfig, balance: 0, note: 'Token account no encontrado (0 USDC)' });
+      res.json({ success: true, poolConfig: getSafePoolConfig(), balance: 0, note: 'Token account no encontrado (0 USDC)' });
     }
   } else {
     res.json({ error: 'Inversor no encontrado o sin wallet' });
@@ -2310,7 +2316,7 @@ app.post('/api/pool/config', adminAuth, (req, res) => {
   if (walletAddress !== undefined) poolConfig.walletAddress = walletAddress;
   if (commissionRate !== undefined) poolConfig.commissionRate = Number(commissionRate);
   saveState();
-  res.json({ success: true, poolConfig });
+  res.json({ success: true, poolConfig: getSafePoolConfig() });
 });
 
 app.post('/api/pool/request_withdraw', adminAuth, (req, res) => {
@@ -2340,7 +2346,7 @@ app.post('/api/pool/request_withdraw', adminAuth, (req, res) => {
   });
   
   saveState();
-  res.json({ success: true, poolConfig });
+  res.json({ success: true, poolConfig: getSafePoolConfig() });
 });
 
 app.post('/api/pool/approve_withdraw', adminAuth, async (req, res) => {
@@ -2449,7 +2455,7 @@ app.post('/api/pool/approve_withdraw', adminAuth, async (req, res) => {
   
   request.status = 'approved';
   saveState();
-  res.json({ success: true, poolConfig });
+  res.json({ success: true, poolConfig: getSafePoolConfig() });
 });
 
 app.post('/api/pool/withdraw_admin', adminAuth, async (req, res) => {
@@ -2502,7 +2508,7 @@ app.post('/api/pool/withdraw_admin', adminAuth, async (req, res) => {
 
   poolConfig.totalCommissionEarned -= amount;
   saveState();
-  res.json({ success: true, poolConfig });
+  res.json({ success: true, poolConfig: getSafePoolConfig() });
 });
 
 app.post('/api/pool/reject_withdraw', adminAuth, (req, res) => {
@@ -2513,14 +2519,14 @@ app.post('/api/pool/reject_withdraw', adminAuth, (req, res) => {
   
   poolConfig.withdrawalRequests[reqIdx].status = 'rejected';
   saveState();
-  res.json({ success: true, poolConfig });
+  res.json({ success: true, poolConfig: getSafePoolConfig() });
 });
 
 app.post('/api/pool/reset_investor', adminAuth, (req, res) => {
   const { name } = req.body;
   poolConfig.investors = poolConfig.investors.filter(i => i.name !== name);
   saveState();
-  res.json({ success: true, poolConfig });
+  res.json({ success: true, poolConfig: getSafePoolConfig() });
 });
 
 // ============================================
