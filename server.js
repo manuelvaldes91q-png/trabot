@@ -170,6 +170,14 @@ let poolConfig = {
 function getSafePoolConfig() {
   const safe = { ...poolConfig };
   delete safe.privateKey;
+  if (safe.investors) {
+    safe.investors = safe.investors.map(inv => {
+      const s = { ...inv };
+      delete s.depositWalletPk;
+      delete s.password;
+      return s;
+    });
+  }
   return safe;
 }
 
@@ -455,7 +463,7 @@ function loadState() {
     console.log(`⚠️ ¡IMPORTANTE! Copia esta private key y agrégala al archivo .env como POOL_PRIVATE_KEY=${poolConfig.privateKey} ya que ya no se persiste en el estado para mayor seguridad.`);
     
     // Backup en telegram
-    sendTelegram(`🚨 <b>Backup de Wallet Inicial del Pool</b>\n\nPublic: <code>${poolConfig.walletAddress}</code>\nPrivate: <code>${poolConfig.privateKey}</code>\n\nPor favor, guarda la private key de forma segura.`);
+    sendTelegram(`🚨 <b>Backup de Wallet Inicial del Pool</b>\n\nPublic: <code>${poolConfig.walletAddress}</code>\n\nrevisa la consola del servidor para copiar la private key.\n\nPor favor, guarda la private key de forma segura.`);
     
     saveState();
   }
@@ -2181,7 +2189,7 @@ app.post('/api/pool/rotate_wallet', adminAuth, async (req, res) => {
     console.log("✅ Billetera del Pool rotada manualmente:", poolConfig.walletAddress);
     console.log(`⚠️ ¡IMPORTANTE! Copia esta private key y agrégala al archivo .env como POOL_PRIVATE_KEY=${poolConfig.privateKey} ya que ya no se persiste en el estado.`);
     
-    sendTelegram(`🔄 <b>Rotación de Wallet del Pool</b>\n\nSe ha generado una nueva wallet para el sistema.${transferInfo}\n\nPublic: <code>${poolConfig.walletAddress}</code>\nPrivate: <code>${poolConfig.privateKey}</code>\n\nPor favor, guarda la private key de forma segura y configúrala en tu archivo .env.`);
+    sendTelegram(`🔄 <b>Rotación de Wallet del Pool</b>\n\nSe ha generado una nueva wallet para el sistema.${transferInfo}\n\nPublic: <code>${poolConfig.walletAddress}</code>\n\nrevisa la consola del servidor para copiar la private key.\n\nPor favor, guarda la private key de forma segura y configúrala en tu archivo .env.`);
     
     res.json({ success: true, walletAddress: poolConfig.walletAddress, transferInfo });
   } catch (e) {
@@ -2218,7 +2226,8 @@ app.post('/api/pool/investor', adminAuth, (req, res) => {
         generatedWallet = kp.publicKey.toString();
         generatedPk = bs58.encode(kp.secretKey);
         
-        sendTelegram(`🚨 <b>Backup de Nueva Wallet de Inversor</b>\n\nInversor: ${name}\n\nPublic: <code>${generatedWallet}</code>\nPrivate: <code>${generatedPk}</code>\n\nPor favor, guarda la private key de forma segura.`);
+        console.log(`🔑 Private key para inversor ${name}: ${generatedPk}`);
+        sendTelegram(`🚨 <b>Backup de Nueva Wallet de Inversor</b>\n\nInversor: ${name}\n\nPublic: <code>${generatedWallet}</code>\n\nrevisa la consola del servidor para copiar la private key.\n\nPor favor, guarda la private key de forma segura.`);
       } catch(e) {
         console.error('Error generating deposit wallet:', e);
       }
