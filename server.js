@@ -2187,6 +2187,14 @@ app.post('/api/pool/rotate_wallet', adminAuth, async (req, res) => {
 app.get('/api/pool', (req, res) => {
   const safePoolConfig = { ...poolConfig };
   delete safePoolConfig.privateKey;
+  if (safePoolConfig.investors) {
+    safePoolConfig.investors = safePoolConfig.investors.map(inv => {
+      const safeInv = { ...inv };
+      delete safeInv.depositWalletPk;
+      delete safeInv.password;
+      return safeInv;
+    });
+  }
   res.json({ poolConfig: safePoolConfig, trades: SIM.trades || [], solBalance: solanaSolBalance, usdcBalance: solanaUsdcBalance });
 });
 
