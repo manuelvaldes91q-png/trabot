@@ -2536,9 +2536,299 @@ setInterval(async () => {
 // CHART + OB
 // ══════════════════════════════════════════════════════════
 let curDet=null,chartInst=null;
+let curOB=null;
+let currentSwapRiskAmount=100;
+
+function calculateSwapRisk(d, ob, amount) {
+  const isSol = d.network === 'solana';
+  const cp = d.currentPrice || d.cp || 0;
+  
+  let liq = 0;
+  if (isSol) {
+    liq = d.liq || 0;
+  } else if (ob && ob.bids) {
+    liq = ob.bids.reduce((sum, bid) => sum + (parseFloat(bid[0]) * parseFloat(bid[1])), 0);
+  } else {
+    liq = d.liq || 0;
+  }
+  
+  const vol = d.vol || 0;
+  
+  let priceImpactPct = 0;
+  if (isSol) {
+    const poolReserves = liq * 0.5;
+    if (poolReserves > 0) {
+      priceImpactPct = (amount / (poolReserves + amount)) * 100;
+    } else {
+      priceImpactPct = amount > 0 ? 100 : 0;
+    }
+  } else if (ob && ob.asks && ob.asks.length > 0) {
+    let remainingUsd = amount;
+    let cost = 0;
+    let qtyFilled = 0;
+    let bestAsk = parseFloat(ob.asks[0][0]);
+    let finalPrice = bestAsk;
+    
+    for (let i = 0; i < ob.asks.length; i++) {
+      const askPrice = parseFloat(ob.asks[i][0]);
+      const askQty = parseFloat(ob.asks[i][1]);
+      const levelUsd = askPrice * askQty;
+      
+      if (remainingUsd <= levelUsd) {
+        qtyFilled += remainingUsd / askPrice;
+        cost += remainingUsd;
+        finalPrice = askPrice;
+        remainingUsd = 0;
+        break;
+      } else {
+        qtyFilled += askQty;
+        cost += levelUsd;
+        finalPrice = askPrice;
+        remainingUsd -= levelUsd;
+      }
+    }
+    
+    if (cost > 0) {
+      const avgPrice = cost / qtyFilled;
+      priceImpactPct = ((avgPrice - bestAsk) / bestAsk) * 100;
+      if (remainingUsd > 0) {
+        priceImpactPct += (remainingUsd / amount) * 15;
+      }
+    } else {
+      priceImpactPct = 0;
+    }
+  } else {
+    priceImpactPct = amount > 0 ? 1.5 : 0;
+  }
+  
+  priceImpactPct = Math.max(0, parseFloat(priceImpactPct.toFixed(3)));
+  
+  let liqRisk = 0;
+  if (isSol) {
+    if (liq < 5000) liqRisk = 100;
+    else if (liq > 150000) liqRisk = 0;
+    else liqRisk = 100 - ((liq - 5000) / 145000) * 100;
+  } else {
+    if (liq < 10000) liqRisk = 90;
+    else if (liq > 500000) liqRisk = 0;
+    else liqRisk = 100 - ((liq - 10000) / 490000) * 100;
+  }
+  liqRisk = Math.max(0, Math.min(100, liqRisk));
+  
+  let volRisk = 0;
+  if (vol < 5000) volRisk = 100;
+  else if (vol > 300000) volRisk = 0;
+  else volRisk = 100 - ((vol - 5000) / 295000) * 100;
+  volRisk = Math.max(0, Math.min(100, volRisk));
+  
+  let slipRisk = 0;
+  if (priceImpactPct < 0.2) slipRisk = 0;
+  else if (priceImpactPct > 5.0) slipRisk = 100;
+  else slipRisk = (priceImpactPct / 5.0) * 100;
+  slipRisk = Math.max(0, Math.min(100, slipRisk));
+  
+  let totalScore = Math.round(liqRisk * 0.4 + volRisk * 0.2 + slipRisk * 0.4);
+  
+  let spreadPct = 0;
+  if (!isSol && ob && ob.asks && ob.bids && ob.asks.length > 0 && ob.bids.length > 0) {
+    const ask0 = parseFloat(ob.asks[0][0]);
+    const bid0 = parseFloat(ob.bids[0][0]);
+    spreadPct = ((ask0 - bid0) / ask0) * 100;
+    if (spreadPct > 1.0) {
+      totalScore = Math.min(100, totalScore + 15);
+    }
+  }
+  
+  totalScore = Math.max(0, Math.min(100, totalScore));
+  
+  let label = 'BAJO';
+  let color = 'var(--g)';
+  let bg = 'rgba(0, 229, 160, 0.1)';
+  let desc = 'Condiciones excelentes. Swap seguro con mínimo impacto de precio.';
+  let recSlippage = '0.5%';
+  
+  if (totalScore >= 80) {
+    label = 'EXTREMO';
+    color = 'var(--r)';
+    bg = 'rgba(239, 68, 68, 0.15)';
+    desc = 'Riesgo crítico de iliquidez. Gran parte de tu dinero podría perderse en slippage.';
+    recSlippage = '5.0% - 10.0%';
+  } else if (totalScore >= 55) {
+    label = 'ALTO';
+    color = 'var(--y)';
+    bg = 'rgba(245, 158, 11, 0.15)';
+    desc = 'Impacto de precio elevado. Se recomienda usar montos más pequeños o dividir la orden.';
+    recSlippage = '2.0% - 3.0%';
+  } else if (totalScore >= 30) {
+    label = 'MEDIO';
+    color = '#facc15';
+    bg = 'rgba(250, 204, 21, 0.1)';
+    desc = 'Riesgo moderado. Adecuado para montos pequeños. Monitorea el impacto en precio.';
+    recSlippage = '1.0% - 1.5%';
+  }
+  
+  return {
+    totalScore,
+    label,
+    color,
+    bg,
+    desc,
+    recSlippage,
+    liq,
+    vol,
+    priceImpactPct,
+    spreadPct,
+    liqRisk,
+    volRisk,
+    slipRisk
+  };
+}
+
+function renderSwapRiskPanel(d, ob) {
+  const el = document.getElementById('swapRiskPanel');
+  if (!el) return;
+  
+  el.innerHTML = `
+    <div style="background: rgba(153, 69, 255, 0.03); border: 1px solid rgba(153, 69, 255, 0.15); border-radius: 4px; padding: 10px; font-family: var(--mono); font-size: 9px; margin-top: 10px;">
+      <div style="color: #a855f7; font-weight: 700; margin-bottom: 8px; display: flex; justify-content: space-between; align-items: center;">
+        <span>🛡️ RIESGO DE SWAP (REAL-TIME)</span>
+        <span class="tag" style="background: rgba(168, 85, 247, 0.15); color: #c084fc; font-size: 7px; border: 1px solid rgba(168, 85, 247, 0.2); margin: 0">RIESGO DE DESVIACIÓN</span>
+      </div>
+      
+      <div style="margin-bottom: 8px; display: flex; align-items: center; justify-content: space-between; gap: 5px;">
+        <span style="color: var(--t2); font-size: 8px;">Monto del Swap:</span>
+        <div style="display: flex; align-items: center; gap: 3px; max-width: 140px;">
+          <span style="color: var(--t2)">$</span>
+          <input type="number" id="riskSwapAmount" class="inp" value="${currentSwapRiskAmount}" style="padding: 2px 5px; font-size: 9px; text-align: right; width: 60px;" oninput="onRiskAmountChange(this.value)">
+          <span style="color: var(--t2)">USD</span>
+        </div>
+      </div>
+      
+      <div style="display: flex; gap: 3px; margin-bottom: 10px;">
+        ${[10, 50, 100, 500, 1000].map(amt => `
+          <button class="btn btn-d btn-xs" style="padding: 1px 4px; font-size: 8px; flex: 1; text-align: center; border-radius: 3px; ${currentSwapRiskAmount === amt ? 'border-color: var(--g); color: var(--g); background: rgba(0,229,160,0.05)' : ''}" onclick="setRiskAmount(${amt})">$${amt}</button>
+        `).join('')}
+      </div>
+      
+      <div id="swapRiskResults"></div>
+    </div>
+  `;
+  
+  updateSwapRiskResults();
+}
+
+function setRiskAmount(amt) {
+  currentSwapRiskAmount = parseInt(amt) || 100;
+  const input = document.getElementById('riskSwapAmount');
+  if (input) input.value = currentSwapRiskAmount;
+  
+  document.querySelectorAll('#swapRiskPanel button').forEach(btn => {
+    if (btn.textContent === '$' + amt) {
+      btn.style.borderColor = 'var(--g)';
+      btn.style.color = 'var(--g)';
+      btn.style.background = 'rgba(0,229,160,0.05)';
+    } else if (btn.textContent.startsWith('$')) {
+      btn.style.borderColor = '';
+      btn.style.color = '';
+      btn.style.background = '';
+    }
+  });
+  
+  updateSwapRiskResults();
+}
+
+function onRiskAmountChange(val) {
+  const amt = parseInt(val) || 0;
+  currentSwapRiskAmount = amt;
+  
+  document.querySelectorAll('#swapRiskPanel button').forEach(btn => {
+    if (btn.textContent.startsWith('$')) {
+      const btnAmt = parseInt(btn.textContent.substring(1));
+      if (btnAmt === amt) {
+        btn.style.borderColor = 'var(--g)';
+        btn.style.color = 'var(--g)';
+        btn.style.background = 'rgba(0,229,160,0.05)';
+      } else {
+        btn.style.borderColor = '';
+        btn.style.color = '';
+        btn.style.background = '';
+      }
+    }
+  });
+  
+  updateSwapRiskResults();
+}
+
+function updateSwapRiskResults() {
+  const resultsDiv = document.getElementById('swapRiskResults');
+  if (!resultsDiv || !curDet) return;
+  
+  const risk = calculateSwapRisk(curDet, curOB, currentSwapRiskAmount);
+  
+  let warningsHtml = '';
+  if (risk.totalScore >= 80) {
+    warningsHtml += `<div style="color: var(--r); margin-top: 8px; font-size: 8px; line-height: 1.2;">🚨 <b>Peligro:</b> Liquidez crítica para este monto. ¡Evita este swap!</div>`;
+  } else if (risk.totalScore >= 55) {
+    warningsHtml += `<div style="color: var(--y); margin-top: 8px; font-size: 8px; line-height: 1.2;">⚠️ <b>Advertencia:</b> Desviación de precio notable. Divide la operación.</div>`;
+  } else if (risk.priceImpactPct > 1.0) {
+    warningsHtml += `<div style="color: var(--y); margin-top: 8px; font-size: 8px; line-height: 1.2;">⚠️ <b>Aviso:</b> Impacto en precio del ${risk.priceImpactPct.toFixed(2)}%.</div>`;
+  }
+  
+  if (risk.liq < 10000) {
+    warningsHtml += `<div style="color: var(--r); margin-top: 4px; font-size: 8px; line-height: 1.2;">⚠️ <b>Piscina muy delgada:</b> Liquidez total menor a $10,000 USD.</div>`;
+  }
+  if (risk.vol < 5000) {
+    warningsHtml += `<div style="color: var(--y); margin-top: 4px; font-size: 8px; line-height: 1.2;">⚠️ <b>Bajo volumen:</b> Menor a $5,000 USD en 24h. Riesgo de manipulación.</div>`;
+  }
+  if (risk.spreadPct > 1.0) {
+    warningsHtml += `<div style="color: var(--y); margin-top: 4px; font-size: 8px; line-height: 1.2;">⚠️ <b>Spread elevado:</b> El spread de compra/venta es del ${risk.spreadPct.toFixed(2)}%.</div>`;
+  }
+  
+  resultsDiv.innerHTML = `
+    <div style="margin-bottom: 8px;">
+      <div style="display: flex; justify-content: space-between; font-size: 8px; color: var(--t2); margin-bottom: 3px;">
+        <span>Índice de Riesgo Estimado:</span>
+        <span style="color: ${risk.color}; font-weight: 700;">${risk.totalScore}/100 (${risk.label})</span>
+      </div>
+      <div style="width: 100%; height: 8px; background: rgba(255,255,255,0.05); border-radius: 4px; position: relative; overflow: hidden; display: flex;">
+        <div style="width: 30%; height: 100%; background: rgba(0, 229, 160, 0.25);"></div>
+        <div style="width: 25%; height: 100%; background: rgba(250, 204, 21, 0.25);"></div>
+        <div style="width: 25%; height: 100%; background: rgba(245, 158, 11, 0.25);"></div>
+        <div style="width: 20%; height: 100%; background: rgba(239, 68, 68, 0.25);"></div>
+        <div style="position: absolute; left: ${risk.totalScore}%; top: 0; width: 4px; height: 100%; background: ${risk.color}; box-shadow: 0 0 4px ${risk.color}; transition: left 0.3s ease;"></div>
+      </div>
+    </div>
+    
+    <div style="display: grid; grid-template-columns: 1fr 1fr; gap: 5px; background: rgba(0,0,0,0.15); padding: 5px 7px; border-radius: 4px; border: 1px solid rgba(255,255,255,0.03);">
+      <div>
+        <div style="font-size: 7px; color: var(--t2)">Impacto Estimado:</div>
+        <div style="font-size: 9px; font-weight: 700; color: ${risk.priceImpactPct > 2.0 ? 'var(--r)' : risk.priceImpactPct > 0.5 ? 'var(--y)' : 'var(--g)'}; font-family: var(--mono);">${risk.priceImpactPct}%</div>
+      </div>
+      <div>
+        <div style="font-size: 7px; color: var(--t2)">Slippage Recomendado:</div>
+        <div style="font-size: 9px; font-weight: 700; color: var(--t); font-family: var(--mono);">${risk.recSlippage}</div>
+      </div>
+      <div style="margin-top: 3px;">
+        <div style="font-size: 7px; color: var(--t2)">Liquidez Estimada:</div>
+        <div style="font-size: 9px; font-weight: 700; color: var(--g); font-family: var(--mono);">$${fv(risk.liq)}</div>
+      </div>
+      <div style="margin-top: 3px;">
+        <div style="font-size: 7px; color: var(--t2)">Volumen 24h:</div>
+        <div style="font-size: 9px; font-weight: 700; color: var(--b); font-family: var(--mono);">$${fv(risk.vol)}</div>
+      </div>
+    </div>
+    
+    <div style="margin-top: 6px; font-size: 8px; color: rgba(255,255,255,0.7); line-height: 1.3; background: ${risk.bg}; border-left: 2px solid ${risk.color}; padding: 4px 6px; border-radius: 0 3px 3px 0;">
+      ${risk.desc}
+    </div>
+    
+    ${warningsHtml}
+  `;
+}
 
 async function showDetail(d){
   curDet=d;
+  curOB=null;
   const cp=d.currentPrice||d.cp||0;
   const isSol = d.network === 'solana';
   const pairName = isSol ? `${d.symbol}/SOL` : `${d.symbol}/USDT`;
@@ -2578,6 +2868,10 @@ async function showDetail(d){
           📚 ${isSol ? 'AMM / LIQUIDEZ' : 'ORDER BOOK'} <span style="cursor:pointer;color:var(--b)" onclick="refreshOB()">🔄</span>
         </div>
         <div id="obDiv"><div style="color:var(--t2);font-size:8px;font-family:var(--mono)">Cargando...</div></div>
+        
+        <!-- RISK METER CONTAINER -->
+        <div id="swapRiskPanel"></div>
+        
         <div style="margin-top:10px;">
           <button class="btn btn-g" style="width:100%;padding:8px;font-size:11px" onclick="quickMarketBuy()">⚡ Comprar a Mercado</button>
         </div>
@@ -2633,9 +2927,16 @@ async function showDetail(d){
       score: 80
     };
     renderAP(d, simulatedOBAnalysis, cp);
+    renderSwapRiskPanel(d, null);
   } else {
     const ob=await mxDepth(d.pair,200);
-    if(ob){const an=analyzeOB(ob.bids,ob.asks,cp,d.dips||[]);renderOB(an,cp);renderAP(d,an,cp);}
+    if(ob){
+      curOB = ob;
+      const an=analyzeOB(ob.bids,ob.asks,cp,d.dips||[]);
+      renderOB(an,cp);
+      renderAP(d,an,cp);
+      renderSwapRiskPanel(d, ob);
+    }
   }
 }
 
