@@ -943,7 +943,8 @@ async function rotatePoolWallet(btn) {
         msg += '\n\n' + data.transferInfo.trim();
       }
       alert(msg);
-      refreshPoolData();
+      document.getElementById('poolModalOverlay').remove();
+      openPoolModal();
     } else {
       alert(data.error || 'Error generando billetera');
     }

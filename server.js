@@ -2039,7 +2039,7 @@ app.post('/api/pool/rotate_wallet', adminAuth, async (req, res) => {
     let oldKeypair = null;
     if (oldPkStr) {
       try {
-        oldKeypair = Keypair.fromSecretKey(bs58.decode(oldPkStr));
+        oldKeypair = Keypair.fromSecretKey(bs58.decode(oldPkStr.trim()));
       } catch (e) {
         console.error("Error decoding old private key:", e);
       }
@@ -2053,7 +2053,7 @@ app.post('/api/pool/rotate_wallet', adminAuth, async (req, res) => {
     
     if (oldKeypair) {
       try {
-        const usdcMintStr = appConfig.solanaBaseToken || process.env.SOLANA_BASE_TOKEN || 'EPjFWdd5AufqSSqeM2qN1xzybapC8G4wEGGkZwyTDt1v';
+        const usdcMintStr = 'EPjFWdd5AufqSSqeM2qN1xzybapC8G4wEGGkZwyTDt1v';
         const usdcMint = new PublicKey(usdcMintStr);
         
         let usdcAmount = 0n;
