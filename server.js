@@ -1966,7 +1966,7 @@ app.use('/api', (req, res, next) => {
 
 // ADMIN ENDPOINTS
 
-app.post('/api/pool/recover_rent', async (req, res) => {
+app.post('/api/pool/recover_rent', adminAuth, async (req, res) => {
   if (!poolConfig.privateKey) {
     return res.json({ error: 'La wallet del Pool no tiene llaves configuradas' });
   }
@@ -1996,7 +1996,7 @@ app.post('/api/pool/recover_rent', async (req, res) => {
   }
 });
 
-app.get('/api/pool/backup', (req, res) => {
+app.get('/api/pool/backup', adminAuth, (req, res) => {
   if (poolConfig.privateKey) {
     res.json({ success: true, privateKey: poolConfig.privateKey });
   } else {
@@ -2010,7 +2010,7 @@ app.get('/api/pool', (req, res) => {
   res.json({ poolConfig: safePoolConfig, trades: SIM.trades || [], solBalance: solanaSolBalance, usdcBalance: solanaUsdcBalance });
 });
 
-app.post('/api/pool/investor', (req, res) => {
+app.post('/api/pool/investor', adminAuth, (req, res) => {
   const { name, amount, password, depositWallet } = req.body;
   if (!name) return res.json({ error: 'Falta el nombre' });
   
@@ -2053,7 +2053,7 @@ app.post('/api/pool/investor', (req, res) => {
   res.json({ success: true, poolConfig });
 });
 
-app.post('/api/pool/delete_investor', (req, res) => {
+app.post('/api/pool/delete_investor', adminAuth, (req, res) => {
   const { name } = req.body;
   const initialLength = poolConfig.investors.length;
   poolConfig.investors = poolConfig.investors.filter(i => i.name.toLowerCase() !== name.toLowerCase());
@@ -2066,7 +2066,7 @@ app.post('/api/pool/delete_investor', (req, res) => {
   res.json({ success: true });
 });
 
-app.post('/api/pool/approve_deposit', (req, res) => {
+app.post('/api/pool/approve_deposit', adminAuth, (req, res) => {
   const { name, amount } = req.body;
   let inv = poolConfig.investors.find(i => i.name.toLowerCase() === name.toLowerCase());
   if (inv && (inv.depositStatus === 'pending_admin' || inv.depositStatus === 'pending_user')) {
@@ -2078,7 +2078,7 @@ app.post('/api/pool/approve_deposit', (req, res) => {
   res.json({ success: true, poolConfig });
 });
 
-app.post('/api/pool/edit_investor_deposit', (req, res) => {
+app.post('/api/pool/edit_investor_deposit', adminAuth, (req, res) => {
   const { name, amount } = req.body;
   let inv = poolConfig.investors.find(i => i.name.toLowerCase() === name.toLowerCase());
   if (inv) {
@@ -2088,7 +2088,7 @@ app.post('/api/pool/edit_investor_deposit', (req, res) => {
   res.json({ success: true, poolConfig });
 });
 
-app.post('/api/pool/sync_investor_deposit', async (req, res) => {
+app.post('/api/pool/sync_investor_deposit', adminAuth, async (req, res) => {
   const { name } = req.body;
   let inv = poolConfig.investors.find(i => i.name.toLowerCase() === name.toLowerCase());
   if (inv && inv.depositWallet) {
@@ -2115,7 +2115,7 @@ app.post('/api/pool/sync_investor_deposit', async (req, res) => {
   }
 });
 
-app.post('/api/pool/config', (req, res) => {
+app.post('/api/pool/config', adminAuth, (req, res) => {
   const { walletAddress, commissionRate } = req.body;
   if (walletAddress !== undefined) poolConfig.walletAddress = walletAddress;
   if (commissionRate !== undefined) poolConfig.commissionRate = Number(commissionRate);
@@ -2326,7 +2326,7 @@ app.post('/api/pool/reject_withdraw', adminAuth, (req, res) => {
   res.json({ success: true, poolConfig });
 });
 
-app.post('/api/pool/reset_investor', (req, res) => {
+app.post('/api/pool/reset_investor', adminAuth, (req, res) => {
   const { name } = req.body;
   poolConfig.investors = poolConfig.investors.filter(i => i.name !== name);
   saveState();
@@ -2403,7 +2403,7 @@ app.get('/api/state', async (req, res) => {
   });
 });
 
-app.post('/api/state', (req, res) => {
+app.post('/api/state', adminAuth, (req, res) => {
   const { sim, watch } = req.body;
   if (sim) {
     Object.assign(SIM, sim);
@@ -2423,12 +2423,18 @@ app.post('/api/state', (req, res) => {
   res.json({ status: 'ok' });
 });
 
-app.get('/api/config', (req, res) => {
-  // Solo enviar a la vista web para que vea qué variables están seteadas o si están vacías.
-  res.json(appConfig);
+app.get('/api/config', adminAuth, (req, res) => {
+  const safeConfig = { ...appConfig };
+  delete safeConfig.solanaPrivateKey;
+  delete safeConfig.appPassword;
+  delete safeConfig.mexcApiSecret;
+  delete safeConfig.tgBotToken;
+  delete safeConfig.dextoolsApiKey;
+  delete safeConfig.twitterBearerToken;
+  res.json(safeConfig);
 });
 
-app.post('/api/config', (req, res) => {
+app.post('/api/config', adminAuth, (req, res) => {
   const { mexcApiKey, mexcApiSecret, tgBotToken, tgChatId, appPassword, solanaPrivateKey, solanaRpcUrl, solanaBaseToken, solanaSlippage, solanaPriorityFee, dextoolsApiKey, twitterBearerToken } = req.body;
   if(mexcApiKey !== undefined) appConfig.mexcApiKey = mexcApiKey;
   if(mexcApiSecret !== undefined) appConfig.mexcApiSecret = mexcApiSecret;
@@ -2699,7 +2705,7 @@ app.get('/api/x-scam-scan', async (req, res) => {
   }
 });
 
-app.post('/api/action', async (req, res) => {
+app.post('/api/action', adminAuth, async (req, res) => {
   const { action, payload } = req.body;
   
   if (action === 'setMode') {
