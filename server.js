@@ -6,7 +6,7 @@ import { createServer as createViteServer } from "vite";
 import crypto from "crypto";
 import "dotenv/config";
 import { Connection, Keypair, VersionedTransaction, PublicKey, SystemProgram, Transaction, sendAndConfirmTransaction } from '@solana/web3.js';
-import { getAssociatedTokenAddress, createTransferInstruction, getAccount, createCloseAccountInstruction } from '@solana/spl-token';
+import { getAssociatedTokenAddress, createTransferInstruction, getAccount, createCloseAccountInstruction, createAssociatedTokenAccountInstruction } from '@solana/spl-token';
 import bs58 from 'bs58';
 import https from "https";
 import http from "http";
@@ -2030,18 +2030,157 @@ app.get('/api/pool/backup', adminAuth, (req, res) => {
   }
 });
 
-app.post('/api/pool/rotate_wallet', adminAuth, (req, res) => {
+app.post('/api/pool/rotate_wallet', adminAuth, async (req, res) => {
   try {
+    const rpcUrl = appConfig.solanaRpcUrl || process.env.SOLANA_RPC_URL || 'https://api.mainnet-beta.solana.com';
+    const connection = new Connection(rpcUrl, 'confirmed');
+
+    const oldPkStr = poolConfig.privateKey || process.env.POOL_PRIVATE_KEY || process.env.SOLANA_PRIVATE_KEY;
+    let oldKeypair = null;
+    if (oldPkStr) {
+      try {
+        oldKeypair = Keypair.fromSecretKey(bs58.decode(oldPkStr));
+      } catch (e) {
+        console.error("Error decoding old private key:", e);
+      }
+    }
+
     const kp = Keypair.generate();
-    poolConfig.privateKey = bs58.encode(kp.secretKey);
-    poolConfig.walletAddress = kp.publicKey.toBase58();
+    const newPrivateKey = bs58.encode(kp.secretKey);
+    const newWalletAddress = kp.publicKey.toBase58();
+    
+    let transferInfo = "";
+    
+    if (oldKeypair) {
+      try {
+        const usdcMintStr = appConfig.solanaBaseToken || process.env.SOLANA_BASE_TOKEN || 'EPjFWdd5AufqSSqeM2qN1xzybapC8G4wEGGkZwyTDt1v';
+        const usdcMint = new PublicKey(usdcMintStr);
+        
+        let usdcAmount = 0n;
+        let oldUsdcAccountAddr = await getAssociatedTokenAddress(usdcMint, oldKeypair.publicKey);
+        try {
+          const usdcAccountInfo = await connection.getTokenAccountBalance(oldUsdcAccountAddr);
+          if (usdcAccountInfo && usdcAccountInfo.value && Number(usdcAccountInfo.value.amount) > 0) {
+            usdcAmount = BigInt(usdcAccountInfo.value.amount);
+          }
+        } catch(e) {}
+        
+        const solBalance = await connection.getBalance(oldKeypair.publicKey);
+        
+        // Base gas conservative estimate (tx size might require less, but better safe)
+        let estimatedFee = 5000;
+        let rentExempt = 0;
+        if (usdcAmount > 0n) {
+          rentExempt = await connection.getMinimumBalanceForRentExemption(165); // SPL Token account size
+        }
+
+        let solToSend = solBalance - estimatedFee - rentExempt;
+
+        if (solToSend > 0 || (usdcAmount > 0n && solBalance >= estimatedFee + rentExempt)) {
+           let tx = new Transaction();
+           const newUsdcAccountAddr = await getAssociatedTokenAddress(usdcMint, kp.publicKey);
+           
+           if (usdcAmount > 0n) {
+             tx.add(
+               createAssociatedTokenAccountInstruction(
+                 oldKeypair.publicKey,
+                 newUsdcAccountAddr,
+                 kp.publicKey,
+                 usdcMint
+               )
+             );
+             tx.add(
+               createTransferInstruction(
+                 oldUsdcAccountAddr,
+                 newUsdcAccountAddr,
+                 oldKeypair.publicKey,
+                 usdcAmount
+               )
+             );
+           }
+           
+           if (solToSend > 0) {
+             tx.add(
+               SystemProgram.transfer({
+                 fromPubkey: oldKeypair.publicKey,
+                 toPubkey: kp.publicKey,
+                 lamports: solToSend
+               })
+             );
+           }
+           
+           const latestBlockHash = await connection.getLatestBlockhash();
+           tx.recentBlockhash = latestBlockHash.blockhash;
+           tx.feePayer = oldKeypair.publicKey;
+           
+           // Refine solToSend with real fee
+           const fee = (await connection.getFeeForMessage(tx.compileMessage(), 'confirmed')).value || 5000;
+           solToSend = solBalance - fee - rentExempt;
+           
+           if (solToSend >= 0) {
+             // Rebuild TX with exact sol amount
+             tx = new Transaction();
+             if (usdcAmount > 0n) {
+               tx.add(
+                 createAssociatedTokenAccountInstruction(
+                   oldKeypair.publicKey,
+                   newUsdcAccountAddr,
+                   kp.publicKey,
+                   usdcMint
+                 )
+               );
+               tx.add(
+                 createTransferInstruction(
+                   oldUsdcAccountAddr,
+                   newUsdcAccountAddr,
+                   oldKeypair.publicKey,
+                   usdcAmount
+                 )
+               );
+             }
+             if (solToSend > 0) {
+               tx.add(
+                 SystemProgram.transfer({
+                   fromPubkey: oldKeypair.publicKey,
+                   toPubkey: kp.publicKey,
+                   lamports: solToSend
+                 })
+               );
+             }
+             
+             if (tx.instructions.length > 0) {
+               tx.recentBlockhash = latestBlockHash.blockhash;
+               tx.feePayer = oldKeypair.publicKey;
+               tx.sign(oldKeypair);
+               
+               const txid = await connection.sendRawTransaction(tx.serialize(), { skipPreflight: false });
+               await connection.confirmTransaction(txid, 'confirmed');
+               transferInfo = `\nSe transfirió el saldo (${(solToSend/1e9).toFixed(4)} SOL, ${(Number(usdcAmount)/1e6).toFixed(2)} USDC) a la nueva wallet (Tx: ${txid.slice(0, 8)}...).`;
+               console.log(`✅ Saldo transferido a nueva wallet: Tx ${txid}`);
+             }
+           } else {
+             transferInfo = `\n⚠️ No había suficiente SOL en la wallet anterior para pagar el gas de la transferencia.`;
+           }
+        }
+      } catch (e) {
+        console.error("Error transfiriendo fondos a la nueva wallet:", e);
+        transferInfo = `\n⚠️ Hubo un error al intentar transferir los fondos de la billetera anterior. Conserva la private key anterior para recuperarlos manualmente. (${e.message})`;
+      }
+    }
+
+    poolConfig.privateKey = newPrivateKey;
+    poolConfig.walletAddress = newWalletAddress;
     saveState();
     
-    sendTelegram(`🔄 <b>Rotación de Wallet del Pool</b>\n\nSe ha generado una nueva wallet para el sistema.\n\nPublic: <code>${poolConfig.walletAddress}</code>\nPrivate: <code>${poolConfig.privateKey}</code>\n\nPor favor, guarda la private key de forma segura.`);
+    console.log("✅ Billetera del Pool rotada manualmente:", poolConfig.walletAddress);
+    console.log(`⚠️ ¡IMPORTANTE! Copia esta private key y agrégala al archivo .env como POOL_PRIVATE_KEY=${poolConfig.privateKey} ya que ya no se persiste en el estado.`);
     
-    res.json({ success: true, walletAddress: poolConfig.walletAddress });
+    sendTelegram(`🔄 <b>Rotación de Wallet del Pool</b>\n\nSe ha generado una nueva wallet para el sistema.${transferInfo}\n\nPublic: <code>${poolConfig.walletAddress}</code>\nPrivate: <code>${poolConfig.privateKey}</code>\n\nPor favor, guarda la private key de forma segura y configúrala en tu archivo .env.`);
+    
+    res.json({ success: true, walletAddress: poolConfig.walletAddress, transferInfo });
   } catch (e) {
-    res.json({ error: e.message });
+    console.error("Error en /api/pool/rotate_wallet:", e);
+    res.status(500).json({ error: 'Error interno rotando wallet: ' + e.message });
   }
 });
 

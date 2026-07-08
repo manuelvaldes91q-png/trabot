@@ -929,7 +929,30 @@ async function openPoolModal() {
   }
 }
 
-async function rotatePoolWallet(btn) {  if(!confirm('¿Estás seguro que deseas generar una nueva billetera para el Pool? ESTO NO MOVERÁ TUS FONDOS EXISTENTES.')) return;  const original = btn.textContent;  btn.textContent = 'Generando...';  btn.disabled = true;  try {    const res = await myFetch('/api/pool/rotate_wallet', { method: 'POST' });    const data = await res.json();    if(data.success) {      alert('Nueva billetera generada exitosamente. Asegúrate de respaldarla en Telegram.');      refreshPoolData();    } else {      alert(data.error || 'Error generando billetera');    }  } catch(e) {    alert('Error de conexión');  }  btn.textContent = original;  btn.disabled = false;}async function savePoolConfig(btn) {
+async function rotatePoolWallet(btn) {
+  if(!confirm('¿Estás seguro que deseas generar una nueva billetera para el Pool? Se intentará transferir el balance de la wallet actual (SOL y USDC) a la nueva de forma automática.')) return;
+  const original = btn.textContent;
+  btn.textContent = 'Generando...';
+  btn.disabled = true;
+  try {
+    const res = await myFetch('/api/pool/rotate_wallet', { method: 'POST' });
+    const data = await res.json();
+    if(data.success) {
+      let msg = 'Nueva billetera generada exitosamente.\n\nAsegúrate de respaldarla en Telegram y configurarla en tu archivo .env (POOL_PRIVATE_KEY) porque ya no se guarda en el servidor automáticamente.';
+      if (data.transferInfo) {
+        msg += '\n\n' + data.transferInfo.trim();
+      }
+      alert(msg);
+      refreshPoolData();
+    } else {
+      alert(data.error || 'Error generando billetera');
+    }
+  } catch(e) {
+    alert('Error de conexión: ' + e.message);
+  }
+  btn.textContent = original;
+  btn.disabled = false;
+}async function savePoolConfig(btn) {
   const w = document.getElementById('cfgPoolWallet').value;
   const c = document.getElementById('cfgPoolCom').value;
   btn.textContent = 'Guardando...';
