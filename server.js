@@ -17,6 +17,19 @@ const __dirname = path.dirname(__filename);
 const app = express();
 app.use(express.json());
 
+// Middleware de autenticación para rutas admin que mueven fondos reales.
+// Reutiliza la MISMA contraseña que ya usa /api/login (appConfig.appPassword /
+// APP_PASSWORD), enviada como Authorization: Bearer <password> — que es
+// exactamente lo que el frontend (myFetch) ya manda en cada request.
+function adminAuth(req, res, next) {
+  const pwd = appConfig.appPassword || process.env.APP_PASSWORD || 'admin123';
+  const auth = req.headers.authorization;
+  if (!auth || !auth.startsWith('Bearer ') || auth.substring(7) !== pwd) {
+    return res.status(401).json({ error: 'No autorizado' });
+  }
+  next();
+}
+
 const PORT = process.env.PORT || 3000;
 
 function httpsFetch(urlStr, options = {}) {
@@ -2110,7 +2123,7 @@ app.post('/api/pool/config', (req, res) => {
   res.json({ success: true, poolConfig });
 });
 
-app.post('/api/pool/request_withdraw', (req, res) => {
+app.post('/api/pool/request_withdraw', adminAuth, (req, res) => {
   const { name, amount, destinationWallet } = req.body;
   const inv = poolConfig.investors.find(i => i.name.toLowerCase() === name.toLowerCase());
   if (!inv) return res.json({ error: 'Inversor no encontrado' });
@@ -2140,7 +2153,7 @@ app.post('/api/pool/request_withdraw', (req, res) => {
   res.json({ success: true, poolConfig });
 });
 
-app.post('/api/pool/approve_withdraw', async (req, res) => {
+app.post('/api/pool/approve_withdraw', adminAuth, async (req, res) => {
   const { id } = req.body;
   if (!poolConfig.withdrawalRequests) poolConfig.withdrawalRequests = [];
   const reqIdx = poolConfig.withdrawalRequests.findIndex(r => r.id === id);
@@ -2249,7 +2262,7 @@ app.post('/api/pool/approve_withdraw', async (req, res) => {
   res.json({ success: true, poolConfig });
 });
 
-app.post('/api/pool/withdraw_admin', async (req, res) => {
+app.post('/api/pool/withdraw_admin', adminAuth, async (req, res) => {
   const { destinationWallet, amount } = req.body;
   if (!destinationWallet || !amount || amount <= 0) return res.json({ error: 'Datos inválidos' });
   
@@ -2302,7 +2315,7 @@ app.post('/api/pool/withdraw_admin', async (req, res) => {
   res.json({ success: true, poolConfig });
 });
 
-app.post('/api/pool/reject_withdraw', (req, res) => {
+app.post('/api/pool/reject_withdraw', adminAuth, (req, res) => {
   const { id } = req.body;
   if (!poolConfig.withdrawalRequests) poolConfig.withdrawalRequests = [];
   const reqIdx = poolConfig.withdrawalRequests.findIndex(r => r.id === id);
@@ -2936,6 +2949,9 @@ async function startServer() {
   }
 
   app.listen(PORT, "0.0.0.0", () => {
+  if (!appConfig.appPassword && !process.env.APP_PASSWORD) {
+    console.warn('⚠️⚠️⚠️ ADVERTENCIA DE SEGURIDAD: no configuraste APP_PASSWORD/appPassword. El panel está usando la contraseña por defecto "admin123", que es pública en el repo. Configura una contraseña propia en .env antes de exponer este servidor.');
+  }
     console.log(`🚀 SERVIDOR VPS INICIADO 24/7 en puerto ${PORT}`);
     console.log(`📂 Panel de control accesible vía IP pública:${PORT} o enlace generado.`);
   });
