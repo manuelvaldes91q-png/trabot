@@ -894,7 +894,7 @@ async function openPoolModal() {
                 <div style="color:${(i.profit||0)>0?'var(--g)':'var(--r)'}">${(i.profit||0)>=0?'+':''}$${(i.profit||0).toFixed(2)} PNL</div>
                 <button onclick="syncInvestorDeposit('${i.name}')" class="btn btn-a" style="font-size:9px;padding:2px 5px;">Sincronizar</button>
                 <button onclick="editInvestorDeposit('${i.name}', ${i.deposit})" class="btn btn-g" style="font-size:9px;padding:2px 5px;">Editar Depósito</button>
-                <button onclick="editInvestorPassword('${i.name}')" class="btn btn-a" style="font-size:9px;padding:2px 5px;">Editar Contraseña</button>
+                <button onclick="editInvestorPassword('${i.name}')" class="btn btn-y" style="font-size:9px;padding:2px 5px;">Editar Contraseña</button>
                 <button onclick="deletePoolInvestor('${i.name}')" class="btn" style="background:var(--r);font-size:9px;padding:2px 5px;">Eliminar</button>
               </div>
             </div>
