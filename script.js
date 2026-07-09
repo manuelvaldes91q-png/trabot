@@ -1,0 +1,2807 @@
+
+// ══════════════════════════════════════════════════════════
+// AUDIO
+// ══════════════════════════════════════════════════════════
+let authToken = localStorage.getItem('dh_pwd') || '';
+async function myFetch(url, opts = {}) {
+  if (!opts.headers) opts.headers = {};
+  if (opts.method === 'POST' && !opts.headers['Content-Type']) opts.headers['Content-Type'] = 'application/json';
+  if (!opts.cache) opts.cache = 'no-store';
+  opts.headers['Authorization'] = 'Bearer ' + authToken;
+  const res = await fetch(url, opts);
+  if (res.status === 401) {
+    document.getElementById('loginScreen').style.display = 'flex';
+    throw new Error('Unauthorized');
+  }
+  return res;
+}
+async function doLogin() {
+  const p = document.getElementById('pwInp').value;
+  const r = await fetch('/api/login', {
+    method: 'POST', headers: {'Content-Type': 'application/json'},
+    body: JSON.stringify({password:p})
+  });
+  if (r.ok) {
+    authToken = p; localStorage.setItem('dh_pwd', p);
+    document.getElementById('loginScreen').style.display = 'none';
+    initServerState(); // intentamos de nuevo restaurar
+  } else { alert('Contraseña incorrecta'); }
+}
+let audioCtx=null,soundOn=false;
+function initAudio(){if(!audioCtx)audioCtx=new(window.AudioContext||window.webkitAudioContext)();}
+function beep(type='buy'){
+  if(!soundOn)return;
+  try{
+    initAudio();if(audioCtx.state==='suspended')audioCtx.resume();
+    const cfg={
+      buy:[{f:440,d:.08},{f:550,d:.08},{f:660,d:.18}],
+      tp:[{f:523,d:.09},{f:659,d:.09},{f:784,d:.09},{f:1047,d:.22}],
+      sl:[{f:440,d:.15},{f:330,d:.15},{f:220,d:.28}],
+      near:[{f:880,d:.05},{f:0,d:.05},{f:880,d:.08}],
+      alert:[{f:1000,d:.05},{f:0,d:.04},{f:1000,d:.1}]
+    };
+    const seq=cfg[type]||cfg.alert;
+    let t=audioCtx.currentTime+.01;
+    for(const{f,d}of seq){
+      if(f===0){t+=d;continue;}
+      const o=audioCtx.createOscillator(),g=audioCtx.createGain();
+      o.connect(g);g.connect(audioCtx.destination);
+      o.type=type==='sl'?'sawtooth':'sine';
+      o.frequency.setValueAtTime(f,t);
+      g.gain.setValueAtTime(.5,t);g.gain.exponentialRampToValueAtTime(.001,t+d);
+      o.start(t);o.stop(t+d+.01);t+=d+.02;
+    }
+  }catch(e){}
+}
+function changeRunMode() {
+  const m = document.getElementById('modeSel').value;
+  if(m === 'real' && !confirm('⚠️ ATENCIÓN: Vas a activar las operaciones REALES en MEXC.\n\nAsegúrate de tener definidas tus MEXC_API_KEY y MEXC_API_SECRET en las variables de entorno de tu Applet o .env.\n\n¿Confirmas que deseas operar automáticamente con tu saldo real en MEXC?')) {
+    document.getElementById('modeSel').value = 'simulated'; return;
+  }
+  myFetch('/api/action', {
+    method: 'POST', headers:{'Content-Type':'application/json'}, body: JSON.stringify({action: 'setMode', payload: {mode: m}})
+  });
+  document.getElementById('dBalS').textContent = m === 'real' ? 'USDT (Real MEXC)' : 'disponible';
+}
+
+function changeSolMode() {
+  const m = document.getElementById('solModeSel').value;
+  myFetch('/api/action', {
+    method: 'POST', 
+    headers:{'Content-Type':'application/json'}, 
+    body: JSON.stringify({action: 'setMode', payload: {solMode: m}})
+  }).then(() => {
+    addLog(`Solana Balance Mode cambiado a: ${m.toUpperCase()}`, 'info');
+    // Refresh to update UI immediately
+    initServerState();
+  });
+}
+
+function resetSim() {
+  if(!confirm('¿Estás seguro de que deseas reiniciar tu balance simulado, historial de órdenes y estadísticas de P&L?')) return;
+  myFetch('/api/action', {
+    method: 'POST', 
+    headers:{'Content-Type':'application/json'}, 
+    body: JSON.stringify({action: 'resetSim', payload: {clearLogs: true}})
+  }).then(r => r.json()).then(d => {
+    if(d.ok) {
+      showFlash('buy', '♻️ SIMULACIÓN RESETEADA', 'Se han restablecido los valores por defecto.');
+      SIM = d.sim;
+      updateDash();
+    }
+  });
+}
+function toggleSound(){
+  soundOn=!soundOn;
+  const b=document.getElementById('btnSound');
+  b.textContent=soundOn?'🔊 Sonido ON':'🔇 Sonido';
+  b.className=soundOn?'btn btn-g btn-sm':'btn btn-d btn-sm';
+  if(soundOn){initAudio();beep('alert');}
+}
+
+// NOTIFICACIONES
+let notifOn=false;
+async function requestNotif(){
+  if(!('Notification'in window)){alert('Sin soporte de notificaciones');return;}
+  const p=await Notification.requestPermission();
+  notifOn=p==='granted';
+  const b=document.getElementById('btnNotif');
+  b.textContent=notifOn?'🔔 Notif. ON':'🔕 Sin permiso';
+  b.className=notifOn?'btn btn-g btn-sm':'btn btn-r btn-sm';
+  if(notifOn)pushNotif('DIP HUNTER','Notificaciones activadas ✅');
+}
+function pushNotif(title,body){
+  if(!notifOn||Notification.permission!=='granted')return;
+  try{new Notification(title,{body});}catch(e){}
+}
+
+// ══════════════════════════════════════════════════════════
+// API
+// ══════════════════════════════════════════════════════════
+const PX=[
+  u=>`/api/mexc/${u}`,
+  u=>`https://api.allorigins.win/raw?url=${encodeURIComponent('https://api.mexc.com/api/v3/'+u)}`,
+  u=>`https://corsproxy.io/?${encodeURIComponent('https://api.mexc.com/api/v3/'+u)}`
+];
+let pxi=0;
+async function pf(url,ms=10000){
+  for (let i = 0; i < PX.length; i++) {
+    const idx = (pxi + i) % PX.length;
+    try {
+      const c = new AbortController();
+      const t = setTimeout(() => c.abort(), ms);
+      
+      let r;
+      if (idx === 0) {
+        // Backend proxy needs myFetch to send Auth headers
+        r = await myFetch(PX[idx](url), {signal: c.signal});
+      } else {
+        // Public proxies
+        r = await fetch(PX[idx](url), {signal: c.signal});
+      }
+      
+      clearTimeout(t);
+      if (!r.ok) throw new Error('Proxy error ' + r.status);
+      const data = await r.json();
+      pxi = idx; // Save working proxy index
+      return data;
+    } catch(e) {
+      console.warn(`pf attempt ${idx} failed:`, e.message);
+    }
+  }
+  console.error('pf error', 'All proxies failed');
+  throw new Error('Sin conexión');
+}
+async function mxTickers(){const d=await pf('ticker/24hr',18000);if(Array.isArray(d))return d;throw new Error('MEXC no disponible');}
+async function mxKlines(sym,iv,lim=120){const im={m15:'15m',m30:'30m',h1:'60m',h4:'4h',d1:'1d'};try{const d=await pf(`klines?symbol=${sym}&interval=${im[iv]||'60m'}&limit=${lim}`,9000);if(Array.isArray(d))return d.map(k=>[Math.floor(+k[0]/1000),+k[1],+k[2],+k[3],+k[4],+k[5]]);return[];}catch{return[];}}
+async function mxDepth(sym,lim=200){try{const d=await pf(`depth?symbol=${sym}&limit=${lim}`,7000);if(d?.bids)return d;return null;}catch{return null;}}
+async function mxPrice(sym){try{const d=await pf(`ticker/price?symbol=${sym}USDT`,4000);return+d.price||0;}catch{return 0;}}
+async function mxTicker24h(sym){try{return await pf(`ticker/24hr?symbol=${sym}USDT`,5000);}catch{return null;}}
+
+// FORMAT
+function fpZ(p,ref){if(!p||!ref)return'0';if(ref>=10)return p.toFixed(3);if(ref>=0.1)return p.toFixed(4);if(ref>=0.01)return p.toFixed(5);if(ref>=0.001)return p.toFixed(6);const m=ref.toFixed(12).match(/^0\.(0+)/);return m?p.toFixed(m[1].length+4):p.toFixed(6);}
+function fp(n){if(!n)return'0';if(n>=1000)return n.toLocaleString('en-US',{maximumFractionDigits:2});if(n>=0.01)return n.toFixed(4);const m=n.toFixed(12).match(/^0\.(0+)/);return m?n.toFixed(m[1].length+3):n.toFixed(6);}
+function fv(v){if(!v)return'$0';if(v>=1e6)return'$'+(v/1e6).toFixed(1)+'M';if(v>=1e3)return'$'+(v/1e3).toFixed(1)+'K';return'$'+v.toFixed(0);}
+const slp=ms=>new Promise(r=>setTimeout(r,ms));
+
+// ══════════════════════════════════════════════════════════
+// ANÁLISIS
+// ══════════════════════════════════════════════════════════
+function calcEMA(data,p){if(!data||data.length<2)return data?.[data.length-1]||0;const k=2/(Math.min(p,data.length)+1);let e=data.slice(0,Math.min(p,data.length)).reduce((a,b)=>a+b,0)/Math.min(p,data.length);for(let i=Math.min(p,data.length);i<data.length;i++)e=data[i]*k+e*(1-k);return e;}
+function detectTrend(klines){
+  if(!klines||klines.length<15)return{label:'NEUTRAL',score:0,emoji:'🟡',bull:false,ema20:0,ema50:0,cp:0,distEMA20:0};
+  const C=klines.map(k=>+k[4]),H=klines.map(k=>+k[2]),L=klines.map(k=>+k[3]),n=klines.length,cp=C[n-1];
+  const ema20=calcEMA(C,20),ema50=calcEMA(C,Math.min(50,n-1));
+  const a20=cp>ema20,a50=cp>ema50,al=ema20>ema50*.995;
+  const h=Math.floor(n/2);
+  const hh=H.slice(h).reduce((a,b)=>a+b,0)/(n-h)>H.slice(0,h).reduce((a,b)=>a+b,0)/h*1.005;
+  const hl=L.slice(h).reduce((a,b)=>a+b,0)/(n-h)>L.slice(0,h).reduce((a,b)=>a+b,0)/h*1.005;
+  let score=0;if(a20)score+=25;if(a50)score+=20;if(al)score+=20;if(hh)score+=15;if(hl)score+=15;if(!a20&&!a50&&!al)score-=30;score=Math.max(0,Math.min(100,score));
+  let label,emoji,bull;
+  if(score>=70){label='ALCISTA FUERTE';emoji='🟢🟢';bull=true;}else if(score>=45){label='ALCISTA';emoji='🟢';bull=true;}else if(score>=25){label='LATERAL+';emoji='🟡';bull=false;}else{label='BAJISTA';emoji='🔴';bull=false;}
+  return{label,emoji,score,bull,ema20,ema50,cp,distEMA20:ema20>0?+((cp-ema20)/ema20*100).toFixed(2):0};
+}
+function detectAccumulation(klines){
+  if(!klines||klines.length<20)return{isAcc:false,score:0};
+  const H=klines.map(k=>+k[2]),L=klines.map(k=>+k[3]),C=klines.map(k=>+k[4]),n=klines.length,cp=C[n-1];
+  const half=Math.floor(n/2),qtr=Math.floor(n/4);
+  const maxHigh=Math.max(...H.slice(0,half)); // Max in first half (ATH)
+  const minLow=Math.min(...L);
+  const recentMax=Math.max(...H.slice(-qtr));
+  const recentMin=Math.min(...L.slice(-qtr));
+  const hasDumped = maxHigh > cp * 2.0; // Dropped at least 50% from first half high
+  const isNearBottom = recentMin <= minLow * 1.3;
+  const isRelativelyFlat = recentMax <= recentMin * 1.4;
+  const isAcc = hasDumped && isNearBottom && isRelativelyFlat;
+  let score = 0;
+  if (isAcc) {
+    score = 80;
+    if (recentMax <= recentMin * 1.2) score += 20; // Very tight
+  }
+  return { isAcc, score, label: isAcc ? 'ACUMULACIÓN' : 'NEUTRAL', emoji: isAcc ? '🧲' : '🟡' };
+}
+function findDips(klines,cp){
+  if(!klines||klines.length<20)return[];
+  const L=klines.map(k=>+k[3]),H=klines.map(k=>+k[2]),n=klines.length,w=Math.max(3,Math.floor(n*.05));
+  const dips=[];
+  for(let i=w;i<n-w;i++){const sl_=L.slice(i-w,i+w+1);if(L[i]<=Math.min(...sl_)){const fH=Math.max(...H.slice(i+1,Math.min(n,i+w*4+1)));if((fH-L[i])/L[i]*100>=4)dips.push({price:L[i]});}}
+  const tol=cp*.015,zones=[];
+  for(const d of dips.sort((a,b)=>a.price-b.price)){const ex=zones.find(z=>Math.abs(z.price-d.price)<=tol);if(ex)ex.count++;else zones.push({price:d.price,count:1});}
+  return zones.filter(z=>z.price<cp*.99).sort((a,b)=>b.count-a.count).slice(0,5);
+}
+function findSR(klines, cp) {
+  if(!klines||klines.length<20)return {supports: [], resistances: []};
+  const L=klines.map(k=>+k[3]),H=klines.map(k=>+k[2]),n=klines.length,w=3;
+  const dips=[], peaks=[];
+  for(let i=w;i<n-w;i++){
+    const sL=L.slice(i-w,i+w+1); if(L[i]===Math.min(...sL)) dips.push({price:L[i]});
+    const sH=H.slice(i-w,i+w+1); if(H[i]===Math.max(...sH)) peaks.push({price:H[i]});
+  }
+  const tol = cp*0.02;
+  const group = (arr) => {
+    let zones=[];
+    for(const d of arr.sort((a,b)=>a.price-b.price)){
+      const ex=zones.find(z=>Math.abs(z.price-d.price)<=tol);
+      if(ex) ex.count++; else zones.push({price:d.price,count:1});
+    }
+    return zones.sort((a,b)=>b.count-a.count).slice(0, 3);
+  };
+  let supports = group(dips).filter(z => z.price < cp * 0.99).map(z=>z.price).sort((a,b)=>b-a);
+  let resistances = group(peaks).filter(z => z.price > cp * 1.01).map(z=>z.price).sort((a,b)=>a-b);
+  return {supports, resistances};
+}
+// Detecta zigzag: ciclos bajada/subida, swing % promedio, máximos/mínimos crecientes
+function detectZigzag(klines){
+  if(!klines||klines.length<20)return{cycles:0,swingPct:0,maxSwing:0,higherHighs:false,higherLows:false};
+  const H=klines.map(k=>+k[2]),L=klines.map(k=>+k[3]),n=klines.length;
+  const w=Math.max(3,Math.floor(n*.05));
+  // Detectar pivotes
+  const pivots=[];
+  for(let i=w;i<n-w;i++){
+    const sh=H.slice(i-w,i+w+1),sl_=L.slice(i-w,i+w+1);
+    if(H[i]>=Math.max(...sh)*.999)pivots.push({i,p:H[i],t:'H'});
+    else if(L[i]<=Math.min(...sl_)*1.001)pivots.push({i,p:L[i],t:'L'});
+  }
+  // Alternar H/L
+  const sig=[];
+  for(const pt of pivots){
+    if(!sig.length){sig.push(pt);continue;}
+    const pv=sig[sig.length-1];
+    if(pv.t===pt.t){if((pt.t==='H'&&pt.p>pv.p)||(pt.t==='L'&&pt.p<pv.p))sig[sig.length-1]=pt;}
+    else{const sw=Math.abs(pt.p-pv.p)/Math.min(pt.p,pv.p)*100;if(sw>=3)sig.push(pt);}
+  }
+  // Calcular ciclos y swings
+  let cycles=0,maxSwing=0;const swings=[];
+  for(let i=1;i<sig.length;i++){
+    const sw=Math.abs(sig[i].p-sig[i-1].p)/Math.min(sig[i].p,sig[i-1].p)*100;
+    if(sw>0){swings.push(sw);if(sw>maxSwing)maxSwing=sw;}
+    if(sig[i-1].t!==sig[i].t)cycles++;
+  }
+  const avgSwing=swings.length?swings.reduce((a,b)=>a+b,0)/swings.length:0;
+  // Máximos y mínimos crecientes
+  const highs=sig.filter(s=>s.t==='H').map(s=>s.p);
+  const lows=sig.filter(s=>s.t==='L').map(s=>s.p);
+  const higherHighs=highs.length>=2&&highs[highs.length-1]>highs[0];
+  const higherLows=lows.length>=2&&lows[lows.length-1]>lows[0];
+  return{cycles:Math.floor(cycles/2),swingPct:+avgSwing.toFixed(1),maxSwing:+maxSwing.toFixed(1),higherHighs,higherLows,pivots:sig};
+}
+
+function groupOB(levels,ref,side){
+  let bSz=ref>=100?1:ref>=10?0.1:ref>=1?0.01:ref>=0.1?0.001:ref>=0.01?0.0001:ref>=0.001?0.00001:ref*0.01;
+  const zones={};
+  for(const[p,q]of levels){const price=+p,qty=+q,total=price*qty;if(total<=0||price<=0)continue;const bucket=Math.round(price/bSz)*bSz,key=bucket.toFixed(14);if(!zones[key])zones[key]={price:bucket,total:0,qty:0};zones[key].total+=total;zones[key].qty+=qty;}
+  return Object.values(zones).filter(z=>z.total>0).sort(side==='bid'?(a,b)=>b.price-a.price:(a,b)=>a.price-b.price);
+}
+function analyzeOB(bids,asks,cp,dips){
+  const bZ=groupOB(bids,cp,'bid'),aZ=groupOB(asks,cp,'ask');
+  const avgB=bZ.reduce((a,z)=>a+z.total,0)/(bZ.length||1),avgA=aZ.reduce((a,z)=>a+z.total,0)/(aZ.length||1);
+  const buyWalls=bZ.filter(z=>z.price<cp).map(z=>{
+    const str=+(z.total/avgB).toFixed(1),dist=+((cp-z.price)/cp*100).toFixed(2);
+    const dip=dips?.find(d=>Math.abs(d.price-z.price)<=z.price*.02);
+    const ql=z.qty>=1e6?`${(z.qty/1e6).toFixed(1)}M` :z.qty>=1e3?`${(z.qty/1e3).toFixed(0)}K` :z.qty.toFixed(0);
+    return{...z,str,dist,isWall:str>=3,rebounds:dip?.count||0,ql,score:z.total*(str>=3?2.5:.5)*(1+(dip?.count||0)*.5)};
+  }).filter(z=>z.isWall).sort((a,b)=>b.score-a.score).slice(0,8);
+  const sellWalls=aZ.filter(z=>z.price>cp).map(z=>{
+    const str=+(z.total/avgA).toFixed(1),dist=+((z.price-cp)/cp*100).toFixed(2);
+    const ql=z.qty>=1e6?`${(z.qty/1e6).toFixed(1)}M` :z.qty>=1e3?`${(z.qty/1e3).toFixed(0)}K` :z.qty.toFixed(0);
+    return{...z,str,dist,isWall:str>=3,ql};
+  }).filter(z=>z.isWall).sort((a,b)=>a.dist-b.dist).slice(0,5);
+  const bestWall=buyWalls[0]||null;
+  let strat=null;
+  if(bestWall){const entry=bestWall.price*1.005;const tp1=sellWalls[0]?sellWalls[0].price*.995:cp*1.08;const sl_=bestWall.price*.985;const rr=entry>sl_?+((tp1-entry)/(entry-sl_)).toFixed(2):0;strat={entry,sl:sl_,tp1,rr,bestWall,slPct:((entry-sl_)/entry*100).toFixed(1),tp1Pct:((tp1-entry)/entry*100).toFixed(1)};}
+  const imb=bZ.reduce((a,z)=>a+z.total,0);const totA=aZ.reduce((a,z)=>a+z.total,0);
+  return{buyWalls,sellWalls,strat,imb:+(imb/(imb+totA||1)*100).toFixed(1)};
+}
+
+// ══════════════════════════════════════════════════════════
+// SIMULADOR Y SINCRONIZACIÓN CON EL SERVIDOR (VPS)
+// ══════════════════════════════════════════════════════════
+let SIM={balance:1000,solBalance:10,initBal:1000,trades:[],pnl:0,wins:0,losses:0,totalExec:0};
+
+let syncTimer=null;
+function syncState(){
+  if(syncTimer)clearTimeout(syncTimer);
+  syncTimer=setTimeout(async()=>{
+    try{
+      const slim=watchItems.map(w=>({
+        symbol:w.symbol,pair:w.pair,cp:w.currentPrice||w.cp,
+        orders:w.orders,trend:w.trend,trend1d:w.trend1d,
+        zz:w.zz,zz1d:w.zz1d,dips:w.dips||[],bestDip:w.bestDip||null,chg:w.chg||0,vol:w.vol||0,filledBuys:w.filledBuys||[],
+        slPrice:w.slPrice||null,tp1Price:w.tp1Price||null,tp2Price:w.tp2Price||null,
+        tp1Hit:w.tp1Hit||false,tp2Hit:w.tp2Hit||false,
+        addedAt:w.addedAt||Date.now(),lastUpdate:w.lastUpdate||Date.now(),
+        currentPrice:w.currentPrice||w.cp,prevPrice:w.prevPrice||w.cp
+      }));
+      await myFetch('/api/state',{method:'POST',headers:{'Content-Type':'application/json'},body:JSON.stringify({sim:SIM,watch:slim})});
+    }catch(e){console.warn('Error syncing:',e);}
+  },1000);
+}
+
+function loadSIM(){}
+function saveSIM(){updateDash();syncState();}
+function saveWatch(){syncState();}
+function loadWatch(){}
+
+async function initServerState(){
+  try{
+    const res = await myFetch('/api/state');
+    if(res.ok){
+      const data = await res.json();
+      if(data.SIM) Object.assign(SIM, data.SIM);
+      if(data.watchItems && Array.isArray(data.watchItems)){
+        watchItems = data.watchItems.map(w=>({...w, klines1h:[], klines1d:[], orders:w.orders||[]}));
+      }
+      
+      monitorOn = data.monitorOn || false;
+      cycleN = data.cycleN || 0;
+      document.getElementById('dCycle').textContent = cycleN;
+      if(data.monitorInterval) {
+        document.getElementById('cfInterval').value = data.monitorInterval;
+      }
+      if (data.mode) {
+        document.getElementById('modeSel').value = data.mode;
+        document.getElementById('dBalS').textContent = data.mode === 'real' ? 'USDT (Real MEXC)' : 'disponible';
+      }
+      if (data.solMode) {
+        document.getElementById('solModeSel').value = data.solMode;
+      }
+      if (data.vpsSolWallet) {
+        updateSolanaVpsWalletUI(data.vpsSolWallet);
+      }
+      
+      const bStart = document.getElementById('btnStart');
+      const bStop = document.getElementById('btnStop');
+      const dot = document.getElementById('dot');
+      const stat = document.getElementById('hstat');
+      if (monitorOn) {
+        dot.classList.add('on');
+        bStart.style.display='none';
+        bStop.style.display='';
+        stat.innerHTML=`Ciclo ${cycleN} · ${watchItems.length} monedas <span style="color:var(--g)">(VPS Activo)</span>`;
+      } else {
+        dot.classList.remove('on');
+        bStart.style.display='';
+        bStop.style.display='none';
+        stat.textContent='Monitor VPS detenido';
+      }
+
+      if(watchItems.length>0){
+        addLog(`📂 Datos y estado restaurados desde el VPS: ${watchItems.length} monedas`, 'info');
+        renderWatchList(); updateDash();
+        setTimeout(()=>{
+          showBanner('buy',`📂 ${watchItems.length} moneda(s) recuperadas`,
+            watchItems.map(w=>{const nextOrd=w.orders.find(o=>o.status==='pending');const filledOrds=w.orders.filter(o=>o.status==='filled');return `${w.symbol}: ${filledOrds.length>0?filledOrds.length+'x ejecutadas · ':''}${nextOrd?'próx. $'+fpZ(nextOrd.price,nextOrd.price):'todas colocadas'}`;}).join('\n')
+          );
+        }, 800);
+      }
+    }
+  }catch(e){
+    console.warn('Error auto-loading:',e);
+  }
+}
+function showTrades(){if(!SIM.trades.length){alert('Sin operaciones');return;}alert('HISTORIAL:\n\n'+SIM.trades.map((t,i)=>`#${i+1} ${t.symbol}: ${t.pnl>=0?'+':''}$${(+t.pnl).toFixed(2)} (${t.pnlPct}%) · ${t.at?new Date(t.at).toLocaleDateString('es'):''}`).join('\n'));}
+
+async function openPoolModal() {
+  const existing = document.getElementById('poolModalOverlay');
+  if (existing) existing.remove();
+  
+  const p = document.createElement('div');
+  p.id = 'poolModalOverlay';
+  p.style.cssText = 'position:fixed;inset:0;background:rgba(0,0,0,0.8);z-index:9000;display:flex;align-items:center;justify-content:center';
+  p.innerHTML = `
+    <div style="background:var(--bg2);width:500px;max-width:95%;border:1px solid var(--bdr);border-radius:8px;padding:25px;font-family:var(--sans);max-height:90vh;overflow-y:auto">
+      <div style="font-weight:700;margin-bottom:15px;color:var(--t);font-size:16px;">🏦 Gestión del Pool de Inversores</div>
+      <div style="margin-bottom:15px;font-size:11px;color:var(--t2)">
+        Configura la wallet central y la comisión del sistema. Los inversores verán esto en su panel (/investor). La billetera es generada automáticamente por el sistema.<br/><br/>
+        <strong>¿Cómo funciona USDC en Solana?</strong><br/>
+        El bot usa Júpiter Aggregator para sus trades. Aunque las comisiones de red ("gas") se pagan en SOL, el bot puede tener el saldo principal en USDC e intercambiar (hacer swap) directamente de USDC a otros tokens de Solana de forma transparente, y de regreso a USDC. Solo asegúrate de enviar un poco de SOL (~0.05 SOL) a la wallet del Pool para cubrir los fees transaccionales y la creación de cuentas de tokens.
+      </div>
+      <div style="margin-bottom:10px">
+        <div style="font-size:10px;color:var(--t2);margin-bottom:4px">Billetera del Sistema (Pool)</div>
+        <div style="display:flex;gap:4px">
+          <input type="text" id="cfgPoolWallet" class="inp" style="width:100%;" readonly>
+          <button class="btn btn-g" onclick="rotatePoolWallet(this)">Rotar</button>
+        </div>
+        <div style="font-family:var(--mono);font-size:10px;color:#14f195;margin-top:4px" id="poolWalletBalances">Balance: --</div>
+      </div>
+      <div style="margin-bottom:15px">
+        <div style="font-size:10px;color:var(--t2);margin-bottom:4px">Comisión del Administrador (%)</div>
+        <input type="number" id="cfgPoolCom" class="inp" placeholder="Ej: 20 para 20%" style="width:100%">
+      </div>
+      <div style="display:flex;gap:10px;margin-bottom:20px;flex-wrap:wrap;">
+        <button class="btn btn-g" style="flex:1;min-width:110px;" onclick="savePoolConfig(this)">💾 Guardar</button>
+        <button class="btn btn-y" style="flex:1;min-width:110px;" onclick="recoverPoolRent(this)">🧹 Limpiar Rent</button>
+        <button class="btn btn-a" style="flex:1;min-width:110px;" onclick="backupPoolWallet(this)">🔐 Backup (Key)</button>
+        <button class="btn btn-d" style="flex:1;min-width:110px;" onclick="document.getElementById('poolModalOverlay').remove()">❌ Cerrar</button>
+      </div>
+
+      <div style="font-weight:700;margin-bottom:10px;color:var(--t);font-size:14px;border-top:1px solid var(--bdr);padding-top:15px">👥 Inversores Actuales</div>
+      <div id="poolInvestorsList" style="font-family:var(--mono);font-size:11px;color:var(--t2);margin-bottom:15px;max-height:150px;overflow-y:auto">
+        Cargando...
+      </div>
+      
+      <div style="background:var(--bg3);padding:10px;border-radius:6px;margin-bottom:15px">
+        <div style="font-size:11px;margin-bottom:5px;font-weight:bold;color:var(--t)">Añadir / Actualizar Inversor</div>
+        <div style="display:flex;gap:4px;margin-bottom:5px">
+          <input type="text" id="addInvName" class="inp" placeholder="Nombre" style="flex:1">
+          <input type="number" id="addInvDeposit" class="inp" placeholder="Sumar Depósito" style="width:100px">
+        </div>
+        <div style="display:flex;gap:4px;margin-bottom:5px">
+          <input type="text" id="addInvPwd" class="inp" placeholder="Contraseña" style="flex:1">
+          <input type="text" id="addInvDepWallet" class="inp" placeholder="Wallet depósito (auto si vacío)" style="flex:2">
+        </div>
+        <button class="btn btn-g btn-sm" style="width:100%" onclick="savePoolInvestor()">Añadir/Editar</button>
+      </div>
+      
+      <div style="font-weight:700;margin-bottom:10px;color:var(--t);font-size:14px;border-top:1px solid var(--bdr);padding-top:15px">💰 Tus Ganancias (Admin)</div>
+      <div style="margin-bottom:15px;font-size:12px;color:var(--g);font-family:var(--mono);font-weight:bold">
+        Comisiones acumuladas: $<span id="lblAdminCom">0.00</span>
+      </div>
+      <div style="display:flex;gap:4px;margin-bottom:15px">
+        <input type="text" id="inpAdminWallet" class="inp" placeholder="Tu wallet personal" style="flex:1">
+        <input type="number" id="inpAdminAmt" class="inp" placeholder="Cantidad" style="width:100px">
+        <button class="btn btn-g btn-sm" onclick="withdrawAdmin()">Retirar a mi wallet</button>
+      </div>
+
+      <div style="font-weight:700;margin-bottom:10px;color:var(--t);font-size:14px;border-top:1px solid var(--bdr);padding-top:15px">💸 Solicitudes de Retiro</div>
+      <div id="poolRequestsList" style="font-family:var(--sans);font-size:11px;color:var(--t2);margin-bottom:15px;max-height:150px;overflow-y:auto">
+        Cargando solicitudes...
+      </div>
+    </div>
+  `;
+  document.body.appendChild(p);
+
+  try {
+    const res = await myFetch('/api/pool');
+    const data = await res.json();
+    if(data.poolConfig) {
+      document.getElementById('cfgPoolWallet').value = data.poolConfig.walletAddress || '';
+      document.getElementById('poolWalletBalances').innerText = `Balance: ${data.solBalance ? data.solBalance.toFixed(4) : '0.0000'} SOL | $${data.usdcBalance ? data.usdcBalance.toFixed(2) : '0.00'} USDC`;
+      document.getElementById('cfgPoolCom').value = (data.poolConfig.commissionRate * 100).toFixed(1);
+      document.getElementById('lblAdminCom').innerText = (data.poolConfig.totalCommissionEarned || 0).toFixed(2);
+      
+      const list = document.getElementById('poolInvestorsList');
+      if (!data.poolConfig.investors || data.poolConfig.investors.length === 0) {
+        list.innerHTML = 'No hay inversores aún.';
+      } else {
+        list.innerHTML = data.poolConfig.investors.map(i => {
+          let statusBadge = '';
+          if (i.depositStatus === 'pending_user' || i.depositStatus === 'pending_admin') {
+            statusBadge = `<span style="font-size:9px;color:var(--t2);background:var(--bg3);padding:2px 4px;border-radius:4px;margin-left:5px">Esperando</span> <button onclick="approveDeposit('${i.name}', ${i.expectedDeposit || 0})" class="btn btn-g btn-sm" style="font-size:9px;padding:2px 5px;margin-left:5px">Forzar</button>`;
+          }
+          let walletInfo = '';
+          if (i.depositWallet) {
+             walletInfo = `<div style="font-size:9px;color:var(--t2);margin-top:4px;">Depósito en: ${i.depositWallet} ${i.depositWalletPk ? `<a href="#" onclick="alert('Private Key de ${i.name}: ${i.depositWalletPk}')" style="color:var(--g)">[Ver PK]</a>` : ''}</div>`;
+          }
+          return `
+          <div style="border-bottom:1px solid var(--bg3);padding:6px 0;align-items:center;">
+            <div style="display:flex;justify-content:space-between;align-items:center;">
+              <div><strong style="color:var(--t)">${i.name}</strong> <span style="font-size:9px">(Deposit: $${(i.deposit||0).toFixed(2)})</span>${statusBadge}</div>
+              <div style="display:flex;align-items:center;gap:10px;">
+                <div style="color:${(i.profit||0)>0?'var(--g)':'var(--r)'}">${(i.profit||0)>=0?'+':''}$${(i.profit||0).toFixed(2)} PNL</div>
+                <button onclick="syncInvestorDeposit('${i.name}')" class="btn btn-a" style="font-size:9px;padding:2px 5px;">Sincronizar</button>
+                <button onclick="editInvestorDeposit('${i.name}', ${i.deposit})" class="btn btn-g" style="font-size:9px;padding:2px 5px;">Editar Depósito</button>
+                <button onclick="editInvestorPassword('${i.name}')" class="btn btn-y" style="font-size:9px;padding:2px 5px;">Editar Contraseña</button>
+                <button onclick="deletePoolInvestor('${i.name}')" class="btn" style="background:var(--r);font-size:9px;padding:2px 5px;">Eliminar</button>
+              </div>
+            </div>
+            ${walletInfo}
+          </div>
+        `}).join('');
+      }
+
+      const reqList = document.getElementById('poolRequestsList');
+      if (!data.poolConfig.withdrawalRequests || data.poolConfig.withdrawalRequests.filter(r => r.status === 'pending').length === 0) {
+        reqList.innerHTML = 'No hay solicitudes pendientes.';
+      } else {
+        reqList.innerHTML = data.poolConfig.withdrawalRequests.filter(r => r.status === 'pending').map(r => `
+          <div style="border:1px solid var(--bdr);border-radius:4px;padding:8px;margin-bottom:8px;background:var(--bg3)">
+            <div style="display:flex;justify-content:space-between;margin-bottom:6px">
+              <strong style="color:var(--t);font-size:13px">${r.name}</strong>
+              <strong style="color:var(--t);font-size:13px">$${r.amount}</strong>
+            </div>
+            <div style="font-family:var(--mono);font-size:9px;color:var(--t2);margin-bottom:8px;word-break:break-all">
+              Wallet: ${r.destinationWallet}
+            </div>
+            <div style="display:flex;gap:4px">
+              <button class="btn btn-g btn-sm" style="flex:1" onclick="processWithdraw('${r.id}', 'approve')">Aprobar (Retirar)</button>
+              <button class="btn btn-r btn-sm" style="flex:1" onclick="processWithdraw('${r.id}', 'reject')">Rechazar</button>
+            </div>
+          </div>
+        `).join('');
+      }
+    }
+  } catch(e) {
+    document.getElementById('poolInvestorsList').innerHTML = 'Error al cargar';
+    document.getElementById('poolRequestsList').innerHTML = 'Error al cargar';
+  }
+}
+
+async function rotatePoolWallet(btn) {
+  if(!confirm('¿Estás seguro que deseas generar una nueva billetera para el Pool? Se intentará transferir el balance de la wallet actual (SOL y USDC) a la nueva de forma automática.')) return;
+  const original = btn.textContent;
+  btn.textContent = 'Generando...';
+  btn.disabled = true;
+  try {
+    const res = await myFetch('/api/pool/rotate_wallet', { method: 'POST' });
+    const data = await res.json();
+    if(data.success) {
+      let msg = 'Nueva billetera generada exitosamente.\n\nAsegúrate de respaldarla en Telegram y configurarla en tu archivo .env (POOL_PRIVATE_KEY) porque ya no se guarda en el servidor automáticamente.';
+      if (data.transferInfo) {
+        msg += '\n\n' + data.transferInfo.trim();
+      }
+      alert(msg);
+      document.getElementById('poolModalOverlay').remove();
+      openPoolModal();
+    } else {
+      alert(data.error || 'Error generando billetera');
+    }
+  } catch(e) {
+    alert('Error de conexión: ' + e.message);
+  }
+  btn.textContent = original;
+  btn.disabled = false;
+}async function savePoolConfig(btn) {
+  const w = document.getElementById('cfgPoolWallet').value;
+  const c = document.getElementById('cfgPoolCom').value;
+  btn.textContent = 'Guardando...';
+  try {
+    await myFetch('/api/pool/config', {
+      method: 'POST',
+      headers: {'Content-Type':'application/json'},
+      body: JSON.stringify({ walletAddress: w, commissionRate: Number(c)/100 })
+    });
+    btn.textContent = '¡Guardado!';
+    setTimeout(() => btn.textContent = '💾 Guardar Config', 1500);
+  } catch(e) {
+    btn.textContent = 'Error';
+    setTimeout(() => btn.textContent = '💾 Guardar Config', 1500);
+  }
+}
+
+async function recoverPoolRent(btn) {
+  const original = btn.textContent;
+  btn.textContent = '⏳ Limpiando...';
+  btn.disabled = true;
+  try {
+    const res = await myFetch('/api/pool/recover_rent', {
+      method: 'POST',
+      headers: {'Content-Type': 'application/json'}
+    });
+    const data = await res.json();
+    if (data.error) {
+      alert('Error: ' + data.error);
+    } else {
+      if (data.closedCount > 0) {
+        alert('¡Éxito! Se incineraron ' + data.closedCount + ' cuentas de tokens vacías del Pool, recuperando +' + data.solRecovered.toFixed(5) + ' SOL directamente a la billetera central.');
+      } else {
+        alert('No se encontraron cuentas de tokens vacías para incinerar en la billetera del Pool. Está limpia.');
+      }
+      const pRes = await myFetch('/api/pool');
+      const pData = await pRes.json();
+      if(pData.poolConfig) {
+        document.getElementById('poolWalletBalances').innerText = `Balance: ${pData.solBalance ? pData.solBalance.toFixed(4) : '0.0000'} SOL | $${pData.usdcBalance ? pData.usdcBalance.toFixed(2) : '0.00'} USDC`;
+      }
+    }
+  } catch(e) {
+    alert('Ocurrió un error conectando al servidor');
+  } finally {
+    btn.textContent = original;
+    btn.disabled = false;
+  }
+}
+
+async function backupPoolWallet(btn) {
+  const original = btn.textContent;
+  btn.textContent = 'Cargando...';
+  try {
+    const res = await myFetch('/api/pool/backup');
+    const data = await res.json();
+    btn.textContent = original;
+    if (data.error) alert('Error: ' + data.error);
+    else {
+      prompt('Guarda esta Private Key en un lugar seguro (NO la compartas con nadie):', data.privateKey);
+    }
+  } catch (e) {
+    btn.textContent = original;
+    alert('Error conectando al servidor');
+  }
+}
+
+async function withdrawAdmin() {
+  const w = document.getElementById('inpAdminWallet').value;
+  const a = document.getElementById('inpAdminAmt').value;
+  if(!w || !a) return alert('Datos inválidos');
+  
+  if(!confirm(`¿Seguro que deseas retirar $${a} de tus ganancias a la wallet ${w}?`)) return;
+  
+  const res = await myFetch('/api/pool/withdraw_admin', {
+    method: 'POST',
+    headers: {'Content-Type':'application/json'},
+    body: JSON.stringify({ destinationWallet: w, amount: Number(a) })
+  });
+  const data = await res.json();
+  if (data.error) alert('Error: ' + data.error);
+  else {
+    alert('Retiro on-chain exitoso.');
+    document.getElementById('inpAdminWallet').value = '';
+    document.getElementById('inpAdminAmt').value = '';
+  }
+}
+
+async function approveDeposit(name, expected) {
+  const amtStr = prompt(`¿Qué cantidad USDC deseas aprobar para ${name}?`, expected || "50.00");
+  if (!amtStr) return;
+  const amount = parseFloat(amtStr);
+  if (isNaN(amount) || amount <= 0) {
+    alert("Cantidad inválida");
+    return;
+  }
+  const res = await myFetch('/api/pool/approve_deposit', {
+    method: 'POST',
+    headers: {'Content-Type':'application/json'},
+    body: JSON.stringify({ name, amount })
+  });
+  const data = await res.json();
+  if (data.error) alert('Error: ' + data.error);
+  else {
+    alert('Depósito aprobado.');
+    const el = document.getElementById('poolModalOverlay');
+    if (el) el.remove();
+    openPoolModal();
+  }
+}
+
+async function editInvestorDeposit(name, current) {
+  const amtStr = prompt(`¿Nuevo balance depositado (real) para ${name}?`, current);
+  if (amtStr === null) return;
+  const amount = parseFloat(amtStr);
+  if (isNaN(amount) || amount < 0) {
+    alert("Cantidad inválida");
+    return;
+  }
+  const res = await myFetch('/api/pool/edit_investor_deposit', {
+    method: 'POST',
+    headers: {'Content-Type':'application/json'},
+    body: JSON.stringify({ name, amount })
+  });
+  const data = await res.json();
+  if (data.error) alert('Error: ' + data.error);
+  else {
+    alert('Depósito actualizado.');
+    const el = document.getElementById('poolModalOverlay');
+    if (el) el.remove();
+    openPoolModal();
+  }
+}
+
+async function editInvestorPassword(name) {
+  const password = prompt(`Introduce la nueva contraseña para el inversor ${name}:`);
+  if (password === null) return;
+  if (!password.trim()) {
+    alert("La contraseña no puede estar vacía.");
+    return;
+  }
+  const res = await myFetch('/api/pool/investor', {
+    method: 'POST',
+    headers: {'Content-Type':'application/json'},
+    body: JSON.stringify({ name, password })
+  });
+  const data = await res.json();
+  if (data.error) alert('Error: ' + data.error);
+  else {
+    alert('Contraseña actualizada correctamente.');
+    const el = document.getElementById('poolModalOverlay');
+    if (el) el.remove();
+    openPoolModal();
+  }
+}
+
+async function syncInvestorDeposit(name) {
+  if(!confirm(`¿Sincronizar depósito de ${name} con el balance real de USDC en su wallet?`)) return;
+  const res = await myFetch('/api/pool/sync_investor_deposit', {
+    method: 'POST',
+    headers: {'Content-Type':'application/json'},
+    body: JSON.stringify({ name })
+  });
+  const data = await res.json();
+  if (data.error) alert('Error: ' + data.error);
+  else {
+    alert(`Depósito sincronizado. Nuevo balance: $${data.balance || 0} USDC`);
+    const el = document.getElementById('poolModalOverlay');
+    if (el) el.remove();
+    openPoolModal();
+  }
+}
+
+async function processWithdraw(id, action) {
+  if(!confirm(`¿Seguro que deseas ${action === 'approve' ? 'APROBAR y descontar' : 'RECHAZAR'} esta solicitud?`)) return;
+  const endpoint = action === 'approve' ? '/api/pool/approve_withdraw' : '/api/pool/reject_withdraw';
+  const res = await myFetch(endpoint, {
+    method: 'POST',
+    headers: {'Content-Type':'application/json'},
+    body: JSON.stringify({ id })
+  });
+  const data = await res.json();
+  if (data.error) alert('Error: ' + data.error);
+  else {
+    alert('Solicitud procesada.');
+    const el = document.getElementById('poolModalOverlay');
+    if (el) el.remove();
+    openPoolModal();
+  }
+}
+
+async function deletePoolInvestor(name) {
+  if(!confirm(`¿Seguro que deseas eliminar al inversor ${name}? Esta acción es irreversible.`)) return;
+  const res = await myFetch('/api/pool/delete_investor', {
+    method: 'POST',
+    headers: {'Content-Type':'application/json'},
+    body: JSON.stringify({ name })
+  });
+  const data = await res.json();
+  if (data.error) alert('Error: ' + data.error);
+  else {
+    alert('Inversor eliminado exitosamente.');
+    const el = document.getElementById('poolModalOverlay');
+    if (el) el.remove();
+    openPoolModal();
+  }
+}
+
+async function savePoolInvestor() {
+  const name = document.getElementById('addInvName').value;
+  const amount = document.getElementById('addInvDeposit').value;
+  const password = document.getElementById('addInvPwd').value;
+  const depositWallet = document.getElementById('addInvDepWallet').value;
+  
+  if (!name) return alert('Ingresa el nombre del inversor');
+  
+  const res = await myFetch('/api/pool/investor', {
+    method: 'POST',
+    headers: { 'Content-Type': 'application/json' },
+    body: JSON.stringify({ name, amount: Number(amount) || 0, password, depositWallet })
+  });
+  const data = await res.json();
+  if (data.error) alert('Error: ' + data.error);
+  else {
+    alert('Inversor guardado exitosamente.');
+    const el = document.getElementById('poolModalOverlay');
+    if (el) el.remove();
+    openPoolModal();
+  }
+}
+
+async function openConfigModal() {
+  const existing = document.getElementById('configModalOverlay');
+  if (existing) existing.remove();
+
+  const p = document.createElement('div');
+  p.id = 'configModalOverlay';
+  p.style.cssText = 'position:fixed;inset:0;background:rgba(0,0,0,0.8);z-index:9000;display:flex;align-items:center;justify-content:center';
+  p.innerHTML = `
+    <div style="background:var(--bg2);width:450px;max-width:95%;border:1px solid var(--bdr);border-radius:8px;padding:25px;font-family:var(--sans);max-height:90vh;overflow-y:auto">
+      <div style="font-weight:700;margin-bottom:15px;color:var(--t);font-size:16px;">⚙️ Configuración del Servidor VPS</div>
+      <div style="margin-bottom:15px;font-size:11px;color:var(--t2)">
+        Estos datos se guardarán cifrados en el servidor. Son necesarios sí deseas operar automáticamente en tu cuenta principal o recibir alertas en tu grupo de Telegram.
+      </div>
+      
+      <div style="margin-bottom:10px">
+        <div style="font-size:10px;color:var(--t2);margin-bottom:4px">MEXC API Key (Lectura/Trading)</div>
+        <input type="text" id="cfgMexcKey" class="inp" placeholder="mx0vvlv..." style="width:100%">
+      </div>
+      <div style="margin-bottom:15px">
+        <div style="font-size:10px;color:var(--t2);margin-bottom:4px">MEXC API Secret</div>
+        <input type="password" id="cfgMexcSecret" class="inp" placeholder="********" style="width:100%">
+      </div>
+
+      <!-- SECCIÓN SOLANA -->
+      <div style="border-top:1px solid var(--bdr);margin-top:15px;padding-top:15px;margin-bottom:15px">
+        <div style="font-weight:600;color:var(--pu);font-size:11px;margin-bottom:10px;text-transform:uppercase;letter-spacing:0.05em">🔑 Configuración de Solana (DEX Swaps)</div>
+        <div style="margin-bottom:10px">
+          <div style="font-size:10px;color:var(--t2);margin-bottom:4px">Solana Private Key (Phantom/Base58)</div>
+          <input type="password" id="cfgSolKey" class="inp" placeholder="Ej: 5K8xSgQ..." style="width:100%">
+          <div id="cfgSolKeyErr" style="display:none;color:var(--r);font-size:10px;margin-top:4px;font-family:var(--mono);line-height:1.2;font-weight:600"></div>
+        </div>
+        <div style="margin-bottom:10px">
+          <div style="font-size:10px;color:var(--t2);margin-bottom:4px">Solana RPC URL</div>
+          <input type="text" id="cfgSolRpc" class="inp" placeholder="https://api.mainnet-beta.solana.com" style="width:100%">
+        </div>
+        <div style="margin-bottom:10px">
+          <div style="font-size:10px;color:var(--t2);margin-bottom:4px">Moneda Base de Operación</div>
+          <select id="cfgSolBase" class="inp" style="width:100%">
+            <option value="SOL">SOL (Wrapped SOL)</option>
+            <option value="USDC">USDC (Stablecoin)</option>
+          </select>
+        </div>
+        <div style="margin-bottom:10px;display:flex;gap:10px">
+          <div style="flex:1">
+            <div style="font-size:10px;color:var(--t2);margin-bottom:4px">Deslizamiento Máx (%)</div>
+            <input type="number" step="0.1" id="cfgSolSlippage" class="inp" placeholder="Ej: 2.5" style="width:100%">
+          </div>
+          <div style="flex:1">
+            <div style="font-size:10px;color:var(--t2);margin-bottom:4px">Tarifa Prioridad (Lamports)</div>
+            <select id="cfgSolPriority" class="inp" style="width:100%">
+              <option value="auto">Automático (auto)</option>
+              <option value="100000">Estándar (100k lamports)</option>
+              <option value="500000">Alta prioridad (500k lamports)</option>
+              <option value="1500000">Turbo Ultra (1.5M lamports)</option>
+            </select>
+          </div>
+        </div>
+      </div>
+
+      <!-- SECCIÓN RUGCHECK (SAFETY) -->
+      <div style="border-top:1px solid var(--bdr);margin-top:15px;padding-top:15px;margin-bottom:15px">
+        <div style="font-weight:600;color:var(--y);font-size:11px;margin-bottom:10px;text-transform:uppercase;letter-spacing:0.05em">🛡️ Seguridad Anti-Rug (RugCheck)</div>
+        <div style="margin-bottom:10px;display:flex;align-items:center;gap:10px;">
+          <input type="checkbox" id="cfgSafetyCheckEnabled" style="cursor:pointer">
+          <label for="cfgSafetyCheckEnabled" style="font-size:11px;color:var(--t1);cursor:pointer;">Habilitar Chequeo de Seguridad en Compras</label>
+        </div>
+        <div style="font-size:9px;color:var(--t2);">Evita compras de tokens marcados como Danger en RugCheck o con Autoridad de Mint/Freeze activa on-chain.</div>
+      </div>
+
+      <div style="border-top:1px solid var(--bdr);margin-top:15px;padding-top:15px;margin-bottom:15px">
+        <div style="font-weight:600;color:var(--b);font-size:11px;margin-bottom:10px;text-transform:uppercase;letter-spacing:0.05em">💬 Telegram Alerts</div>
+        <div style="margin-bottom:10px">
+          <div style="font-size:10px;color:var(--t2);margin-bottom:4px">Telegram Bot Token</div>
+          <input type="text" id="cfgTgToken" class="inp" placeholder="Ej: 123456789:ABCDefgh..." style="width:100%">
+        </div>
+        <div style="margin-bottom:10px">
+          <div style="font-size:10px;color:var(--t2);margin-bottom:4px">Telegram Chat ID</div>
+          <input type="text" id="cfgTgChat" class="inp" placeholder="-100xxxxxxx" style="width:100%">
+        </div>
+        <div style="margin-bottom:10px">
+          <button id="btnTestTg" class="btn btn-b" style="width:100%;font-size:10px;padding:6px 12px;margin-top:5px" onclick="testTelegramConnection(this)">🔌 Probar Mensaje de Telegram</button>
+        </div>
+      </div>
+
+      <!-- SECCIÓN DEXTOOLS -->
+      <div style="border-top:1px solid var(--bdr);margin-top:15px;padding-top:15px;margin-bottom:15px">
+        <div style="font-weight:600;color:#38bdf8;font-size:11px;margin-bottom:10px;text-transform:uppercase;letter-spacing:0.05em">📊 DEXTools API (Opcional)</div>
+        <div style="margin-bottom:10px">
+          <div style="font-size:10px;color:var(--t2);margin-bottom:4px">DEXTools API Key (Para Sincronización oficial)</div>
+          <input type="password" id="cfgDextoolsKey" class="inp" placeholder="Dejar vacío para usar GeckoTerminal gratis" style="width:100%">
+        </div>
+      </div>
+      
+      <!-- SECCIÓN TWITTER -->
+      <div style="border-top:1px solid var(--bdr);margin-top:15px;padding-top:15px;margin-bottom:15px">
+        <div style="font-weight:600;color:#1da1f2;font-size:11px;margin-bottom:10px;text-transform:uppercase;letter-spacing:0.05em">🐦 Twitter (X) API</div>
+        <div style="margin-bottom:10px">
+          <div style="font-size:10px;color:var(--t2);margin-bottom:4px">Twitter Bearer Token (Para análisis de Scam/Bullish)</div>
+          <input type="password" id="cfgTwitterKey" class="inp" placeholder="AAAAAAAAAAAAAAAAAAAAA..." style="width:100%">
+        </div>
+      </div>
+      
+      <div style="border-top:1px solid var(--bdr);margin-top:15px;padding-top:15px;margin-bottom:15px">
+        <div style="font-size:10px;color:var(--t2);margin-bottom:4px">Contraseña del Panel Web</div>
+        <input type="password" id="cfgAppPwd" class="inp" placeholder="Dejar en blanco para mantener la actual" style="width:100%">
+      </div>
+      
+      <div style="display:flex;gap:10px;justify-content:flex-end;margin-top:20px">
+        <button class="btn btn-d" onclick="document.getElementById('configModalOverlay').remove()">Cancelar</button>
+        <button class="btn btn-b" id="btnSaveCfg">Guardar Settings</button>
+      </div>
+    </div>
+  `;
+  document.body.appendChild(p);
+  
+  try {
+    const res = await myFetch('/api/config');
+    const cfg = await res.json();
+    document.getElementById('cfgMexcKey').value = cfg.mexcApiKey || '';
+    document.getElementById('cfgMexcSecret').value = cfg.mexcApiSecret || '';
+    document.getElementById('cfgTgToken').value = cfg.tgBotToken || '';
+    document.getElementById('cfgTgChat').value = cfg.tgChatId || '';
+    document.getElementById('cfgSolKey').value = cfg.solanaPrivateKey || '';
+    document.getElementById('cfgSolRpc').value = cfg.solanaRpcUrl || '';
+    document.getElementById('cfgSolBase').value = cfg.solanaBaseToken || 'SOL';
+    document.getElementById('cfgSolSlippage').value = cfg.solanaSlippage || '2.5';
+    document.getElementById('cfgSolPriority').value = cfg.solanaPriorityFee || 'auto';
+    document.getElementById('cfgSafetyCheckEnabled').checked = !!cfg.safetyCheckEnabled;
+    document.getElementById('cfgDextoolsKey').value = cfg.dextoolsApiKey || '';
+    document.getElementById('cfgTwitterKey').value = cfg.twitterBearerToken || '';
+  } catch(e) {}
+  
+  const solKeyInput = document.getElementById('cfgSolKey');
+  const solKeyErr = document.getElementById('cfgSolKeyErr');
+  
+  function validateSolanaKey() {
+    const val = solKeyInput.value.trim();
+    if (!val) {
+      solKeyErr.style.display = 'none';
+      solKeyInput.style.borderColor = '';
+      return true;
+    }
+    
+    // Check characters
+    const b58Chars = "123456789ABCDEFGHJKLMNPQRSTUVWXYZabcdefghijkmnopqrstuvwxyz";
+    for (let i = 0; i < val.length; i++) {
+      if (b58Chars.indexOf(val[i]) === -1) {
+        solKeyErr.textContent = '❌ Contiene caracteres no válidos para Base58.';
+        solKeyErr.style.display = 'block';
+        solKeyInput.style.borderColor = 'var(--r)';
+        return false;
+      }
+    }
+    
+    // Decode Base58 to check exact byte length of 64 bytes
+    try {
+      const bytes = [];
+      for (let i = 0; i < val.length; i++) {
+        let value = b58Chars.indexOf(val[i]);
+        for (let j = 0; j < bytes.length; j++) {
+          value += bytes[j] * 58;
+          bytes[j] = value & 0xff;
+          value = value >> 8;
+        }
+        while (value > 0) {
+          bytes.push(value & 0xff);
+          value = value >> 8;
+        }
+      }
+      for (let i = 0; i < val.length && val[i] === '1'; i++) {
+        bytes.push(0);
+      }
+      
+      if (bytes.length !== 64) {
+        solKeyErr.textContent = `❌ Clave incorrecta: decodifica a ${bytes.length} bytes (se requieren exactamente 64 bytes). Suele tener entre 87 y 88 caracteres.`;
+        solKeyErr.style.display = 'block';
+        solKeyInput.style.borderColor = 'var(--r)';
+        return false;
+      }
+      
+      solKeyErr.style.display = 'none';
+      solKeyInput.style.borderColor = 'var(--g)';
+      return true;
+    } catch(err) {
+      solKeyErr.textContent = '❌ Error al decodificar la clave: ' + err.message;
+      solKeyErr.style.display = 'block';
+      solKeyInput.style.borderColor = 'var(--r)';
+      return false;
+    }
+  }
+  
+  solKeyInput.oninput = validateSolanaKey;
+  
+  document.getElementById('btnSaveCfg').onclick = async () => {
+    if (!validateSolanaKey()) {
+      alert('⚠️ No se puede guardar: La clave privada de Solana no tiene un formato válido.');
+      return;
+    }
+    try {
+      const payload = {
+        mexcApiKey: document.getElementById('cfgMexcKey').value.trim(),
+        mexcApiSecret: document.getElementById('cfgMexcSecret').value.trim(),
+        tgBotToken: document.getElementById('cfgTgToken').value.trim(),
+        tgChatId: document.getElementById('cfgTgChat').value.trim(),
+        solanaPrivateKey: document.getElementById('cfgSolKey').value.trim(),
+        solanaRpcUrl: document.getElementById('cfgSolRpc').value.trim(),
+        solanaBaseToken: document.getElementById('cfgSolBase').value,
+        solanaSlippage: document.getElementById('cfgSolSlippage').value.trim() || '2.5',
+        solanaPriorityFee: document.getElementById('cfgSolPriority').value,
+        safetyCheckEnabled: document.getElementById('cfgSafetyCheckEnabled').checked,
+        dextoolsApiKey: document.getElementById('cfgDextoolsKey').value.trim(),
+        twitterBearerToken: document.getElementById('cfgTwitterKey').value.trim()
+      };
+      
+      const newPwd = document.getElementById('cfgAppPwd').value.trim();
+      if(newPwd) payload.appPassword = newPwd;
+      
+      await myFetch('/api/config', {
+        method: 'POST',
+        body: JSON.stringify(payload)
+      });
+      
+      if(newPwd) {
+        localStorage.setItem('vpsToken', newPwd);
+        alert('Contraseña actualizada correctamente. Iniciarás sesión con la nueva.');
+      }
+      alert('✅ Configuración guardada en el servidor');
+      p.remove();
+    } catch(e) {
+      alert('Error al guardar configuración');
+    }
+  };
+}
+
+async function testTelegramConnection(btn) {
+  const originalText = btn.textContent;
+  const tgBotToken = document.getElementById('cfgTgToken').value.trim();
+  const tgChatId = document.getElementById('cfgTgChat').value.trim();
+
+  if (!tgBotToken) {
+    alert('⚠️ Por favor ingresa el Telegram Bot Token antes de realizar la prueba.');
+    return;
+  }
+  if (!tgChatId) {
+    alert('⚠️ Por favor ingresa el Telegram Chat ID antes de realizar la prueba.');
+    return;
+  }
+
+  btn.disabled = true;
+  btn.textContent = '⏳ Enviando mensaje de prueba...';
+
+  try {
+    const res = await myFetch('/api/config/test_telegram', {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({ tgBotToken, tgChatId })
+    });
+    const data = await res.json();
+    if (data.success) {
+      alert('✅ ¡Mensaje de prueba enviado con éxito! Revisa tu chat o grupo de Telegram.');
+    } else {
+      alert('❌ Error: ' + (data.error || 'No se pudo enviar el mensaje'));
+    }
+  } catch(e) {
+    alert('❌ Error al intentar conectar con el servidor para probar Telegram.');
+  } finally {
+    btn.disabled = false;
+    btn.textContent = originalText;
+  }
+}
+
+function updateSolanaVpsWalletUI(vpsSolWallet) {
+  const el = document.getElementById('solanaVpsWallet');
+  if (!el) return;
+  
+  if (vpsSolWallet && vpsSolWallet.address) {
+    el.style.display = 'inline-flex';
+    const shortAddr = vpsSolWallet.address.slice(0, 4) + '...' + vpsSolWallet.address.slice(-4);
+    document.getElementById('vpsSolAddress').textContent = shortAddr;
+    document.getElementById('vpsSolAddress').title = vpsSolWallet.address;
+    
+    let balText = '';
+    const base = (vpsSolWallet.baseToken || 'SOL').toUpperCase();
+    const solVal = vpsSolWallet.sol !== undefined ? vpsSolWallet.sol : 0;
+    const usdcVal = vpsSolWallet.usdc !== undefined ? vpsSolWallet.usdc : 0;
+    const solMode = document.getElementById('solModeSel').value;
+    const solModeLabel = solMode === 'wallet' ? '🟣 Wallet' : (solMode === 'pool' ? '👥 Pool' : '💰 Simulado');
+    
+    if (base === 'USDC') {
+      balText = usdcVal.toFixed(2) + ' USDC | ' + solVal.toFixed(3) + ' SOL';
+    } else {
+      balText = solVal.toFixed(3) + ' SOL | ' + usdcVal.toFixed(2) + ' USDC';
+    }
+    document.getElementById('vpsSolBalance').textContent = balText + ' (' + solModeLabel + ')';
+  } else {
+    el.style.display = 'none';
+  }
+}
+
+function updateDash(){
+  document.getElementById('dBal').textContent = '$' + SIM.balance.toFixed(2);
+  const pnl=SIM.pnl,pct=SIM.initBal>0?pnl/SIM.initBal*100:0;
+  document.getElementById('dPnL').textContent=(pnl>=0?'+':'')+'$'+pnl.toFixed(2);
+  document.getElementById('dPnL').style.color=pnl>=0?'var(--g)':'var(--r)';
+  document.getElementById('dPnLS').textContent=(pnl>=0?'+':'')+pct.toFixed(2)+'%';
+  document.getElementById('dc1').className='dc'+(pnl>0?' hi':pnl<0?' lo':'');
+  document.getElementById('dWins').textContent=SIM.wins;
+  document.getElementById('dLoss').textContent=SIM.losses;
+  document.getElementById('dExec').textContent=SIM.totalExec;
+  document.getElementById('watchN').textContent=watchItems.length;
+  document.getElementById('execN').textContent=SIM.totalExec;
+  const wins=SIM.trades.filter(t=>t.pnl>0),losses=SIM.trades.filter(t=>t.pnl<=0);
+  document.getElementById('dAvgW').textContent=wins.length?'avg +'+(wins.reduce((a,t)=>a+(+t.pnlPct),0)/wins.length).toFixed(1)+'%':'avg +0%';
+  document.getElementById('dAvgL').textContent=losses.length?'avg '+(losses.reduce((a,t)=>a+(+t.pnlPct),0)/losses.length).toFixed(1)+'%':'avg 0%';
+  const inv=watchItems.reduce((a,w)=>a+(w.orders.filter(o=>o.status==='filled').reduce((s,o)=>s+o.amount,0)),0);
+  document.getElementById('dBalS').textContent=inv>0?`libre · pos $${inv.toFixed(0)}`:'disponible';
+}
+
+// ══════════════════════════════════════════════════════════
+// ESCÁNER
+// ══════════════════════════════════════════════════════════
+let scanResults=[],scanning=false;
+let currentNetwork = 'mexc';
+let phantomPublicKey = null;
+
+function setNetwork(net) {
+  currentNetwork = net;
+  const tMexc = document.getElementById('tabMEXC');
+  const tSol = document.getElementById('tabSOL');
+  if (net === 'mexc') {
+    tMexc.className = 'net-tab active';
+    tSol.className = 'net-tab';
+    document.getElementById('btnScan').textContent = '🔍 ESCANEAR';
+    document.getElementById('stxt').textContent = 'Busca directamente o escanea todo MEXC';
+  } else {
+    tMexc.className = 'net-tab';
+    tSol.className = 'net-tab sol-active';
+    document.getElementById('btnScan').textContent = '⚡ ESCANEAR SOLANA';
+    document.getElementById('stxt').textContent = 'Escanea tokens Solana calientes vía DEXTools';
+  }
+  scanResults = [];
+  renderScanResults();
+  checkPhantom();
+}
+
+async function connectPhantom() {
+  if (window.solana && window.solana.isPhantom) {
+    try {
+      const resp = await window.solana.connect();
+      phantomPublicKey = resp.publicKey.toString();
+      document.getElementById('phantomAddress').textContent = phantomPublicKey.slice(0, 4) + '...' + phantomPublicKey.slice(-4);
+      document.getElementById('phantomWallet').style.display = 'inline-flex';
+      document.getElementById('btnConnectPhantom').style.display = 'none';
+      addLog(`🔌 Wallet Phantom conectada: ${phantomPublicKey}`, 'info');
+    } catch (err) {
+      alert('Error conectando Phantom wallet: ' + err.message);
+    }
+  } else {
+    alert('Phantom Wallet no está instalada en tu navegador. Instala la extensión de Phantom para operar.');
+  }
+}
+
+async function checkPhantom() {
+  if (currentNetwork === 'solana') {
+    document.getElementById('btnConnectPhantom').style.display = 'inline-block';
+    if (window.solana && window.solana.isPhantom) {
+      try {
+        const resp = await window.solana.connect({ onlyIfTrusted: true });
+        phantomPublicKey = resp.publicKey.toString();
+        document.getElementById('phantomAddress').textContent = phantomPublicKey.slice(0, 4) + '...' + phantomPublicKey.slice(-4);
+        document.getElementById('phantomWallet').style.display = 'inline-flex';
+        document.getElementById('btnConnectPhantom').style.display = 'none';
+      } catch (err) {}
+    }
+  } else {
+    document.getElementById('btnConnectPhantom').style.display = 'none';
+    document.getElementById('phantomWallet').style.display = 'none';
+  }
+}
+
+function generateSimulatedKlines(cp, priceChangeObj, length=120, seedStr="") {
+  const klines = [];
+  const nowSec = Math.floor(Date.now() / 1000);
+  
+  const chg = priceChangeObj || {};
+  const h24 = chg.h24 || 0;
+  const h6 = chg.h6 || (h24 * 0.25);
+  const h1 = chg.h1 || (h6 * 0.16);
+  const m5 = chg.m5 || (h1 * 0.08);
+  
+  // Historical exact prices based on current price
+  const pNow = cp;
+  const p1h = cp / (1 + h1 / 100);
+  const p6h = cp / (1 + h6 / 100);
+  const p24h = cp / (1 + h24 / 100);
+  
+  // For standard 120 items (let's map them to 24h)
+  // Time span: 24h
+  
+  let hash = 0;
+  for (let i = 0; i < seedStr.length; i++) {
+    hash = ((hash << 5) - hash) + seedStr.charCodeAt(i);
+    hash |= 0;
+  }
+  const phase1 = (Math.abs(hash) % 100) / 10;
+  
+  // Helper to get interpolated base price
+  const getBasePrice = (hoursAgo) => {
+    if (hoursAgo <= 0) return pNow;
+    if (hoursAgo <= 1) return p1h + (pNow - p1h) * (1 - hoursAgo);
+    if (hoursAgo <= 6) return p6h + (p1h - p6h) * (1 - (hoursAgo - 1) / 5);
+    if (hoursAgo <= 24) return p24h + (p6h - p24h) * (1 - (hoursAgo - 6) / 18);
+    return p24h; // flat before 24h
+  };
+
+  for (let i = 0; i < length; i++) {
+    // how many hours ago is this candle?
+    // if length is 120 and we want to span 24 hours, each step is 24/120 = 0.2 hours
+    const hoursAgo = (length - 1 - i) * (24 / length);
+    const basePrice = getBasePrice(hoursAgo);
+    
+    // Add some noise
+    const noise = (Math.sin(i * 0.3 + phase1) * 0.015 + (Math.random() - 0.5) * 0.01) * basePrice;
+    const price = Math.max(0.000000001, basePrice + noise);
+    
+    const high = price * (1 + Math.random() * 0.012);
+    const low = price * (1 - Math.random() * 0.012);
+    const open = i === 0 ? getBasePrice(24) : klines[i-1][4];
+    
+    klines.push([
+      nowSec - Math.floor(hoursAgo * 3600),
+      open,
+      high,
+      low,
+      price,
+      Math.random() * 10000
+    ]);
+  }
+  klines[length-1][4] = cp; // Exact current price at the end
+  return klines;
+}
+
+async function searchDirect(){
+  if (currentNetwork === 'solana') {
+    await startScan();
+    return;
+  }
+  const raw=document.getElementById('symSearch').value.trim().toUpperCase().replace('USDT','').replace('/','');
+  if(!raw){alert('Escribe un símbolo');return;}
+  setSt(`🔍 Buscando ${raw}...`,20);
+  try{
+    const ticker=await mxTicker24h(raw);
+    if(!ticker?.lastPrice){setSt(`❌ ${raw} no encontrado`,0);return;}
+    const cp=+ticker.lastPrice,chg=+ticker.priceChangePercent||0,vol=+ticker.quoteVolume||0;
+    const kl1h=await mxKlines(raw,'h1',120);
+    const useKl=kl1h.length>=15?kl1h:await mxKlines(raw,'h4',60);
+    const trend=detectTrend(useKl);
+    const zz=detectZigzag(useKl);
+    const kl1d=await mxKlines(raw,'d1',60);
+    const trend1d=detectTrend(kl1d);
+    const zz1d=detectZigzag(kl1d);
+    const dips=findDips(useKl,cp);
+    const bestDip=dips[0]||null;
+    const dist=bestDip?(cp-bestDip.price)/cp*100:null;
+    const entry={symbol:raw,pair:raw+'USDT',cp,chg,vol,trend,trend1d,zz,zz1d,dips,bestDip,dist,klines1h:kl1h,klines1d:kl1d,score:trend.score+trend1d.score*1.5+(dips[0]?.count||0)*5+zz.cycles*2};
+    scanResults=scanResults.filter(r=>r.symbol!==raw);
+    scanResults.unshift(entry);
+    renderScanResults();
+    selectScan(raw);
+    setSt(`✅ ${raw}: $${fpZ(cp,cp)} · ${trend.emoji} ${trend.label}`,100);
+    addLog(`🔎 ${raw}: $${fpZ(cp,cp)} · 1H:${trend.emoji}${trend.label} · 1D:${trend1d.emoji}${trend1d.label} · ZZ:${zz.cycles}ciclos ${zz.swingPct}%swing · dip:${bestDip?'$'+fpZ(bestDip.price,cp)+'×'+bestDip.count:'—'}`,'info');
+    document.getElementById('symSearch').value='';
+  }catch(e){setSt(`❌ Error: ${e.message}`,0);addLog(`Error buscando ${raw}: ${e.message}`,'warn');}
+}
+
+async function startScan(){
+  if (currentNetwork === 'solana') {
+    if(scanning)return;scanning=true;
+    scanResults=[];
+    document.getElementById('btnScan').disabled=true;
+    document.getElementById('btnScan').textContent='⏳ Escaneando Solana...';
+    document.getElementById('rlist').innerHTML='<div class="empty"><div>⏳ Conectando con DEXTools / GeckoTerminal...</div></div>';
+    
+    try {
+      const q = document.getElementById('symSearch').value.trim();
+      let d = { pairs: [] };
+      
+      if (!q) {
+        setSt(`Buscando tokens de Solana calientes...`, 15);
+        
+        // Fetch diverse endpoints to get trending, newly profiled, and boosted tokens on Solana, in addition to high-volume searches
+        const searchPromises = [
+          myFetch(`/api/dexscreener/token-profiles/latest/v1`),
+          myFetch(`/api/dexscreener/token-boosts/latest/v1`),
+          myFetch(`/api/dexscreener/token-boosts/top/v1`),
+          myFetch(`/api/dexscreener/latest/dex/search?q=SOL`),
+          myFetch(`/api/dexscreener/latest/dex/search?q=USDC`),
+          myFetch(`/api/dexscreener/latest/dex/search?q=BONK`),
+          myFetch(`/api/dexscreener/latest/dex/search?q=WIF`),
+          myFetch(`/api/dexscreener/latest/dex/search?q=POPCAT`)
+        ];
+        
+        const responses = await Promise.all(searchPromises.map(p => p.catch(() => null)));
+        
+        let profiles = [];
+        let boostsLatest = [];
+        let boostsTop = [];
+        let searchPairs = [];
+        
+        if (responses[0] && responses[0].ok) {
+          profiles = await responses[0].json().catch(() => []) || [];
+        }
+        if (responses[1] && responses[1].ok) {
+          boostsLatest = await responses[1].json().catch(() => []) || [];
+        }
+        if (responses[2] && responses[2].ok) {
+          boostsTop = await responses[2].json().catch(() => []) || [];
+        }
+        
+        // Collect search results
+        for (let i = 3; i < responses.length; i++) {
+          const r = responses[i];
+          if (r && r.ok) {
+            const data = await r.json().catch(() => null);
+            if (data && data.pairs) {
+              searchPairs.push(...data.pairs);
+            }
+          }
+        }
+        
+        // Extract Solana token addresses from profiles and boosts
+        const tokenAddresses = new Set();
+        const processTokenList = (list) => {
+          if (!list) return;
+          const arr = Array.isArray(list) ? list : [];
+          for (const item of arr) {
+            if (item && item.chainId === 'solana' && item.tokenAddress) {
+              tokenAddresses.add(item.tokenAddress);
+            }
+          }
+        };
+        
+        processTokenList(profiles);
+        processTokenList(boostsLatest);
+        processTokenList(boostsTop);
+        
+        // Fetch details for these specific token addresses in batches of 30
+        const profilePairs = [];
+        if (tokenAddresses.size > 0) {
+          const addressList = Array.from(tokenAddresses);
+          const pairDetailsPromises = [];
+          for (let i = 0; i < addressList.length; i += 30) {
+            const batch = addressList.slice(i, i + 30).join(',');
+            pairDetailsPromises.push(
+              myFetch(`/api/dexscreener/latest/dex/tokens/${batch}`)
+                .then(r => r.ok ? r.json() : null)
+                .catch(() => null)
+            );
+          }
+          const pairDetailsResults = await Promise.all(pairDetailsPromises);
+          for (const res of pairDetailsResults) {
+            if (res && res.pairs) {
+              profilePairs.push(...res.pairs);
+            }
+          }
+        }
+        
+        // Merge all pairs and deduplicate by pair address
+        const seenPairs = new Set();
+        const mergedPairs = [];
+        const allPairs = [...profilePairs, ...searchPairs];
+        for (const p of allPairs) {
+          if (p && p.chainId === 'solana' && p.baseToken && !seenPairs.has(p.pairAddress)) {
+            seenPairs.add(p.pairAddress);
+            mergedPairs.push(p);
+          }
+        }
+        d.pairs = mergedPairs;
+      } else {
+        setSt(`Buscando tokens de Solana (${q})...`, 15);
+        const queries = q.split(',').map(s => s.trim()).filter(Boolean);
+        let allResults = [];
+        for (const query of queries) {
+            const r = await myFetch(`/api/dexscreener/latest/dex/search?q=${encodeURIComponent(query)}`);
+            if (r.ok) {
+                const json = await r.json();
+                if (json.pairs) allResults.push(...json.pairs);
+            }
+        }
+        d = { pairs: allResults };
+        console.log('DexScreener API search results:', d.pairs);
+        
+        // Deduplicate pairs by token address
+        const seenTokens = new Set();
+        const mergedPairs = [];
+        for (const p of (d.pairs || [])) {
+          if (p.chainId === 'solana' && p.baseToken && !seenTokens.has(p.baseToken.address)) {
+            seenTokens.add(p.baseToken.address);
+            mergedPairs.push(p);
+          }
+        }
+        d.pairs = mergedPairs;
+      }
+      
+      if (!d.pairs || !d.pairs.length) {
+        setSt('Sin resultados en Solana', 0);
+        document.getElementById('rlist').innerHTML = '<div class="empty"><div>🔎</div><div>Sin resultados en Solana</div></div>';
+        scanning = false;
+        document.getElementById('btnScan').disabled = false;
+        document.getElementById('btnScan').textContent = '⚡ ESCANEAR SOLANA';
+        return;
+      }
+      
+      // Filter out base assets/stablecoins themselves from being trade target tokens
+      console.log('Pairs before filtering:', d.pairs);
+      const solPairs = d.pairs.filter(p => {
+        if (!p.chainId || p.chainId.toLowerCase() !== 'solana' || !p.baseToken) return false;
+        const sym = p.baseToken.symbol.toUpperCase();
+        if (sym === 'SOL' || sym === 'WSOL' || sym === 'USDC' || sym === 'USDT') return false;
+        return true;
+      });
+      
+      if (!solPairs.length) {
+        setSt('Sin resultados de tokens Solana', 0);
+        document.getElementById('rlist').innerHTML = '<div class="empty"><div>🔎</div><div>Sin resultados de tokens Solana</div></div>';
+        scanning = false;
+        document.getElementById('btnScan').disabled = false;
+        document.getElementById('btnScan').textContent = '⚡ ESCANEAR SOLANA';
+        return;
+      }
+      
+      const volMin = +document.getElementById('cfVol').value || 10000;
+      const chgMin = +document.getElementById('cfChg').value || -999;
+      const trendReq = document.getElementById('cfTrend').value || 'any';
+      const maxCoins = +document.getElementById('cfMax').value || 400;
+      const minAge = document.getElementById('cfMinAge') ? +document.getElementById('cfMinAge').value : 0;
+      const minMarketCap = document.getElementById('cfMinMarketCap') ? +document.getElementById('cfMinMarketCap').value : 0;
+      
+      setSt(`Procesando ${solPairs.length} pares...`, 40);
+      
+      const nowMs = Date.now();
+      const pool = solPairs.filter(p => {
+        if ((p.volume?.h24 || 0) < volMin) return false;
+        if ((p.priceChange?.h24 || 0) < chgMin) return false;
+        
+        if (minAge > 0) {
+          if (!p.pairCreatedAt) return false;
+          const ageDays = (nowMs - p.pairCreatedAt) / (1000 * 60 * 60 * 24);
+          if (ageDays < minAge) return false;
+        }
+        
+        if (minMarketCap > 0) {
+          const mc = p.marketCap || p.fdv || 0;
+          if (mc < minMarketCap) return false;
+        }
+        
+        return true;
+      }).slice(0, maxCoins);
+      
+      for (let i = 0; i < pool.length; i++) {
+        const p = pool[i];
+        const symbol = p.baseToken.symbol;
+        const address = p.baseToken.address;
+        const pairAddress = p.pairAddress;
+        const cp = +p.priceUsd;
+        if (!cp || cp <= 0) continue;
+        
+        const chg = p.priceChange?.h24 || 0;
+        const vol = p.volume?.h24 || 0;
+        const liq = p.liquidity?.usd || 0;
+        
+        const kl1h = generateSimulatedKlines(cp, p.priceChange, 120, address);
+        const kl1d = generateSimulatedKlines(cp, p.priceChange, 60, address);
+        
+        let trend = detectTrend(kl1h);
+        if (trendReq === 'bull' && !trend.bull) continue;
+        if (trendReq === 'strong' && trend.score < 70) continue;
+        if (trendReq === 'acc') {
+           const acc = detectAccumulation(kl1h);
+           if (!acc.isAcc) continue;
+           trend = acc;
+        }
+        
+        const zz = detectZigzag(kl1h);
+        const dips = findDips(kl1h, cp);
+        const bestDip = dips[0] || null;
+        const dist = bestDip ? (cp - bestDip.price)/cp*100 : null;
+        
+        const trend1d = detectTrend(kl1d);
+        const zz1d = detectZigzag(kl1d);
+        
+        const score = trend.score*1.0 + trend1d.score*1.5 + (bestDip?.count||0)*5 - (dist||25)*.3 + chg*.3 + zz.cycles*2;
+        
+        scanResults.push({
+          symbol,
+          pair: p.baseToken.name || symbol,
+          network: 'solana',
+          address,
+          pairAddress,
+          cp,
+          chg,
+          priceChangeObj: p.priceChange,
+          vol,
+          liq,
+          trend,
+          trend1d,
+          zz,
+          zz1d,
+          dips,
+          bestDip,
+          dist,
+          klines1h: kl1h,
+          klines1d: kl1d,
+          score: +score.toFixed(1)
+        });
+      }
+      
+      renderScanResults();
+      setSt(`✅ ${scanResults.length} Solana tokens cargados`, 100);
+      addLog(`✅ Escaneo Solana: ${scanResults.length} tokens activos`, 'info');
+    } catch (e) {
+      setSt(`❌ Error Solana Scan: ${e.message}`, 0);
+      addLog(`Error escaneo Solana: ${e.message}`, 'warn');
+    }
+    
+    scanning = false;
+    document.getElementById('btnScan').disabled = false;
+    document.getElementById('btnScan').textContent = '⚡ ESCANEAR SOLANA';
+    return;
+  }
+
+  if(scanning)return;scanning=true;
+  scanResults=[];
+  document.getElementById('btnScan').disabled=true;
+  document.getElementById('btnScan').textContent='⏳ Escaneando...';
+  document.getElementById('rlist').innerHTML='<div class="empty"><div>⏳ Cargando tickers...</div></div>';
+  const volMin=+document.getElementById('cfVol').value||10000;
+  const chgMin=+document.getElementById('cfChg').value||-999;
+  const trendReq=document.getElementById('cfTrend').value||'any';
+  const maxCoins=+document.getElementById('cfMax').value||400;
+  try{
+    setSt('Cargando tickers MEXC...',3);
+    const tickers=await mxTickers();
+    const pool=tickers.filter(t=>t.symbol?.endsWith('USDT')&&+t.quoteVolume>=volMin&&+t.priceChangePercent>=chgMin)
+      .sort((a,b)=>+b.priceChangePercent-+a.priceChangePercent).slice(0,maxCoins);
+    addLog(`ESCANEO: ${pool.length} candidatas de ${tickers.filter(t=>t.symbol?.endsWith('USDT')).length} monedas USDT`,'info');
+    setSt(`${pool.length} candidatas · analizando...`,5);
+    let proc=0;
+    const BATCH=6;
+    for(let i=0;i<pool.length;i+=BATCH){
+      const batch=pool.slice(i,i+BATCH);
+      await Promise.all(batch.map(async t=>{
+        try{
+          const sym=t.symbol.replace('USDT',''),cp=+t.lastPrice;
+          if(cp<=0)return;
+          const kl1h=await mxKlines(t.symbol,'h1',120);
+          if(kl1h.length<15)return;
+          // Tendencia 1H
+          let trend=detectTrend(kl1h);
+          if(trendReq==='bull'&&!trend.bull)return;
+          if(trendReq==='strong'&&trend.score<70)return;
+          if(trendReq==='acc'){
+             const acc = detectAccumulation(kl1h);
+             if (!acc.isAcc) return;
+             trend = acc; // override trend with accumulation details
+          }
+          // Zigzag 1H: ciclos + swing
+          const zz=detectZigzag(kl1h);
+          // Dips históricos 1H
+          const dips=findDips(kl1h,cp);
+          const bestDip=dips[0]||null;
+          const dist=bestDip?(cp-bestDip.price)/cp*100:null;
+          // Tendencia 1D (bullrun diario)
+          const kl1d=await mxKlines(t.symbol,'d1',60);
+          const trend1d=detectTrend(kl1d);
+          // Zigzag 1D
+          const zz1d=detectZigzag(kl1d);
+          // Score compuesto: tendencia 1H + 1D + zigzag + dips
+          const score=trend.score*1.0+trend1d.score*1.5+(bestDip?.count||0)*5-(dist||25)*.3+(+t.priceChangePercent)*.3+zz.cycles*2+zz.swingPct*.2;
+          scanResults.push({symbol:sym,pair:t.symbol,cp,chg:+t.priceChangePercent,vol:+t.quoteVolume,
+            trend,trend1d,zz,zz1d,dips,bestDip,dist,klines1h:kl1h,klines1d:kl1d,score:+score.toFixed(1)});
+          renderScanResults();
+        }catch{}
+      }));
+      proc+=batch.length;
+      setSt(`${proc}/${pool.length} · ${scanResults.length} válidas`,5+proc/pool.length*90);
+      await slp(25);
+    }
+    setSt(`✅ ${scanResults.length} monedas encontradas`,100);
+    addLog(`✅ Escaneo: ${scanResults.length} monedas con bullrun+dip`,'info');
+  }catch(e){setSt(`⚠ ${e.message}`,0);addLog(`Error: ${e.message}`,'warn');}
+  scanning=false;
+  document.getElementById('btnScan').disabled=false;
+  document.getElementById('btnScan').textContent='🔍 ESCANEAR';
+}
+
+let selScan=null;
+function renderScanResults(){
+  const sort=document.getElementById('cfSort').value;
+  const minAge=parseFloat(document.getElementById('cfMinAge').value)||0;
+  const minCap=parseFloat(document.getElementById('cfMinMarketCap').value)||0;
+  const now=Date.now();
+  
+  let data=scanResults.filter(d => {
+    const ageDays = (now - (d.pairCreatedAt||0)) / (24*60*60*1000);
+    return ageDays >= minAge && (d.marketCap||0) >= minCap;
+  });
+  
+  if(sort==='chg')data.sort((a,b)=>b.chg-a.chg);
+  else if(sort==='dist')data.sort((a,b)=>(a.dist||99)-(b.dist||99));
+  else if(sort==='vol')data.sort((a,b)=>b.vol-a.vol);
+  else data.sort((a,b)=>b.score-a.score);
+  document.getElementById('scanCount').textContent=data.length+' resultados';
+  const el=document.getElementById('rlist');
+  if(!data.length){el.innerHTML='<div class="empty"><div style="font-size:20px">🔎</div><div>Sin resultados</div></div>';return;}
+  el.innerHTML=data.map(d=>{
+    const hot=d.dist!==null&&d.dist<=3,near=d.dist!==null&&d.dist<=8;
+    const col=hot?'var(--g)':near?'var(--y)':'var(--b)';
+    const trendCls=d.trend.score>=70?'bull':d.trend.score>=45?'neut':'bear';
+    const zz=d.zz||{cycles:0,swingPct:0,maxSwing:0,higherHighs:false,higherLows:false};
+    const zz1d=d.zz1d||{cycles:0,swingPct:0,maxSwing:0};
+    const t1d=d.trend1d||{label:'—',emoji:'🟡',score:0,bull:false};
+    const zzColor=zz.cycles>=3?'var(--g)':zz.cycles>=2?'var(--y)':'var(--t2)';
+    const zzIcon=zz.higherHighs&&zz.higherLows?'📈':zz.higherLows?'📊':'〰️';
+    const isWatched = watchItems.some(w => w.symbol === d.symbol);
+    return `<div class="rcard ${trendCls} ${selScan===d.symbol?'sel':''}" onclick="selectScan('${d.symbol}')">
+      <!-- FILA 1: Símbolo + cambio -->
+      <div class="rc-top">
+        <span class="rc-sym" style="display:flex;align-items:center">
+          ${d.symbol}
+          ${d.network==='solana'?'<span class="tag" style="background:#a855f720;color:#a855f7;border:1px solid #a855f735;font-size:7px;padding:1px 3px;border-radius:2px;margin-left:4px">SOL</span>':''}
+          ${isWatched ? '<span class="watch-badge" style="font-size:9px;color:var(--b);background:rgba(0,226,255,0.15);padding:2px 4px;border-radius:3px;margin-left:8px;font-weight:600;letter-spacing:0">✔️ ACTIVA</span>' : ''}
+        </span>
+        <span style="font-family:var(--mono);font-size:10px;font-weight:700;color:${d.chg>=0?'var(--g)':'var(--r)'}">${d.chg>=0?'+':''}${d.chg.toFixed(1)}% 24h</span>
+      </div>
+      <!-- FILA 2: Precio + Tendencia 1H -->
+      <div style="display:flex;justify-content:space-between;font-size:8px;font-family:var(--mono);margin-bottom:2px">
+        <span style="color:var(--t2)">$${fpZ(d.cp,d.cp)}</span>
+        <span style="color:${d.trend.score>=70?'var(--g)':d.trend.score>=45?'var(--y)':'var(--r)'}">1H: ${d.trend.emoji} ${d.trend.label}</span>
+      </div>
+      <!-- FILA 3: Bullrun DIARIO -->
+      <div style="display:flex;justify-content:space-between;font-size:8px;font-family:var(--mono);margin-bottom:3px;padding:2px 5px;border-radius:3px;background:${t1d.score>=70?'rgba(0,229,160,.06)':t1d.score>=45?'rgba(245,158,11,.05)':'rgba(239,68,68,.04)'}">
+        <span style="color:var(--t2)">1D Bullrun:</span>
+        <span style="color:${t1d.score>=70?'var(--g)':t1d.score>=45?'var(--y)':'var(--r)'}">
+          ${t1d.emoji} ${t1d.label} (${t1d.score}%)
+        </span>
+      </div>
+      <!-- FILA 4: Zigzag 1H — ciclos + swing -->
+      <div style="display:flex;justify-content:space-between;font-size:8px;font-family:var(--mono);margin-bottom:2px">
+        <span style="color:var(--t2)">${zzIcon} ZZ 1H:</span>
+        <span style="color:${zzColor}">
+          ${zz.cycles} ciclos · ${zz.swingPct}% avg · max ${zz.maxSwing}%
+          ${zz.higherHighs&&zz.higherLows?' ▲HH+HL':zz.higherLows?' ▲HL':''}
+        </span>
+      </div>
+      <!-- FILA 5: Zigzag 1D si tiene datos -->
+      ${zz1d.cycles>0?`<div style="display:flex;justify-content:space-between;font-size:8px;font-family:var(--mono);margin-bottom:2px;color:var(--t2)">
+        <span>ZZ 1D:</span>
+        <span style="color:${zz1d.cycles>=3?'var(--g)':zz1d.cycles>=1?'var(--y)':'var(--t2)'}">${zz1d.cycles} ciclos · ${zz1d.swingPct}% avg · max ${zz1d.maxSwing}%</span>
+      </div>` :''}
+      <!-- FILA 6: Dip más cercano -->
+      ${d.bestDip?`<div style="font-size:8px;font-family:var(--mono);color:${col};margin-bottom:2px">
+        🎯 Dip: $${fpZ(d.bestDip.price,d.cp)} · −${d.dist.toFixed(1)}% · ×${d.bestDip.count} rebotes
+      </div>` :'<div style="font-size:8px;color:var(--t3);font-family:var(--mono);margin-bottom:2px">Sin dip histórico claro</div>'}
+      <!-- TAGS -->
+      <div class="rc-tags">
+        <span class="tag tpu">score ${d.score}</span>
+        <span class="tag tb">${fv(d.vol)}</span>
+        ${zz.cycles>=3?'<span class="tag tg">'+zz.cycles+'🔄</span>' :zz.cycles>=1?'<span class="tag ty">'+zz.cycles+'🔄</span>' :''}
+        ${t1d.bull?'<span class="tag tg">1D✅</span>' :'<span class="tag tr">1D❌</span>'}
+        ${hot?'<span class="tag tg">🎯 CERCA</span>' :near?'<span class="tag ty">⚡ NEAR</span>' :''}
+      </div>
+    </div>`;
+  }).join('');
+}
+
+// ══════════════════════════════════════════════════════════
+// SELECCIÓN → MOSTRAR CONFIG
+// ══════════════════════════════════════════════════════════
+let selData=null;
+
+async function selectScan(symbol){
+  selScan=symbol;
+  renderScanResults();
+  const d=scanResults.find(r=>r.symbol===symbol)||watchItems.find(w=>w.symbol===symbol);
+  if(!d)return;
+  selData=d;
+  // Mostrar en chart
+  await showDetail(d);
+  // Mostrar panel de configuración como overlay en COL 2
+  showAddForm(d);
+}
+
+function showAddForm(d){
+  const cp=d.cp||d.currentPrice||0;
+  const bestDip=d.bestDip||null;
+  const ob=null; // cargar luego
+  // Sugerir precio
+  const sugPrice=bestDip?fpZ(bestDip.price*1.005,cp):'';
+  const dist=bestDip?(cp-bestDip.price)/cp*100:null;
+
+  // Insertar panel arriba del watchlist
+  const existing=document.getElementById('addFormPanel');
+  if(existing)existing.remove();
+  const panel=document.createElement('div');
+  panel.id='addFormPanel';
+  panel.style.cssText='padding:8px 10px;border-bottom:1px solid var(--bdr);background:rgba(0,229,160,.02);flex-shrink:0;overflow-y:auto;max-height:55vh';
+  panel.innerHTML=`
+    <div style="font-family:var(--mono);font-size:8px;font-weight:700;color:var(--g);margin-bottom:5px;display:flex;justify-content:space-between;align-items:center">
+      ➕ Configurar: <b>${d.symbol}/USDT</b>
+      <button class="btn btn-d btn-xs" onclick="document.getElementById('addFormPanel').remove()">✕</button>
+    </div>
+    <div style="font-size:7px;font-family:var(--mono);color:var(--t2);background:var(--bg4);border-radius:4px;padding:5px 7px;margin-bottom:5px;line-height:1.8">
+      $${fpZ(cp,cp)} · ${d.trend.emoji} ${d.trend.label} · ${d.chg>=0?'+':''}${d.chg?.toFixed(1)}%
+      ${bestDip?`<br>Dip: <b style="color:var(--y)">$${fpZ(bestDip.price,cp)}</b> · −${dist?.toFixed(1)}% · ×${bestDip.count} reb` :''}
+    </div>
+    <!-- ORDEN ENTRADA -->
+    <div style="font-size:7px;font-weight:700;color:var(--g);font-family:var(--mono);margin-bottom:3px">🎯 Entrada #1</div>
+    <div style="display:grid;grid-template-columns:1fr 1fr 1fr;gap:3px;margin-bottom:3px">
+      <div><div class="lbl">Precio $</div><input type="number" id="af_price" class="inp" value="${sugPrice}" step="any" oninput="updateAfDist()"></div>
+      <div><div class="lbl">Monto $</div><input type="number" id="af_amount" class="inp" value="50" min="1"></div>
+      <div><div class="lbl">Stop Loss %</div><input type="number" id="af_sl" class="inp" value="50" min="1"></div>
+    </div>
+    <div style="display:grid;grid-template-columns:1fr 1fr 1fr;gap:3px;margin-bottom:3px">
+      <div><div class="lbl">TP1 %</div><input type="number" id="af_tp1" class="inp" value="8" min="0.5"></div>
+      <div><div class="lbl">TP2 %</div><input type="number" id="af_tp2" class="inp" value="15" min="0.5"></div>
+      <div><div class="lbl">Nota</div><input type="text" id="af_note" class="inp" value="${bestDip?'pared $'+fpZ(bestDip.price,cp):''}"></div>
+    </div>
+    <div id="af_dist" style="font-size:7px;font-family:var(--mono);color:var(--t2);margin-bottom:5px"></div>
+
+    <!-- DCA -->
+    <div style="display:flex;align-items:center;justify-content:space-between;margin-bottom:3px">
+      <div style="font-size:7px;font-weight:700;color:var(--pu);font-family:var(--mono)">🔄 DCA (opcional)</div>
+      <div style="display:flex;gap:3px">
+        <button class="btn btn-pu btn-xs" onclick="addAfDCA()">+ Nivel</button>
+        <select id="af_preset" class="inp" style="font-size:7px;padding:1px 4px;width:auto" onchange="applyAfPreset()">
+          <option value="">Preset DCA...</option>
+          <option value="a">−3% / −6% / −9%</option>
+          <option value="b">−5% / −10% / −15%</option>
+          <option value="c">−5% doble monto</option>
+          <option value="d">Martingale ×1.5</option>
+        </select>
+      </div>
+    </div>
+    <table id="af_dca_table" style="width:100%;border-collapse:collapse;font-family:var(--mono);font-size:8px">
+      <thead><tr style="color:var(--t3);font-size:7px"><td style="padding:2px 3px">#</td><td>Precio $ o % bajo #1</td><td>Monto $</td><td>Nota</td><td></td></tr></thead>
+      <tbody id="af_dca_body"></tbody>
+    </table>
+    <button class="btn btn-g" style="width:100%;margin-top:5px;font-size:10px" onclick="addToWatch()">➕ AGREGAR A VIGILANCIA</button>
+  `;
+  // Insertar antes del wlist
+  const wlist=document.getElementById('wlist');
+  wlist.parentNode.insertBefore(panel,wlist);
+  updateAfDist();
+}
+
+let afDcaRows=[];
+function updateAfDist(){
+  const p1=+document.getElementById('af_price')?.value||0;
+  const cp=selData?.cp||selData?.currentPrice||0;
+  const el=document.getElementById('af_dist');
+  if(el&&p1&&cp){
+    const dist=(cp-p1)/cp*100;
+    el.textContent=dist>0.5?`Precio actual ${dist.toFixed(1)}% arriba → esperarás que baje`:`⚡ Precio muy cerca o por debajo de la orden`;
+    el.style.color=dist>0.5?'var(--t2)':'var(--y)';
+  }
+}
+function addAfDCA(){
+  afDcaRows.push({pct:-5,amount:25,note:''});
+  renderAfDCA();
+}
+function renderAfDCA(){
+  const p1=+document.getElementById('af_price')?.value||selData?.cp||100;
+  document.getElementById('af_dca_body').innerHTML=afDcaRows.map((r,i)=>{
+    const calcP=r.price>0?r.price:(r.pct?p1*(1+r.pct/100):0);
+    return `<tr>
+      <td style="padding:2px 3px;color:var(--pu);font-weight:700">#${i+2}</td>
+      <td>
+        <input type="number" value="${r.price||''}" placeholder="${calcP?fpZ(calcP,p1):''}" step="any" style="width:70px;background:var(--bg4);border:1px solid var(--bdr);border-radius:3px;color:var(--t);padding:2px 4px;font-family:var(--mono);font-size:8px" onchange="afDcaRows[${i}].price=+this.value;afDcaRows[${i}].pct=0;renderAfDCA()">
+        <span style="color:var(--t3);font-size:8px"> o </span>
+        <input type="number" value="${r.pct||''}" placeholder="%↓" step="0.5" style="width:42px;background:var(--bg4);border:1px solid var(--bdr);border-radius:3px;color:var(--t);padding:2px 4px;font-family:var(--mono);font-size:8px" onchange="afDcaRows[${i}].pct=+this.value;afDcaRows[${i}].price=0;renderAfDCA()">%
+        ${calcP?`<span style="color:var(--t2);font-size:7px"> →$${fpZ(calcP,p1)}</span>` :''}
+      </td>
+      <td><input type="number" value="${r.amount||25}" style="width:44px;background:var(--bg4);border:1px solid var(--bdr);border-radius:3px;color:var(--t);padding:2px 4px;font-family:var(--mono);font-size:8px" onchange="afDcaRows[${i}].amount=+this.value"></td>
+      <td><input type="text" value="${r.note||''}" placeholder="nota" style="width:55px;background:var(--bg4);border:1px solid var(--bdr);border-radius:3px;color:var(--t);padding:2px 4px;font-family:var(--mono);font-size:8px" onchange="afDcaRows[${i}].note=this.value"></td>
+      <td><button class="btn btn-r btn-xs" onclick="afDcaRows.splice(${i},1);renderAfDCA()" style="padding:1px 5px;font-size:7px">✕</button></td>
+    </tr>`;
+  }).join('');
+}
+function applyAfPreset(){
+  const p=document.getElementById('af_preset').value;if(!p)return;
+  const p1=+document.getElementById('af_price')?.value||selData?.cp||100;
+  const a1=+document.getElementById('af_amount')?.value||40;
+  if(p==='a')afDcaRows=[{pct:-3,amount:25,note:''},{pct:-6,amount:25,note:''},{pct:-9,amount:25,note:''}];
+  else if(p==='b')afDcaRows=[{pct:-5,amount:25,note:''},{pct:-10,amount:30,note:''},{pct:-15,amount:30,note:''}];
+  else if(p==='c')afDcaRows=[{pct:-5,amount:a1,note:''},{pct:-10,amount:a1*2,note:''},{pct:-15,amount:a1*3,note:''}];
+  else if(p==='d')afDcaRows=[{pct:-4,amount:Math.round(a1*1.5),note:''},{pct:-8,amount:Math.round(a1*2.25),note:''},{pct:-12,amount:Math.round(a1*3.4),note:''}];
+  renderAfDCA();
+  document.getElementById('af_preset').value='';
+}
+
+// ══════════════════════════════════════════════════════════
+// WATCHLIST
+// ══════════════════════════════════════════════════════════
+let watchItems=[];
+
+function addToWatch(){
+  if(!selData){alert('Selecciona una moneda del escáner primero');return;}
+  const p1=+document.getElementById('af_price')?.value;
+  const amt1=+document.getElementById('af_amount')?.value||40;
+  const sl_=+document.getElementById('af_sl')?.value||10;
+  const tp1_=+document.getElementById('af_tp1')?.value||8;
+  const tp2_=+document.getElementById('af_tp2')?.value||15;
+  const note=document.getElementById('af_note')?.value||'';
+  if(!p1||p1<=0){alert('Coloca el precio de entrada');return;}
+  const cp=selData.cp||selData.currentPrice||p1;
+  const orders=[{level:1,price:p1,amount:amt1,sl:sl_,tp1:tp1_,tp2:tp2_,note,status:'pending',type:'entry'}];
+  for(const r of afDcaRows){
+    const pr=r.price>0?r.price:(r.pct?p1*(1+r.pct/100):0);
+    if(pr>0)orders.push({level:orders.length+1,price:+pr.toFixed(12),amount:r.amount||25,note:r.note||'',status:'pending',type:'dca'});
+  }
+  if(p1>=cp*.995&&!confirm(`⚠️ Precio entrada ($${fpZ(p1,cp)}) muy cerca del actual ($${fpZ(cp,cp)}). ¿Continuar?`))return;
+  const existing=watchItems.find(w=>w.symbol===selData.symbol);
+  if(existing&&!confirm(`${selData.symbol} ya vigilado. ¿Reemplazar?`))return;
+  
+  const toAdd = {
+    symbol:selData.symbol,pair:selData.pair,
+    network: selData.network || 'mexc',
+    address: selData.address || '',
+    pairAddress: selData.pairAddress || '',
+    liq: selData.liq || 0,
+    cp,orders,trend:selData.trend,dips:selData.dips||[],bestDip:selData.bestDip||null,
+    chg:selData.chg,vol:selData.vol,
+    addedAt:Date.now()
+  };
+  
+  if (existing) {
+    removeWatch(watchItems.findIndex(w=>w.symbol===selData.symbol));
+  }
+  
+  myFetch('/api/action', {
+    method: 'POST',
+    headers: { 'Content-Type': 'application/json' },
+    body: JSON.stringify({ action: 'addWatch', payload: toAdd })
+  }).then(() => {
+    const afPanel = document.getElementById('addFormPanel');
+    if(afPanel) afPanel.remove();
+    showFlash('buy','✅ Agregado al VPS',`${selData.symbol} monitorizado desde el servidor`);
+  });
+}
+
+function renderWatchList(){
+  const el=document.getElementById('wlist');
+  if(!watchItems.length){el.innerHTML='<div class="empty"><div style="font-size:20px">👁</div><div>Sin monedas</div><div style="font-size:8px;color:var(--t3)">Escanea y configura una entrada</div></div>';return;}
+  
+  const sortedItems = watchItems.map((w, wi) => {
+    const cp = w.currentPrice || w.cp || 0;
+    const filledOrds = w.orders.filter(o => o.status === 'filled');
+    const pendingOrds = w.orders.filter(o => o.status === 'pending');
+    const nextOrd = pendingOrds[0] || null;
+    let dist = 9999;
+    if (nextOrd && cp > 0) {
+      dist = Math.abs((cp - nextOrd.price) / cp * 100);
+    }
+    return { w, wi, filled: filledOrds.length > 0, dist, cp, filledOrds, pendingOrds, nextOrd };
+  }).sort((a, b) => {
+    if (a.filled && !b.filled) return -1;
+    if (!a.filled && b.filled) return 1;
+    return a.dist - b.dist;
+  });
+
+  el.innerHTML = sortedItems.map(({w, wi, cp, filledOrds, pendingOrds, nextOrd}) => {
+    const dist=nextOrd?(cp-nextOrd.price)/cp*100:null;
+    const hot=dist!==null&&dist<=1.5,near=dist!==null&&dist<=5;
+    let pnlLive=0,pnlPct=0,totalInv=0,avgEntry=0;
+    if(filledOrds.length){
+      totalInv=filledOrds.reduce((a,o)=>a+o.amount,0);
+      avgEntry=filledOrds.reduce((a,o)=>a+o.price*o.amount,0)/totalInv;
+      pnlLive=totalInv*(cp-avgEntry)/avgEntry;
+      pnlPct=(cp-avgEntry)/avgEntry*100;
+    }
+    let cls='watch';
+    if(hot)cls='hot';else if(near)cls='near';
+    else if(filledOrds.length&&w.tp1Hit)cls='tp1';
+    else if(filledOrds.length&&w.slPrice&&pnlPct<=-5)cls='sl-hit';
+    else if(filledOrds.length)cls='filled';
+    return `<div class="wcard ${cls}">
+      <div class="wc-hdr">
+        <div style="display:flex;align-items:center;gap:5px">
+          <span class="wc-sym">${w.symbol}</span>
+          ${w.network==='solana'?'<span class="tag" style="background:#a855f725;color:#a855f7;border:1px solid #a855f740;font-size:7px;padding:0 3px">SOL</span>':''}
+          <span class="tag ${w.trend?.score>=70?'tg':w.trend?.score>=45?'ty':'tr'}">${w.trend?.emoji||'─'}</span>
+          ${hot?'<span class="tag tg" style="animation:blink .5s infinite">🎯</span>' :''}
+          ${near&&!hot?'<span class="tag ty">⚡</span>' :''}
+        </div>
+        <div style="display:flex;gap:3px">
+          <button class="btn btn-b btn-xs" onclick="showDetail(watchItems[${wi}])">📊</button>
+          <button class="btn btn-d btn-xs" onclick="editWatch(${wi})">✏️</button>
+          <button class="btn btn-r btn-xs" onclick="removeWatch(${wi})">✕</button>
+        </div>
+      </div>
+      <div class="wc-body">
+        <div class="wc-price-row">
+          <span class="wc-price" style="color:${cp>w.prevPrice?'var(--g)':cp<w.prevPrice?'var(--r)':'var(--t)'}">$${fpZ(cp,cp)} ${cp>w.prevPrice?'▲':cp<w.prevPrice?'▼':'─'}</span>
+          ${filledOrds.length?`<span class="wc-pnl" style="color:${pnlLive>=0?'var(--g)':'var(--r)'}">${pnlLive>=0?'+':''}$${pnlLive.toFixed(2)} (${pnlPct.toFixed(1)}%)</span>` :''}
+        </div>
+        ${nextOrd?`<div class="wc-info">Próxima: <b style="color:${hot?'var(--g)':near?'var(--y)':'var(--b)'}">$${fpZ(nextOrd.price,nextOrd.price)}</b> · ${dist!==null?(dist>0?'−'+dist.toFixed(1)+'% falta':'⚡ ¡LLEGÓ!'):''} · $${nextOrd.amount}</div>` :''}
+        ${filledOrds.length?`<div class="wc-info">Avg: <b>$${fpZ(avgEntry,avgEntry)}</b> · Inv: <b style="color:var(--y)">$${totalInv.toFixed(0)}</b>${w.slPrice?` · SL:<b style="color:var(--r)">$${fpZ(w.slPrice,w.slPrice)}</b>` :''}${w.tp1Price?` · TP1:<b style="color:var(--g)">$${fpZ(w.tp1Price,w.tp1Price)}</b>` :''}</div>` :''}
+        <div class="wc-bar"><div class="wc-fill" style="width:${dist!==null?Math.max(5,Math.min(100,100-dist*4)):5}%;background:${hot?'var(--g)':near?'var(--y)':'var(--b)'}"></div></div>
+        <!-- ÓRDENES CON EDICIÓN -->
+        <div class="order-list">
+          ${w.orders.map((o,oi)=>{
+            const isNext=nextOrd===o;
+            const isActive=hot&&isNext;
+            const cls=o.status==='filled'?'oi-filled':o.status==='cancelled'?'oi-cancelled':o.status==='paused'?'oi-cancelled':isActive?'oi-active':isNext?'oi-next':'oi-pending';
+            return `<div class="order-item ${cls}" onclick="editOrder(${wi},${oi})">
+              <span class="oi-badge" style="background:${o.type==='entry'?'rgba(0,229,160,.15)':'rgba(139,92,246,.15)'};color:${o.type==='entry'?'var(--g)':'var(--pu)'}">${o.type==='entry'?'ENT':'DCA'}#${o.level}</span>
+              <span class="oi-info">
+                <b>$${fpZ(o.price,o.price)}</b> · $${o.amount}
+                ${o.level===1?` · SL−${o.sl}% TP+${o.tp1}%` :''}
+                ${o.note?` · <span style="color:var(--t2)">${o.note}</span>` :''}
+                ${o.status==='paused'?` · <span style="color:var(--r);font-weight:bold">⚠️ Error (Pausada)</span>` :''}
+                ${o.status==='filled'?` ✅ $${fpZ(o.filledPrice||o.price,o.price)}` :''}
+              </span>
+              <span class="oi-actions">
+                ${o.status==='paused'?`<button class="btn btn-y btn-xs" style="padding:1px 5px;font-size:7px;font-weight:bold" title="Reactivar y reintentar orden" onclick="event.stopPropagation();resumeOrder(${wi},${oi})">▶️ Reintentar</button>` :''}
+                ${o.status==='pending'?`<button class="btn btn-g btn-xs" style="padding:1px 5px;font-size:7px" onclick="event.stopPropagation();manualFill(${wi},${oi})">✓</button>` :''}
+                ${o.status==='filled'?`<button class="btn btn-r btn-xs" style="padding:1px 5px;font-size:7px" onclick="event.stopPropagation();unFill(${wi},${oi})">↩</button>` :''}
+              </span>
+            </div>`;
+          }).join('')}
+        </div>
+        <!-- BOTONES -->
+        <div style="display:flex;gap:3px;flex-wrap:wrap;margin-top:4px">
+          ${filledOrds.length?`<button class="btn btn-y btn-xs" onclick="closeTrade(${wi})">💰 Cerrar</button>` :''}
+          <button class="btn btn-d btn-xs" onclick="addOrderToWatch(${wi})">+ Orden</button>
+          <a href="${w.network === 'solana' ? 'https://dexscreener.com/solana/' + (w.address || '') : 'https://www.mexc.com/exchange/' + w.pair.replace('USDT','_USDT')}" target="_blank" class="btn btn-d btn-xs">${w.network === 'solana' ? 'DexS' : 'MEXC'}↗</a>
+          ${w.lastUpdate?`<span style="font-size:7px;color:var(--t3);font-family:var(--mono);padding-top:3px">${new Date(w.lastUpdate).toLocaleTimeString('es',{hour:'2-digit',minute:'2-digit',second:'2-digit'})}</span>` :''}
+        </div>
+      </div>
+    </div>`;
+  }).join('');
+}
+
+// EDITAR ORDEN INDIVIDUAL (inline popup)
+function editOrder(wi,oi){
+  const w=watchItems[wi];const o=w.orders[oi];
+  const newPrice=prompt(`Editar precio orden #${o.level} (actual: $${fpZ(o.price,o.price)})`,o.price);
+  if(newPrice===null)return;
+  if(+newPrice>0){
+    const newAmt=prompt(`Monto $ (actual: $${o.amount})`,o.amount);
+    if(newAmt===null)return;
+    const newNote=prompt(`Nota (actual: "${o.note||''}")`,o.note||'');
+    const updates = { price: +newPrice };
+    if(+newAmt>0) updates.amount=+newAmt;
+    if(newNote!==null) updates.note=newNote;
+    let slHits = false;
+    if(o.level===1){
+      const newSL=prompt(`Stop Loss % (actual: ${o.sl}%)`,o.sl);
+      const newTP1=prompt(`TP1 % (actual: ${o.tp1}%)`,o.tp1);
+      if(+newSL>0) updates.sl=+newSL;
+      if(+newTP1>0) updates.tp1=+newTP1;
+      slHits = true;
+    }
+    myFetch('/api/action', {method: 'POST', headers: {'Content-Type': 'application/json'}, body: JSON.stringify({action: 'editOrder', payload: {wi, oi, updates, slHits}})});
+  }
+}
+
+// EDITAR TODA LA WATCHCARD
+function editWatch(wi){
+  const w=watchItems[wi];
+  selData={...w,cp:w.currentPrice||w.cp};
+  showAddForm(selData);
+}
+
+function addOrderToWatch(wi){
+  const w=watchItems[wi];
+  const price=prompt('Precio de la nueva orden $');
+  if(!price||+price<=0)return;
+  const amt=prompt('Monto $','50');
+  const note=prompt('Nota','DCA extra');
+  const order = {level:w.orders.length+1,price:+price,amount:+(amt||50),note:note||'',status:'pending',type:'dca'};
+  myFetch('/api/action', {method: 'POST', headers: {'Content-Type': 'application/json'}, body: JSON.stringify({action: 'addOrder', payload: {wi, order}})});
+}
+
+function manualFill(wi,oi){
+  myFetch('/api/action', {method: 'POST', headers: {'Content-Type': 'application/json'}, body: JSON.stringify({action: 'manualFill', payload: {wi, oi}})});
+}
+function resumeOrder(wi,oi){
+  myFetch('/api/action', {method: 'POST', headers: {'Content-Type': 'application/json'}, body: JSON.stringify({action: 'resumeOrder', payload: {wi, oi}})});
+}
+function unFill(wi,oi){
+  if(!confirm('¿Deshacer esta ejecución?'))return;
+  myFetch('/api/action', {method: 'POST', headers: {'Content-Type': 'application/json'}, body: JSON.stringify({action: 'unFill', payload: {wi, oi}})});
+}
+function closeTrade(wi){
+  if(!confirm(`¿Seguro que quieres cerrar esta posición ahora manualmente?`))return;
+  myFetch('/api/action', {method: 'POST', headers: {'Content-Type': 'application/json'}, body: JSON.stringify({action: 'closeTrade', payload: {index: wi}})});
+}
+function removeWatch(wi){
+  myFetch('/api/action', {method: 'POST', headers: {'Content-Type': 'application/json'}, body: JSON.stringify({action: 'removeWatch', payload: {index: wi}})});
+}
+
+function quickMarketBuy() {
+  if (!curDet) return;
+  const amount = prompt(`¿Cuánto quieres comprar de ${curDet.symbol}?`, '50');
+  if (!amount || +amount <= 0) return;
+  
+  myFetch('/api/action', {
+    method: 'POST', 
+    headers: {'Content-Type': 'application/json'}, 
+    body: JSON.stringify({
+      action: 'quickMarketBuy', 
+      payload: { 
+        symbol: curDet.symbol, 
+        network: curDet.network, 
+        address: curDet.address, 
+        pair: curDet.pair, 
+        amount: +amount 
+      }
+    })
+  }).then(r => r.json()).then(d => {
+    if (d.error) alert(d.error);
+    else {
+      showFlash('buy', '⚡ COMPRA DE MERCADO ENVIADA', `Orden de $${amount} procesada`);
+      closeModal('detModal');
+    }
+  });
+}
+
+function clearDone(){
+  const items = watchItems.filter(w=>w.orders.some(o=>o.status==='pending'));
+  myFetch('/api/action', {method: 'POST', headers: {'Content-Type': 'application/json'}, body: JSON.stringify({action: 'clearWatch', payload: {items}})});
+}
+function clearAll(){
+  if(confirm('¿Limpiar toda la watchlist?')){
+    myFetch('/api/action', {method: 'POST', headers: {'Content-Type': 'application/json'}, body: JSON.stringify({action: 'clearWatch', payload: {items: []}})});
+  }
+}
+
+// ══════════════════════════════════════════════════════════
+// MONITOR — NÚCLEO (Sincronizado vía Backend)
+// ══════════════════════════════════════════════════════════
+let monitorOn=false,cycleN=0,monitorInterval=15;
+
+function startMonitor(){
+  if(monitorOn)return;
+  const iv = +document.getElementById('cfInterval').value||15;
+  myFetch('/api/action', {
+    method: 'POST', 
+    headers: {'Content-Type': 'application/json'}, 
+    body: JSON.stringify({action: 'start', payload: {interval: iv}})
+  }).then(res => {
+    if (res.ok) {
+      addLog('Sistema de monitoreo iniciado', 'info');
+      // Force immediate UI update
+      initServerState();
+    }
+  });
+}
+
+function stopMonitor(){
+  myFetch('/api/action', {
+    method: 'POST', 
+    headers: {'Content-Type': 'application/json'}, 
+    body: JSON.stringify({action: 'stop'})
+  }).then(res => {
+    if (res.ok) {
+      addLog('Sistema de monitoreo detenido', 'warn');
+      initServerState();
+    }
+  });
+}
+
+setInterval(async () => {
+  try {
+    const res = await myFetch('/api/state');
+    if (res.headers.get('content-type')?.includes('text/html')) {
+      return;
+    }
+    const data = await res.json();
+    
+    SIM = data.SIM || SIM;
+    monitorOn = data.monitorOn ?? monitorOn;
+    monitorInterval = data.monitorInterval || monitorInterval;
+    
+    if(data.mode) {
+      document.getElementById('modeSel').value = data.mode;
+      document.getElementById('dBalS').textContent = data.mode === 'real' ? 'USDT (Real MEXC)' : 'disponible';
+    }
+    watchItems = data.watchItems || watchItems;
+    cycleN = data.cycleN || cycleN;
+    document.getElementById('dCycle').textContent = cycleN;
+    
+    // Update header badge and status
+    const badge = document.getElementById('hbadge');
+    const stat = document.getElementById('hstat');
+    const dot = document.getElementById('dot');
+    const bStart = document.getElementById('btnStart');
+    const bStop = document.getElementById('btnStop');
+    
+    if (badge && typeof currentNetwork !== 'undefined') {
+        badge.textContent = `${currentNetwork === 'solana' ? 'Escáner Solana' : 'Escáner MEXC'} · Monitor ${monitorInterval}s · ${monitorOn ? 'ACTIVO' : 'PAUSADO'}`;
+    }
+    
+    if (monitorOn) {
+      if (dot) dot.classList.add('on');
+      if (bStart) bStart.style.display = 'none';
+      if (bStop) bStop.style.display = '';
+      if (stat) stat.innerHTML = `Ciclo ${cycleN} · ${watchItems.length} monedas <span style="color:var(--g)">(VPS Activo)</span>`;
+    } else {
+      if (dot) dot.classList.remove('on');
+      if (bStart) bStart.style.display = '';
+      if (bStop) bStop.style.display = 'none';
+      if (stat) stat.textContent = 'Monitor VPS detenido';
+    }
+    
+    // Countdown logic
+    const nextUpdate = data.nextUpdate || 0;
+    const cd = document.getElementById('countdown');
+    if (monitorOn && nextUpdate > 0) {
+        const diff = Math.max(0, Math.round((nextUpdate - Date.now()) / 1000));
+        if (cd) {
+          cd.textContent = diff + 's';
+          if (diff <= 3) cd.classList.add('urgent'); else cd.classList.remove('urgent');
+        }
+    } else if (cd) {
+        cd.textContent = '—';
+    }
+    if (data.vpsSolWallet) {
+      updateSolanaVpsWalletUI(data.vpsSolWallet);
+    }
+    
+    // RENDER SOLANA LOGS
+    if (data.solanaSwapLogs) {
+        const logBody = document.getElementById('solanaLogBody');
+        logBody.innerHTML = data.solanaSwapLogs.map(l => `
+            <div class="le">
+                <div class="lt">${new Date(l.time).toLocaleTimeString()}</div>
+                <div class="lm ${l.side === 'BUY' ? 'buy' : 'sell'}">${l.side} ${l.symbol || ''} ${l.amountUSDT || 0}USDT</div>
+                <div style="font-size:7px;color:var(--t2);overflow:hidden;text-overflow:ellipsis">${l.txid.slice(0, 10)}...</div>
+            </div>
+        `).join('');
+    }
+    
+    // update scan badges
+    document.querySelectorAll('.rc-sym').forEach(el => {
+      const symNode = el.childNodes[0];
+      if (!symNode) return;
+      const sym = symNode.textContent.trim();
+      const isWatched = watchItems.some(w => w.symbol === sym);
+      const hasBadge = el.querySelector('.watch-badge');
+      if (isWatched && !hasBadge) {
+         el.innerHTML = sym + ' <span class="watch-badge" style="font-size:9px;color:var(--b);background:rgba(0,226,255,0.15);padding:2px 4px;border-radius:3px;margin-left:8px;font-weight:600;letter-spacing:0">✔️ ACTIVA</span>';
+      } else if (!isWatched && hasBadge) {
+         el.innerHTML = sym;
+      }
+    });
+    
+    // Validar si hubo cambios en los logs que ameriten notificación flash/pantalla
+    const newLogs = data.logs || [];
+    if(newLogs.length > 0 && logs_.length > 0 && newLogs[0].t !== logs_[0].t) {
+      if(newLogs[0].type === 'buy') showFlash('buy','✅ COMPRA AUTO VPS', newLogs[0].msg);
+      if(newLogs[0].type === 'sell' || newLogs[0].type === 'tp') showFlash('tp','💰 VPS CERRADA', newLogs[0].msg);
+      if(newLogs[0].type === 'sl_') showFlash('sell','❌ SL VPS', newLogs[0].msg);
+    }
+    
+    logs_ = newLogs;
+    
+    // Actualizar variables y renderizar paneles
+    updateDash();
+    renderWatchList();
+    renderLog();
+    
+    document.getElementById('htime').textContent=new Date().toLocaleTimeString('es',{hour:'2-digit',minute:'2-digit',second:'2-digit'});
+  } catch(e) {
+    if (e.message !== 'Failed to fetch' && e.message !== 'Unauthorized') {
+      console.error('Interval error:', e);
+    }
+  }
+}, 1000);
+
+// ══════════════════════════════════════════════════════════
+// CHART + OB
+// ══════════════════════════════════════════════════════════
+let curDet=null,chartInst=null;
+let curOB=null;
+let currentSwapRiskAmount=100;
+
+function calculateSwapRisk(d, ob, amount) {
+  const isSol = d.network === 'solana';
+  const cp = d.currentPrice || d.cp || 0;
+  
+  let liq = 0;
+  if (isSol) {
+    liq = d.liq || 0;
+  } else if (ob && ob.bids) {
+    liq = ob.bids.reduce((sum, bid) => sum + (parseFloat(bid[0]) * parseFloat(bid[1])), 0);
+  } else {
+    liq = d.liq || 0;
+  }
+  
+  const vol = d.vol || 0;
+  
+  let priceImpactPct = 0;
+  if (isSol) {
+    const poolReserves = liq * 0.5;
+    if (poolReserves > 0) {
+      priceImpactPct = (amount / (poolReserves + amount)) * 100;
+    } else {
+      priceImpactPct = amount > 0 ? 100 : 0;
+    }
+  } else if (ob && ob.asks && ob.asks.length > 0) {
+    let remainingUsd = amount;
+    let cost = 0;
+    let qtyFilled = 0;
+    let bestAsk = parseFloat(ob.asks[0][0]);
+    let finalPrice = bestAsk;
+    
+    for (let i = 0; i < ob.asks.length; i++) {
+      const askPrice = parseFloat(ob.asks[i][0]);
+      const askQty = parseFloat(ob.asks[i][1]);
+      const levelUsd = askPrice * askQty;
+      
+      if (remainingUsd <= levelUsd) {
+        qtyFilled += remainingUsd / askPrice;
+        cost += remainingUsd;
+        finalPrice = askPrice;
+        remainingUsd = 0;
+        break;
+      } else {
+        qtyFilled += askQty;
+        cost += levelUsd;
+        finalPrice = askPrice;
+        remainingUsd -= levelUsd;
+      }
+    }
+    
+    if (cost > 0) {
+      const avgPrice = cost / qtyFilled;
+      priceImpactPct = ((avgPrice - bestAsk) / bestAsk) * 100;
+      if (remainingUsd > 0) {
+        priceImpactPct += (remainingUsd / amount) * 15;
+      }
+    } else {
+      priceImpactPct = 0;
+    }
+  } else {
+    priceImpactPct = amount > 0 ? 1.5 : 0;
+  }
+  
+  priceImpactPct = Math.max(0, parseFloat(priceImpactPct.toFixed(3)));
+  
+  let liqRisk = 0;
+  if (isSol) {
+    if (liq < 5000) liqRisk = 100;
+    else if (liq > 150000) liqRisk = 0;
+    else liqRisk = 100 - ((liq - 5000) / 145000) * 100;
+  } else {
+    if (liq < 10000) liqRisk = 90;
+    else if (liq > 500000) liqRisk = 0;
+    else liqRisk = 100 - ((liq - 10000) / 490000) * 100;
+  }
+  liqRisk = Math.max(0, Math.min(100, liqRisk));
+  
+  let volRisk = 0;
+  if (vol < 5000) volRisk = 100;
+  else if (vol > 300000) volRisk = 0;
+  else volRisk = 100 - ((vol - 5000) / 295000) * 100;
+  volRisk = Math.max(0, Math.min(100, volRisk));
+  
+  let slipRisk = 0;
+  if (priceImpactPct < 0.2) slipRisk = 0;
+  else if (priceImpactPct > 5.0) slipRisk = 100;
+  else slipRisk = (priceImpactPct / 5.0) * 100;
+  slipRisk = Math.max(0, Math.min(100, slipRisk));
+  
+  let totalScore = Math.round(liqRisk * 0.4 + volRisk * 0.2 + slipRisk * 0.4);
+  
+  let spreadPct = 0;
+  if (!isSol && ob && ob.asks && ob.bids && ob.asks.length > 0 && ob.bids.length > 0) {
+    const ask0 = parseFloat(ob.asks[0][0]);
+    const bid0 = parseFloat(ob.bids[0][0]);
+    spreadPct = ((ask0 - bid0) / ask0) * 100;
+    if (spreadPct > 1.0) {
+      totalScore = Math.min(100, totalScore + 15);
+    }
+  }
+  
+  totalScore = Math.max(0, Math.min(100, totalScore));
+  
+  let label = 'BAJO';
+  let color = 'var(--g)';
+  let bg = 'rgba(0, 229, 160, 0.1)';
+  let desc = 'Condiciones excelentes. Swap seguro con mínimo impacto de precio.';
+  let recSlippage = '0.5%';
+  
+  if (totalScore >= 80) {
+    label = 'EXTREMO';
+    color = 'var(--r)';
+    bg = 'rgba(239, 68, 68, 0.15)';
+    desc = 'Riesgo crítico de iliquidez. Gran parte de tu dinero podría perderse en slippage.';
+    recSlippage = '5.0% - 10.0%';
+  } else if (totalScore >= 55) {
+    label = 'ALTO';
+    color = 'var(--y)';
+    bg = 'rgba(245, 158, 11, 0.15)';
+    desc = 'Impacto de precio elevado. Se recomienda usar montos más pequeños o dividir la orden.';
+    recSlippage = '2.0% - 3.0%';
+  } else if (totalScore >= 30) {
+    label = 'MEDIO';
+    color = '#facc15';
+    bg = 'rgba(250, 204, 21, 0.1)';
+    desc = 'Riesgo moderado. Adecuado para montos pequeños. Monitorea el impacto en precio.';
+    recSlippage = '1.0% - 1.5%';
+  }
+  
+  return {
+    totalScore,
+    label,
+    color,
+    bg,
+    desc,
+    recSlippage,
+    liq,
+    vol,
+    priceImpactPct,
+    spreadPct,
+    liqRisk,
+    volRisk,
+    slipRisk
+  };
+}
+
+function renderSwapRiskPanel(d, ob) {
+  const el = document.getElementById('swapRiskPanel');
+  if (!el) return;
+  
+  el.innerHTML = `
+    <div style="background: rgba(153, 69, 255, 0.03); border: 1px solid rgba(153, 69, 255, 0.15); border-radius: 4px; padding: 10px; font-family: var(--mono); font-size: 9px; margin-top: 10px;">
+      <div style="color: #a855f7; font-weight: 700; margin-bottom: 8px; display: flex; justify-content: space-between; align-items: center;">
+        <span>🛡️ RIESGO DE SWAP (REAL-TIME)</span>
+        <span class="tag" style="background: rgba(168, 85, 247, 0.15); color: #c084fc; font-size: 7px; border: 1px solid rgba(168, 85, 247, 0.2); margin: 0">RIESGO DE DESVIACIÓN</span>
+      </div>
+      
+      <div style="margin-bottom: 8px; display: flex; align-items: center; justify-content: space-between; gap: 5px;">
+        <span style="color: var(--t2); font-size: 8px;">Monto del Swap:</span>
+        <div style="display: flex; align-items: center; gap: 3px; max-width: 140px;">
+          <span style="color: var(--t2)">$</span>
+          <input type="number" id="riskSwapAmount" class="inp" value="${currentSwapRiskAmount}" style="padding: 2px 5px; font-size: 9px; text-align: right; width: 60px;" oninput="onRiskAmountChange(this.value)">
+          <span style="color: var(--t2)">USD</span>
+        </div>
+      </div>
+      
+      <div style="display: flex; gap: 3px; margin-bottom: 10px;">
+        ${[10, 50, 100, 500, 1000].map(amt => `
+          <button class="btn btn-d btn-xs" style="padding: 1px 4px; font-size: 8px; flex: 1; text-align: center; border-radius: 3px; ${currentSwapRiskAmount === amt ? 'border-color: var(--g); color: var(--g); background: rgba(0,229,160,0.05)' : ''}" onclick="setRiskAmount(${amt})">$${amt}</button>
+        `).join('')}
+      </div>
+      
+      <div id="swapRiskResults"></div>
+    </div>
+  `;
+  
+  updateSwapRiskResults();
+}
+
+function setRiskAmount(amt) {
+  currentSwapRiskAmount = parseInt(amt) || 100;
+  const input = document.getElementById('riskSwapAmount');
+  if (input) input.value = currentSwapRiskAmount;
+  
+  document.querySelectorAll('#swapRiskPanel button').forEach(btn => {
+    if (btn.textContent === '$' + amt) {
+      btn.style.borderColor = 'var(--g)';
+      btn.style.color = 'var(--g)';
+      btn.style.background = 'rgba(0,229,160,0.05)';
+    } else if (btn.textContent.startsWith('$')) {
+      btn.style.borderColor = '';
+      btn.style.color = '';
+      btn.style.background = '';
+    }
+  });
+  
+  updateSwapRiskResults();
+}
+
+function onRiskAmountChange(val) {
+  const amt = parseInt(val) || 0;
+  currentSwapRiskAmount = amt;
+  
+  document.querySelectorAll('#swapRiskPanel button').forEach(btn => {
+    if (btn.textContent.startsWith('$')) {
+      const btnAmt = parseInt(btn.textContent.substring(1));
+      if (btnAmt === amt) {
+        btn.style.borderColor = 'var(--g)';
+        btn.style.color = 'var(--g)';
+        btn.style.background = 'rgba(0,229,160,0.05)';
+      } else {
+        btn.style.borderColor = '';
+        btn.style.color = '';
+        btn.style.background = '';
+      }
+    }
+  });
+  
+  updateSwapRiskResults();
+}
+
+function updateSwapRiskResults() {
+  const resultsDiv = document.getElementById('swapRiskResults');
+  if (!resultsDiv || !curDet) return;
+  
+  const risk = calculateSwapRisk(curDet, curOB, currentSwapRiskAmount);
+  
+  let warningsHtml = '';
+  if (risk.totalScore >= 80) {
+    warningsHtml += `<div style="color: var(--r); margin-top: 8px; font-size: 8px; line-height: 1.2;">🚨 <b>Peligro:</b> Liquidez crítica para este monto. ¡Evita este swap!</div>`;
+  } else if (risk.totalScore >= 55) {
+    warningsHtml += `<div style="color: var(--y); margin-top: 8px; font-size: 8px; line-height: 1.2;">⚠️ <b>Advertencia:</b> Desviación de precio notable. Divide la operación.</div>`;
+  } else if (risk.priceImpactPct > 1.0) {
+    warningsHtml += `<div style="color: var(--y); margin-top: 8px; font-size: 8px; line-height: 1.2;">⚠️ <b>Aviso:</b> Impacto en precio del ${risk.priceImpactPct.toFixed(2)}%.</div>`;
+  }
+  
+  if (risk.liq < 10000) {
+    warningsHtml += `<div style="color: var(--r); margin-top: 4px; font-size: 8px; line-height: 1.2;">⚠️ <b>Piscina muy delgada:</b> Liquidez total menor a $10,000 USD.</div>`;
+  }
+  if (risk.vol < 5000) {
+    warningsHtml += `<div style="color: var(--y); margin-top: 4px; font-size: 8px; line-height: 1.2;">⚠️ <b>Bajo volumen:</b> Menor a $5,000 USD en 24h. Riesgo de manipulación.</div>`;
+  }
+  if (risk.spreadPct > 1.0) {
+    warningsHtml += `<div style="color: var(--y); margin-top: 4px; font-size: 8px; line-height: 1.2;">⚠️ <b>Spread elevado:</b> El spread de compra/venta es del ${risk.spreadPct.toFixed(2)}%.</div>`;
+  }
+  
+  resultsDiv.innerHTML = `
+    <div style="margin-bottom: 8px;">
+      <div style="display: flex; justify-content: space-between; font-size: 8px; color: var(--t2); margin-bottom: 3px;">
+        <span>Índice de Riesgo Estimado:</span>
+        <span style="color: ${risk.color}; font-weight: 700;">${risk.totalScore}/100 (${risk.label})</span>
+      </div>
+      <div style="width: 100%; height: 8px; background: rgba(255,255,255,0.05); border-radius: 4px; position: relative; overflow: hidden; display: flex;">
+        <div style="width: 30%; height: 100%; background: rgba(0, 229, 160, 0.25);"></div>
+        <div style="width: 25%; height: 100%; background: rgba(250, 204, 21, 0.25);"></div>
+        <div style="width: 25%; height: 100%; background: rgba(245, 158, 11, 0.25);"></div>
+        <div style="width: 20%; height: 100%; background: rgba(239, 68, 68, 0.25);"></div>
+        <div style="position: absolute; left: ${risk.totalScore}%; top: 0; width: 4px; height: 100%; background: ${risk.color}; box-shadow: 0 0 4px ${risk.color}; transition: left 0.3s ease;"></div>
+      </div>
+    </div>
+    
+    <div style="display: grid; grid-template-columns: 1fr 1fr; gap: 5px; background: rgba(0,0,0,0.15); padding: 5px 7px; border-radius: 4px; border: 1px solid rgba(255,255,255,0.03);">
+      <div>
+        <div style="font-size: 7px; color: var(--t2)">Impacto Estimado:</div>
+        <div style="font-size: 9px; font-weight: 700; color: ${risk.priceImpactPct > 2.0 ? 'var(--r)' : risk.priceImpactPct > 0.5 ? 'var(--y)' : 'var(--g)'}; font-family: var(--mono);">${risk.priceImpactPct}%</div>
+      </div>
+      <div>
+        <div style="font-size: 7px; color: var(--t2)">Slippage Recomendado:</div>
+        <div style="font-size: 9px; font-weight: 700; color: var(--t); font-family: var(--mono);">${risk.recSlippage}</div>
+      </div>
+      <div style="margin-top: 3px;">
+        <div style="font-size: 7px; color: var(--t2)">Liquidez Estimada:</div>
+        <div style="font-size: 9px; font-weight: 700; color: var(--g); font-family: var(--mono);">$${fv(risk.liq)}</div>
+      </div>
+      <div style="margin-top: 3px;">
+        <div style="font-size: 7px; color: var(--t2)">Volumen 24h:</div>
+        <div style="font-size: 9px; font-weight: 700; color: var(--b); font-family: var(--mono);">$${fv(risk.vol)}</div>
+      </div>
+    </div>
+    
+    <div style="margin-top: 6px; font-size: 8px; color: rgba(255,255,255,0.7); line-height: 1.3; background: ${risk.bg}; border-left: 2px solid ${risk.color}; padding: 4px 6px; border-radius: 0 3px 3px 0;">
+      ${risk.desc}
+    </div>
+    
+    ${warningsHtml}
+  `;
+}
+
+async function showDetail(d){
+  curDet=d;
+  curOB=null;
+  const cp=d.currentPrice||d.cp||0;
+  const isSol = d.network === 'solana';
+  const pairName = isSol ? `${d.symbol}/SOL` : `${d.symbol}/USDT`;
+  const extLink = isSol ? `https://dexscreener.com/solana/${d.address}` : `https://www.mexc.com/exchange/${d.pair.replace('USDT','_USDT')}`;
+  const extLabel = isSol ? `DexScreener ↗` : `MEXC ↗`;
+  const extCol = isSol ? `#9945FF` : `var(--b)`;
+  const extBdr = isSol ? `rgba(153,69,255,0.2)` : `rgba(59,130,246,0.2)`;
+
+  document.getElementById('detHdr').innerHTML=`
+    <span style="font-family:var(--mono);font-size:13px;font-weight:700">${pairName}</span>
+    <span style="font-family:var(--mono);font-size:10px;color:var(--t2)">$${fpZ(cp,cp)}</span>
+    <span class="tag ${d.trend.score>=70?'tg':d.trend.score>=45?'ty':'tr'}">${d.trend.emoji} ${d.trend.label}</span>
+    <a href="https://x.com/search?q=${d.address||d.symbol}+scam+OR+rug" target="_blank" style="margin-left:5px;font-family:var(--mono);font-size:8px;color:#facc15;border:1px solid rgba(250,204,21,0.2);padding:2px 7px;border-radius:3px;text-decoration:none">🔍 Buscar Estafa en X</a>
+    <a href="${extLink}" target="_blank" style="margin-left:auto;font-family:var(--mono);font-size:8px;color:${extCol};border:1px solid ${extBdr};padding:2px 7px;border-radius:3px;text-decoration:none">${extLabel}</a>
+  `;
+  document.getElementById('detContent').innerHTML=`
+    <div class="det-body">
+      <div class="det-left">
+        ${isSol ? '' : `
+        <div class="ctabs">
+          <button class="ctab on" onclick="loadChart('h1',this)">1H</button>
+          <button class="ctab" onclick="loadChart('h4',this)">4H</button>
+          <button class="ctab" onclick="loadChart('m30',this)">30M</button>
+          <button class="ctab" onclick="loadChart('d1',this)">1D</button>
+        </div>
+        `}
+        <div class="cwrap" style="padding:0;overflow:hidden">
+          ${isSol 
+            ? `<iframe src="https://dexscreener.com/solana/${d.address}?embed=1&theme=dark&trades=0&info=0" style="width:100%;height:100%;border:none;border-radius:4px;"></iframe>`
+            : `<div class="cload" id="cload">⟳ Cargando...</div><canvas id="detChart" style="display:none"></canvas>`
+          }
+        </div>
+        <div id="apanel"></div>
+      </div>
+      <div class="det-right">
+        <div style="font-family:var(--mono);font-size:8px;font-weight:700;color:var(--t2);text-transform:uppercase;letter-spacing:.08em;margin-bottom:5px;display:flex;justify-content:space-between">
+          📚 ${isSol ? 'AMM / LIQUIDEZ' : 'ORDER BOOK'} <span style="cursor:pointer;color:var(--b)" onclick="refreshOB()">🔄</span>
+        </div>
+        <div id="obDiv"><div style="color:var(--t2);font-size:8px;font-family:var(--mono)">Cargando...</div></div>
+        
+        <!-- RISK METER CONTAINER -->
+        <div id="swapRiskPanel"></div>
+        
+        <div style="margin-top:10px;">
+          <button class="btn btn-g" style="width:100%;padding:8px;font-size:11px" onclick="quickMarketBuy()">⚡ Comprar a Mercado</button>
+        </div>
+      </div>
+    </div>`;
+  if (!isSol) loadChart('h1');
+  
+  if (isSol) {
+    const obDiv = document.getElementById('obDiv');
+    if (obDiv) {
+      obDiv.innerHTML = `
+        <div style="padding:10px;background:rgba(153,69,255,0.03);border:1px solid rgba(153,69,255,0.15);border-radius:4px;font-family:var(--mono);font-size:9px">
+          <div style="color:#a855f7;font-weight:700;margin-bottom:6px">🟣 AMM LIQUIDITY POOL</div>
+          <div style="margin-bottom:4px;color:var(--t2)">Dirección Token:</div>
+          <div style="font-size:8px;word-break:break-all;color:var(--t);margin-bottom:8px">${d.address}</div>
+          <div style="display:flex;justify-content:space-between;margin-bottom:4px">
+            <span style="color:var(--t2)">Liquidez (USD):</span>
+            <span style="color:var(--g);font-weight:700">${d.liq ? fv(d.liq) : 'N/A'}</span>
+          </div>
+          <div style="display:flex;justify-content:space-between;margin-bottom:4px">
+            <span style="color:var(--t2)">Volumen 24h:</span>
+            <span style="color:var(--b);font-weight:700">${fv(d.vol)}</span>
+          </div>
+          <div style="display:flex;justify-content:space-between;margin-bottom:8px">
+            <span style="color:var(--t2)">Red / DEX:</span>
+            <span style="color:var(--y)">Solana / Jupiter</span>
+          </div>
+          ${(function(){
+            if(!d.klines1h)return '';
+            const sr = findSR(d.klines1h, cp);
+            let h = '<div style="margin-top:10px;border-top:1px dashed rgba(153,69,255,0.2);padding-top:8px">';
+            h += '<div style="color:var(--r);margin-bottom:4px">▲ Resistencias (venta)</div>';
+            h += sr.resistances.length ? sr.resistances.map(r=>`<div style="display:flex;justify-content:space-between;color:var(--t2);font-size:8px"><span>Nivel</span><span style="color:var(--r)">$${fpZ(r, cp)}</span></div>`).join('') : '<div style="color:var(--t2);font-size:7px">—</div>';
+            h += `<div style="text-align:center;color:var(--t);margin:6px 0;font-size:10px">$${fpZ(cp, cp)}</div>`;
+            h += '<div style="color:var(--g);margin-bottom:4px">▼ Soportes (compra)</div>';
+            h += sr.supports.length ? sr.supports.map(s=>`<div style="display:flex;justify-content:space-between;color:var(--t2);font-size:8px"><span>Nivel</span><span style="color:var(--g)">$${fpZ(s, cp)}</span></div>`).join('') : '<div style="color:var(--t2);font-size:7px">—</div>';
+            h += '</div>';
+            return h;
+          })()}
+          <div style="font-size:8px;color:var(--t2);line-height:1.3;border-top:1px dashed rgba(255,255,255,0.05);padding-top:6px;margin-top:10px;">
+            ⚠️ Los tokens de Solana operan en pools descentralizados de AMM. Las S/R son calculadas vía pivotes en el gráfico 1H.
+          </div>
+        </div>
+      `;
+    }
+    const simulatedOBAnalysis = {
+      buyVol: d.vol * 0.52,
+      sellVol: d.vol * 0.48,
+      spreadPct: 0.12,
+      wallBelow: cp * 0.98,
+      wallCount: 1,
+      signal: 'BUY',
+      score: 80
+    };
+    renderAP(d, simulatedOBAnalysis, cp);
+    renderSwapRiskPanel(d, null);
+  } else {
+    const ob=await mxDepth(d.pair,200);
+    if(ob){
+      curOB = ob;
+      const an=analyzeOB(ob.bids,ob.asks,cp,d.dips||[]);
+      renderOB(an,cp);
+      renderAP(d,an,cp);
+      renderSwapRiskPanel(d, ob);
+    }
+  }
+}
+
+async function loadChart(tf,tabEl){
+  if(!curDet)return;
+  if(tabEl)document.querySelectorAll('.ctab').forEach(t=>t.className='ctab'+(t===tabEl?' on':''));
+  if(chartInst){chartInst.destroy();chartInst=null;}
+  const cv=document.getElementById('detChart'),cl=document.getElementById('cload');
+  if(!cv)return;
+  cv.style.display='none';if(cl)cl.style.display='flex';
+  let kl;
+  if (curDet.network === 'solana') {
+    kl = tf === 'd1' ? curDet.klines1d : curDet.klines1h;
+    if (!kl || kl.length === 0) {
+      kl = generateSimulatedKlines(curDet.currentPrice || curDet.cp, curDet.priceChangeObj || { h24: curDet.chg || 0 }, tf === 'd1' ? 60 : 120, curDet.address || "");
+      if (tf === 'd1') curDet.klines1d = kl;
+      else curDet.klines1h = kl;
+    }
+  } else {
+    kl = await mxKlines(curDet.pair,tf,120);
+  }
+  if(!kl || !kl.length){if(cl)cl.textContent='Sin datos';return;}
+  const C=kl.map(k=>+k[4]),H=kl.map(k=>+k[2]),L=kl.map(k=>+k[3]);
+  const labs=kl.map(k=>{const d2=new Date(+k[0]*1000);return(tf==='h1'||tf==='m30')?d2.toLocaleTimeString('es',{hour:'2-digit',minute:'2-digit'}):d2.toLocaleDateString('es',{month:'short',day:'numeric'});});
+  const e20=Array(C.length).fill(null),e50=Array(C.length).fill(null);
+  const ce=(data,p)=>{const k=2/(p+1);let e=data.slice(0,p).reduce((a,b)=>a+b,0)/p;for(let i=p;i<data.length;i++)e=data[i]*k+e*(1-k);return e;};
+  for(let i=19;i<C.length;i++)e20[i]=ce(C.slice(0,i+1),20);
+  for(let i=Math.min(49,C.length-1);i<C.length;i++)e50[i]=ce(C.slice(0,i+1),Math.min(50,i+1));
+  if(cl)cl.style.display='none';cv.style.display='block';
+  const ctx=cv.getContext('2d'),up=C[C.length-1]>=C[0],col=up?'#00e5a0':'#ef4444';
+  const gr=ctx.createLinearGradient(0,0,0,200);gr.addColorStop(0,col+'44');gr.addColorStop(1,col+'05');
+  const ds=[
+    {label:'Precio',data:C,borderColor:col,borderWidth:2,fill:true,backgroundColor:gr,pointRadius:0,tension:0.3},
+    {label:'EMA20',data:e20,borderColor:'#3b82f6',borderWidth:1.5,fill:false,pointRadius:0,tension:0.3},
+    {label:'EMA50',data:e50,borderColor:'#8b5cf6',borderWidth:1.5,fill:false,pointRadius:0,tension:0.3,borderDash:[4,2]},
+    {label:'H',data:H,borderColor:'#ffffff05',borderWidth:1,fill:false,pointRadius:0},
+    {label:'L',data:L,borderColor:'#ffffff05',borderWidth:1,fill:false,pointRadius:0},
+  ];
+  // Órdenes configuradas
+  const wFound=watchItems.find(w=>w.symbol===curDet.symbol);
+  if(wFound){
+    wFound.orders.forEach(o=>{
+      const c2=o.status==='filled'?'#00e5a0aa':o.status==='pending'?'#3b82f6aa':'#ef444422';
+      ds.push({label:`#${o.level}$${fpZ(o.price,o.price)}`,data:Array(C.length).fill(o.price),borderColor:c2,borderWidth:2,borderDash:[8,4],fill:false,pointRadius:0});
+    });
+    if(wFound.slPrice)ds.push({label:'SL',data:Array(C.length).fill(wFound.slPrice),borderColor:'#ef444466',borderWidth:1.5,borderDash:[3,3],fill:false,pointRadius:0});
+    if(wFound.tp1Price)ds.push({label:'TP1',data:Array(C.length).fill(wFound.tp1Price),borderColor:'#00e5a077',borderWidth:1.5,borderDash:[3,3],fill:false,pointRadius:0});
+  }
+  // Dips
+  (curDet.dips||[]).slice(0,2).forEach(d2=>ds.push({label:`Dip×${d2.count}`,data:Array(C.length).fill(d2.price),borderColor:'#f59e0b44',borderWidth:1,borderDash:[2,4],fill:false,pointRadius:0}));
+  chartInst=new Chart(ctx,{type:'line',data:{labels:labs,datasets:ds},options:{responsive:true,maintainAspectRatio:false,interaction:{intersect:false,mode:'index'},
+    plugins:{legend:{display:true,position:'top',labels:{color:'#64748b',font:{size:7},boxWidth:7,padding:4,usePointStyle:true}},tooltip:{backgroundColor:'#111520',borderColor:'#1e2638',borderWidth:1,titleColor:'#64748b',bodyColor:'#ddeeff',callbacks:{label:c3=>c3.dataset.label+': $'+fp(+c3.raw)}}},
+    scales:{x:{ticks:{color:'#1e2d42',font:{size:7},maxTicksLimit:12,maxRotation:0},grid:{color:'#1e263810'}},y:{ticks:{color:'#1e2d42',font:{size:7},callback:v=>'$'+fp(+v)},grid:{color:'#1e263810'}}}}});
+}
+
+function renderOB(an,cp){
+  const el=document.getElementById('obDiv');if(!el)return;
+  const maxB=Math.max(...an.buyWalls.map(w=>w.total),1),maxS=Math.max(...an.sellWalls.map(w=>w.total),1);
+  const rl=(w,side)=>{
+    const col=side==='buy'?'#00e5a0':'#ef4444',isBest=side==='buy'&&w===an.strat?.bestWall;
+    const bgW=(w.total/(side==='buy'?maxB:maxS)*100).toFixed(0);
+    const ql=w.qty>=1e6?`${(w.qty/1e6).toFixed(1)}M` :w.qty>=1e3?`${(w.qty/1e3).toFixed(0)}K` :w.qty.toFixed(0);
+    return `<div class="ob-lv ${side==='buy'?'buy':'sell'} ${isBest?'best':''}">
+      <div class="ob-bg" style="width:${bgW}%;background:${col}"></div>
+      <div class="ob-row">
+        <span class="ob-p" style="color:${col}">$${fpZ(w.price,cp)}</span>
+        <span style="color:var(--t2)">${fv(w.total)}</span>
+        <span style="font-size:7px;color:var(--t2)">${side==='buy'?'−':'+'} ${w.dist.toFixed(1)}%</span>
+        <span class="tag ${w.str>=6?'tg':w.str>=4?'ty':'tb'}">${w.str}x</span>
+      </div>
+      <div style="font-size:7px;font-family:var(--mono);color:var(--t2);display:flex;gap:3px;margin-top:1px">
+        ${ql} ${w.rebounds>=1?`<span class="tag tg">×${w.rebounds}reb</span>` :''} ${isBest?'<span class="tag tg">★</span>' :''}
+      </div>
+    </div>`;
+  };
+  el.innerHTML=`
+    <div class="ob-sep">▲ Resistencias (venta)</div>
+    ${an.sellWalls.length?[...an.sellWalls].sort((a,b)=>b.price-a.price).map(w=>rl(w,'sell')).join(''):'<div style="color:var(--t2);font-size:7px;padding:3px">—</div>'}
+    <div class="ob-mid">$${fp(cp)}</div>
+    <div class="ob-sep">▼ Soportes (compra)</div>
+    ${an.buyWalls.length?[...an.buyWalls].sort((a,b)=>b.price-a.price).map(w=>rl(w,'buy')).join(''):'<div style="color:var(--t2);font-size:7px;padding:3px">—</div>'}
+    <div style="margin-top:5px;font-size:7px;font-family:var(--mono);color:var(--t2)">Presión: <b style="color:${an.imb>55?'var(--g)':an.imb<45?'var(--r)':'var(--y)'}">${an.imb}% compra</b> · 200 niveles · ★=mejor entrada · ×N=reb. hist.</div>`;
+}
+
+async function runSafetyScan(symbol, address, network) {
+  const panel = document.getElementById('xScamPanel');
+  if (!panel) return;
+  
+  if (network !== 'solana') {
+    panel.innerHTML = `
+      <div style="background:var(--bg2);border:1px solid var(--bdr);border-radius:5px;padding:8px 10px;margin-top:6px;text-align:center;font-size:8px;color:var(--y);font-family:var(--mono);">
+        ⚠️ Escáner de seguridad avanzado (RugCheck + Simulador) solo disponible para Solana.
+      </div>
+    `;
+    return;
+  }
+
+  panel.innerHTML = `
+    <div style="background:var(--bg2);border:1px solid var(--bdr);border-radius:5px;padding:8px 10px;text-align:center;">
+      <div style="display:flex;align-items:center;justify-content:center;font-size:8px;color:var(--t2);font-family:var(--mono);">
+        <span style="display:inline-block;margin-right:6px">🛡️</span> Analizando seguridad del token (RugCheck + Honeypot Check)...
+      </div>
+    </div>
+  `;
+  try {
+    const fetchRes = await myFetch(`/api/token-safety/${address}`);
+    if (!fetchRes.ok) throw new Error("Error en servidor al consultar seguridad");
+    const res = await fetchRes.json();
+    if (!res) throw new Error("Error al obtener datos");
+    
+    let riskColor = res.safe ? "var(--g)" : "var(--r)";
+    let riskText = res.safe ? "SEGURO" : "ALTO RIESGO / SCAM";
+    let rcScore = res.details?.rugcheckScore || 0;
+    
+    let riskBarColor = rcScore > 50 ? "var(--r)" : (rcScore > 10 ? "var(--y)" : "var(--g)");
+    
+    let alertsHtml = res.warnings.length === 0 
+      ? '<div style="color:var(--g);font-size:8px;padding:4px 0;">✅ Ningún riesgo on-chain detectado.</div>' 
+      : res.warnings.map(w => `<div style="color:var(--r);font-size:8px;margin-bottom:3px;padding-left:10px;position:relative;"><span style="color:var(--r);position:absolute;left:0;">•</span>${w}</div>`).join('');
+      
+    let simResult = '';
+    if (res.details?.sellSimulation?.attempted) {
+      if (res.details.sellSimulation.success) {
+        simResult = '<div style="color:var(--g);font-size:8px;margin-top:4px;">✅ Simulación de venta exitosa (No parece ser honeypot).</div>';
+      } else {
+        simResult = `<div style="color:var(--r);font-size:8px;margin-top:4px;font-weight:bold;">🚨 ERROR EN VENTA: ${res.details.sellSimulation.error || 'Simulación falló'} (ALTA PROBABILIDAD DE HONEYPOT)</div>`;
+      }
+    }
+
+    panel.innerHTML = `
+      <div style="background:var(--bg2);border:1px solid var(--bdr);border-radius:5px;padding:8px 10px;margin-top:6px;">
+        <div style="font-family:var(--mono);font-size:8px;font-weight:700;color:var(--g);margin-bottom:6px;display:flex;justify-content:space-between;align-items:center;">
+          <span style="color:#a855f7">🛡️ ESCÁNER ANTI-RUG / HONEYPOT</span>
+          <span class="tag" style="background:rgba(168,85,247,0.15);color:#a855f7;font-size:7px;border:1px solid rgba(168,85,247,0.2);margin:0">ACTIVO</span>
+        </div>
+
+        <div style="display:flex;align-items:center;justify-content:space-between;background:rgba(0,0,0,0.2);padding:6px 8px;border-radius:4px;margin-bottom:8px;">
+          <div>
+            <div style="font-size:7px;color:var(--t2);font-family:var(--mono)">Estado del Token:</div>
+            <div style="font-size:11px;font-weight:800;color:${riskColor};font-family:var(--mono);">${riskText}</div>
+          </div>
+          <div style="text-align:right;">
+            <div style="font-size:7px;color:var(--t2);font-family:var(--mono)">RugCheck Score:</div>
+            <div style="font-size:11px;font-weight:800;color:${riskBarColor};font-family:var(--mono);">${rcScore} / 100</div>
+          </div>
+        </div>
+
+        <div style="font-size:7px;font-family:var(--mono);color:var(--t2);text-transform:uppercase;margin-bottom:4px;font-weight:700;">🔍 Detalle de Seguridad:</div>
+        <div style="background:rgba(0,0,0,0.15); border-radius:4px; border:1px solid rgba(255,255,255,0.03); padding:6px 8px;">
+          <div style="display:flex; justify-content:space-between; font-size:8px; font-family:var(--mono); margin-bottom:4px;">
+            <span>Mint Authority (Imprimir más):</span>
+            <span style="color:${res.details?.mintAuthorityRevoked ? 'var(--g)' : 'var(--r)'}">${res.details?.mintAuthorityRevoked ? 'REVOCADA ✅' : 'ACTIVA ❌'}</span>
+          </div>
+          <div style="display:flex; justify-content:space-between; font-size:8px; font-family:var(--mono); margin-bottom:4px;">
+            <span>Freeze Authority (Bloquear ventas):</span>
+            <span style="color:${res.details?.freezeAuthorityRevoked ? 'var(--g)' : 'var(--r)'}">${res.details?.freezeAuthorityRevoked ? 'REVOCADA ✅' : 'ACTIVA ❌'}</span>
+          </div>
+          ${simResult}
+        </div>
+
+        <div style="margin-top:8px;">
+          <div style="font-size:7px;font-family:var(--mono);color:var(--t2);text-transform:uppercase;margin-bottom:4px;font-weight:700;">⚠️ Alertas / Advertencias:</div>
+          ${alertsHtml}
+        </div>
+      </div>
+    `;
+  } catch (err) {
+    panel.innerHTML = `
+      <div style="background:var(--bg2);border:1px solid var(--bdr);border-radius:5px;padding:8px 10px;margin-top:6px;text-align:center;font-size:8px;color:var(--r);font-family:var(--mono);">
+        ⚠️ Falló el chequeo de seguridad: ${err.message}
+      </div>
+    `;
+  }
+}
+function renderAP(d,an,cp){
+  const el=document.getElementById('apanel');if(!el)return;
+  const t=d.trend,s=an.strat;
+  const isSol = d.network === 'solana';
+  
+  // Calculate Scam / Rugpull risk for Solana based on liquidity and volume
+  let scamRisk = null;
+  if (isSol) {
+    const liq = d.liq || 0;
+    const vol = d.vol || 0;
+    if (liq < 5000) scamRisk = ['Riesgo Rugpull / Scam', '🔴 ALTO (Poca liquidez)', 'var(--r)'];
+    else if (liq < 15000) scamRisk = ['Riesgo Rugpull / Scam', '🟡 MEDIO (Liq < $15k)', 'var(--y)'];
+    else scamRisk = ['Riesgo Rugpull / Scam', '🟢 BAJO (Liquidez buena)', 'var(--g)'];
+  }
+
+  el.innerHTML=`<div style="background:var(--bg2);border:1px solid var(--bdr);border-radius:5px;padding:7px 9px;margin-top:6px">
+    <div style="font-family:var(--mono);font-size:8px;font-weight:700;color:var(--g);margin-bottom:4px">📈 Análisis — ${d.symbol}</div>
+    ${[
+      scamRisk,
+      ['Tendencia 1H',`${t.emoji} ${t.label} (${t.score}%)`,t.score>=70?'var(--g)':t.score>=45?'var(--y)':'var(--r)'],
+      ['Ciclo / Zigzag', d.zz ? `${d.zz.cycles} ciclos (${d.zz.swingPct.toFixed(1)}% swing)` : 'N/A', d.zz && d.zz.cycles>=3 ? 'var(--g)' : 'var(--y)'],
+      ['EMA20 vs precio',`${t.above20?'✅ encima':'❌ debajo'} (${t.distEMA20>0?'+':''}${t.distEMA20}%)`,t.above20?'var(--g)':'var(--r)'],
+      d.bestDip?['Punto de rebote (Dip)',`$${fpZ(d.bestDip.price,cp)} · ×${d.bestDip.count} rebotes`,'var(--y)']:null,
+      s?['🧱 Mejor pared / Entrada',`$${fpZ(s.bestWall.price,cp)} (${s.bestWall.str}x) −${s.bestWall.dist.toFixed(1)}%`,'var(--g)']:null,
+      s?['R/R estimado',`${s.rr}:1 ${s.rr>=2?'✅':''}`,s.rr>=2?'var(--g)':s.rr>=1?'var(--y)':'var(--r)']:null,
+    ].filter(Boolean).map(([l,v,c])=>`<div style="display:flex;justify-content:space-between;padding:2px 0;border-bottom:1px solid rgba(30,38,56,.3);font-size:8px"><span style="color:var(--t2)">${l}</span><span style="font-family:var(--mono);font-weight:700;color:${c}">${v}</span></div>`).join('')}
+    <div style="font-size:7px;color:var(--t2);margin-top:4px;font-family:var(--mono)">⚠️ Solo educativo · No es asesoramiento financiero</div>
+  </div>
+  <div id="xScamPanel" style="margin-top:6px"></div>`;
+
+  runSafetyScan(d.symbol, d.address || d.pair, d.network);
+}
+async function refreshOB(){if(curDet)await showDetail(curDet);}
+
+// ══════════════════════════════════════════════════════════
+// ALERTAS VISUALES + LOG
+// ══════════════════════════════════════════════════════════
+function showBanner(type,title,sub){
+  const area=document.getElementById('alertArea');
+  const div=document.createElement('div');
+  div.className=`abanner ${type}`;
+  div.innerHTML=`<div class="ab-ico">${type==='buy'?'🟢':type==='tp'?'🎯':type==='sell'?'🔴':'🟡'}</div>
+    <div style="flex:1"><div class="ab-ttl">${title}</div><div class="ab-sub">${sub.replace(/\n/g,'<br>')}</div></div>
+    <button class="btn btn-d btn-xs" onclick="this.parentElement.remove()">✕</button>`;
+  area.insertBefore(div,area.firstChild);
+  while(area.children.length>3)area.removeChild(area.lastChild);
+}
+function showFlash(type,title,sub){
+  const fl=document.getElementById('flash');fl.className='flash '+type;
+  document.getElementById('fttl').textContent=title;document.getElementById('fsub').textContent=sub;
+  fl.style.display='block';setTimeout(()=>fl.style.display='none',18000);
+}
+let logs_=[];
+function addLog(msg,type='info'){
+  logs_.unshift({t:new Date().toLocaleTimeString('es',{hour:'2-digit',minute:'2-digit',second:'2-digit'}),msg,type});
+  if(logs_.length>200)logs_.length=200;renderLog();
+}
+function renderLog(){
+  const onlyTrades=document.getElementById('logFilter')?.checked;
+  const filtered=onlyTrades?logs_.filter(l=>['buy','sell','tp','sl_'].includes(l.type)):logs_;
+  const el=document.getElementById('logbody');
+  if(el)el.innerHTML=filtered.map(l=>`<div class="le"><span class="lt">${l.t}</span><span class="lm ${l.type}">${l.msg}</span></div>`).join('');
+}
+function clearLog(){logs_=[];renderLog();}
+function setSt(txt,pct){const e=document.getElementById('stxt');if(e)e.textContent=txt;if(pct!=null&&document.getElementById('pbf'))document.getElementById('pbf').style.width=pct+'%';}
+
+// INIT
+initServerState().then(() => {
+  updateDash();
+});
+if('Notification'in window&&Notification.permission==='granted'){notifOn=true;document.getElementById('btnNotif').textContent='🔔 Notif. ON';document.getElementById('btnNotif').className='btn btn-g btn-sm';}
+addLog('DIP HUNTER v6 listo — Escáner + Monitor 10s + Auto-Ejecución + Editor de órdenes (Guarda en Cloud/VPS)','info');
