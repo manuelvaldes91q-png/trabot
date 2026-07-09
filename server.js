@@ -1025,6 +1025,7 @@ async function checkTokenSafety(tokenMint) {
     }
   } else {
     result.warnings.push(`Chequeo on-chain de autoridades falló en todos los RPCs.`);
+    result.warnings.push(`⚠️ No se pudo verificar mint/freeze authority — no se confirmó que sean seguras, no se confirmó que sean peligrosas.`);
     // Omitimos invalidar el token si el RPC falla, asumiremos que RugCheck nos salva
   }
 
@@ -2085,7 +2086,7 @@ connectSolanaWs();
 
 
 // Endpoint para acciones desde la interfaz de administrador
-app.post('/api/action', adminAuth, (req, res) => {
+app.post('/api/action', adminAuth, async (req, res) => {
   const { action, payload } = req.body;
   if (!action) return res.status(400).json({error: 'Action required'});
 
@@ -2148,10 +2149,61 @@ app.post('/api/action', adminAuth, (req, res) => {
     } else if (action === 'closeTrade') {
       if (watchItems[payload.index]) {
         const w = watchItems[payload.index];
-        let totalInv = 0;
-        w.orders.forEach(o => { if (o.status === 'done') { totalInv += o.amount; o.status = 'closed'; } });
-        SIM.balance += totalInv; 
-        addLog(`📉 Posición cerrada manualmente: ${w.symbol}`, 'sell');
+        const filled = w.orders.filter(o => o.status === 'filled' || o.status === 'done');
+        if (filled.length > 0) {
+          const inv = filled.reduce((a, o) => a + o.amount, 0);
+          const avg = filled.reduce((a, o) => a + o.price * o.amount, 0) / inv;
+          let cp = 0;
+          if (w.network === 'solana') {
+            cp = await getSolanaPrice(w.address);
+          } else {
+            cp = await mxPrice(w.symbol);
+          }
+          if (!cp || cp <= 0) cp = w.currentPrice || avg;
+          
+          const pnlP = ((cp - avg) / avg * 100);
+          let pnl = inv * pnlP / 100;
+          
+          addLog(`⚡ [Cierre Manual] Disparando cierre de posición para ${w.symbol}...`, 'info');
+          const realRes = await executeOrder(w, 'SELL', inv + pnl, cp);
+          if (realRes && realRes.ok) {
+            if (realRes.exactAmountUSDT !== undefined) {
+              pnl = realRes.exactAmountUSDT - inv;
+              addLog(`ℹ️ [Cierre Manual Real] PNL exacto ajustado post-swap: $${pnl.toFixed(2)}`, 'info');
+            }
+            if (w.network === 'solana') {
+              if (solMode !== 'wallet' && solMode !== 'pool') {
+                SIM.balance += inv + pnl;
+                SIM.solBalance -= (inv / avg);
+              }
+            } else {
+              if (mode !== 'real') {
+                SIM.balance += inv + pnl;
+              }
+            }
+            SIM.pnl += pnl; distributePnL(pnl);
+            if (pnl >= 0) SIM.wins++; else SIM.losses++;
+            SIM.trades.push({ symbol: w.symbol, avgEntry: avg, exit: cp, pnl, pnlPct: pnlP.toFixed(2), at: Date.now() });
+            
+            w.orders.forEach(o => { 
+              if (o.status === 'filled' || o.status === 'done') o.status = 'closed'; 
+              if (o.status === 'pending') o.status = 'cancelled';
+            });
+            w.slPrice = null; w.tp1Price = null; w.tp2Price = null; w.tp1Hit = false; w.tp2Hit = false;
+            addLog(`📉 Posición cerrada manualmente: ${w.symbol} (Entrada: $${fpZ(avg,avg)} ➡ Salida: $${fpZ(cp,cp)}) · P&L $${pnl.toFixed(2)} (${pnlP.toFixed(1)}%)`, 'sell');
+            
+            watchItems.splice(payload.index, 1);
+          } else {
+            return res.status(500).json({ error: 'La venta de cierre real falló. Verifica fondos o red.' });
+          }
+        } else {
+          // Fallback por si no hay órdenes 'filled' o 'done' pero se cerró manualmente
+          let totalInv = 0;
+          w.orders.forEach(o => { if (o.status === 'done' || o.status === 'filled') { totalInv += o.amount; o.status = 'closed'; } });
+          SIM.balance += totalInv; 
+          addLog(`📉 Posición cerrada manualmente (virtual/sin órdenes): ${w.symbol}`, 'sell');
+          watchItems.splice(payload.index, 1);
+        }
       }
     } else if (action === 'resetSim') {
       SIM.balance = 1000;
@@ -2162,11 +2214,72 @@ app.post('/api/action', adminAuth, (req, res) => {
       SIM.totalExec = 0;
       if (payload.clearLogs) logs.length = 0;
     } else if (action === 'quickMarketBuy') {
-      // Opcional: implementar compras a mercado rápido aquí
+      const { symbol, network, address, pair, amount } = payload;
+      let w = watchItems.find(item => (address && item.address === address) || item.symbol === symbol);
+      if (!w) {
+        w = {
+          symbol,
+          network: network || 'solana',
+          address,
+          pair,
+          orders: [],
+          currentPrice: 0,
+          prevPrice: 0
+        };
+        watchItems.push(w);
+      }
+      
+      let cp = 0;
+      if (w.network === 'solana') {
+        cp = await getSolanaPrice(w.address);
+      } else {
+        cp = await mxPrice(w.symbol);
+      }
+      if (!cp || cp <= 0) cp = w.currentPrice || 1;
+      
+      addLog(`⚡ [Compra Mercado Rápida] Disparando swap compra para ${w.symbol} de $${amount}...`, 'info');
+      const realRes = await executeOrder(w, 'BUY', amount, cp);
+      if (realRes && realRes.ok) {
+        const order = {
+          level: w.orders.length + 1,
+          price: cp,
+          amount: amount,
+          note: 'Compra de Mercado Rápida',
+          status: 'filled',
+          type: 'dca',
+          filledAt: Date.now(),
+          filledPrice: cp
+        };
+        w.orders.push(order);
+        
+        if (!w.filledBuys) w.filledBuys = [];
+        w.filledBuys.push({ price: cp, amount: amount, level: order.level });
+        
+        if (!w.slPrice) {
+          w.slPrice = cp * (1 - 10/100);
+          w.tp1Price = cp * (1 + 8/100);
+          w.tp2Price = cp * (1 + 15/100);
+        }
+        
+        if (w.network === 'solana') {
+          if (solMode !== 'wallet' && solMode !== 'pool') {
+            SIM.balance -= amount;
+            SIM.solBalance += amount / cp;
+          }
+        } else {
+          if (mode !== 'real') {
+            SIM.balance -= amount;
+          }
+        }
+        SIM.totalExec++;
+        addLog(`✅ COMPRA DE MERCADO COMPLETADA: ${w.symbol} · $${amount} a $${fpZ(cp,cp)}`, 'buy');
+      } else {
+        return res.status(500).json({ error: 'La compra real falló. Verifica fondos o red.' });
+      }
     }
     
     saveState();
-    if (['start', 'stop', 'addWatch', 'removeWatch', 'clearWatch'].includes(action)) {
+    if (['start', 'stop', 'addWatch', 'removeWatch', 'clearWatch', 'quickMarketBuy', 'closeTrade'].includes(action)) {
       syncSolanaSubscriptions().catch(err => console.error('Error syncing subscriptions in action:', err));
     }
     res.json({ ok: true, status: 'ok' });

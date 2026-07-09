@@ -575,6 +575,11 @@ async function mxTicker24h(sym){try{return await pf(`ticker/24hr?symbol=${sym}US
 function fpZ(p,ref){if(!p||!ref)return'0';if(ref>=10)return p.toFixed(3);if(ref>=0.1)return p.toFixed(4);if(ref>=0.01)return p.toFixed(5);if(ref>=0.001)return p.toFixed(6);const m=ref.toFixed(12).match(/^0\.(0+)/);return m?p.toFixed(m[1].length+4):p.toFixed(6);}
 function fp(n){if(!n)return'0';if(n>=1000)return n.toLocaleString('en-US',{maximumFractionDigits:2});if(n>=0.01)return n.toFixed(4);const m=n.toFixed(12).match(/^0\.(0+)/);return m?n.toFixed(m[1].length+3):n.toFixed(6);}
 function fv(v){if(!v)return'$0';if(v>=1e6)return'$'+(v/1e6).toFixed(1)+'M';if(v>=1e3)return'$'+(v/1e3).toFixed(1)+'K';return'$'+v.toFixed(0);}
+function authorityLabel(revoked) {
+  if (revoked === true) return '<span style="color:var(--g)">REVOCADA ✅</span>';
+  if (revoked === false) return '<span style="color:var(--r)">ACTIVA ❌</span>';
+  return '<span style="color:var(--y, orange)">DESCONOCIDO ⚠️ (RPC falló)</span>';
+}
 const slp=ms=>new Promise(r=>setTimeout(r,ms));
 
 // ══════════════════════════════════════════════════════════
@@ -3126,11 +3131,11 @@ async function runSafetyScan(symbol, address, network) {
         <div style="background:rgba(0,0,0,0.15); border-radius:4px; border:1px solid rgba(255,255,255,0.03); padding:6px 8px;">
           <div style="display:flex; justify-content:space-between; font-size:8px; font-family:var(--mono); margin-bottom:4px;">
             <span>Mint Authority (Imprimir más):</span>
-            <span style="color:${res.details?.mintAuthorityRevoked ? 'var(--g)' : 'var(--r)'}">${res.details?.mintAuthorityRevoked ? 'REVOCADA ✅' : 'ACTIVA ❌'}</span>
+            ${authorityLabel(res.details?.mintAuthorityRevoked)}
           </div>
           <div style="display:flex; justify-content:space-between; font-size:8px; font-family:var(--mono); margin-bottom:4px;">
             <span>Freeze Authority (Bloquear ventas):</span>
-            <span style="color:${res.details?.freezeAuthorityRevoked ? 'var(--g)' : 'var(--r)'}">${res.details?.freezeAuthorityRevoked ? 'REVOCADA ✅' : 'ACTIVA ❌'}</span>
+            ${authorityLabel(res.details?.freezeAuthorityRevoked)}
           </div>
           ${simResult}
         </div>
