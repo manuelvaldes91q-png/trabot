@@ -10,7 +10,7 @@ import { getAssociatedTokenAddress, createTransferInstruction, getAccount, creat
 import bs58 from 'bs58';
 import https from "https";
 import http from "http";
-import bcrypt from 'bcrypt';
+import bcrypt from 'bcryptjs';
 
 const __filename = fileURLToPath(import.meta.url);
 const __dirname = path.dirname(__filename);
