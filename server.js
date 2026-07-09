@@ -930,7 +930,9 @@ async function transferAdminCommission(inv, amountUSDC) {
   const connection = new Connection(rpcUrl, 'confirmed');
   try {
     const keypair = Keypair.fromSecretKey(bs58.decode(inv.depositWalletPk));
-    const adminPubKey = new PublicKey(poolConfig.walletAddress);
+    const adminPk = poolConfig.privateKey || appConfig.solanaPrivateKey || process.env.SOLANA_PRIVATE_KEY;
+    const adminKeypair = Keypair.fromSecretKey(bs58.decode(adminPk));
+    const adminPubKey = adminKeypair.publicKey;
     
     const usdcMint = new PublicKey('EPjFWdd5AufqSSqeM2qN1xzybapC8G4wEGGkZwyTDt1v');
     const sourceTokenAccount = await getAssociatedTokenAddress(usdcMint, keypair.publicKey);
@@ -947,10 +949,6 @@ async function transferAdminCommission(inv, amountUSDC) {
           rawAmount
        )
     );
-
-    
-    const adminPk = poolConfig.privateKey || appConfig.solanaPrivateKey || process.env.SOLANA_PRIVATE_KEY;
-    const adminKeypair = Keypair.fromSecretKey(bs58.decode(adminPk));
 
     const latestBlockHash = await connection.getLatestBlockhash();
     tx.recentBlockhash = latestBlockHash.blockhash;
