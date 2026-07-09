@@ -725,7 +725,7 @@ function syncState(){
         addedAt:w.addedAt||Date.now(),lastUpdate:w.lastUpdate||Date.now(),
         currentPrice:w.currentPrice||w.cp,prevPrice:w.prevPrice||w.cp
       }));
-      await myFetch('/api/state',{method:'POST',headers:{'Content-Type':'application/json'},body:JSON.stringify({sim:SIM,watch:slim})});
+      await myFetch('/api/state',{method:'POST',headers:{'Content-Type':'application/json'},body:JSON.stringify({sim:SIM,watch:slim,solMode:document.getElementById('solModeSel').value})});
     }catch(e){console.warn('Error syncing:',e);}
   },1000);
 }
@@ -2474,6 +2474,9 @@ setInterval(async () => {
     if(data.mode) {
       document.getElementById('modeSel').value = data.mode;
       document.getElementById('dBalS').textContent = data.mode === 'real' ? 'USDT (Real MEXC)' : 'disponible';
+    }
+    if (data.solMode) {
+      document.getElementById('solModeSel').value = data.solMode;
     }
     watchItems = data.watchItems || watchItems;
     cycleN = data.cycleN || cycleN;

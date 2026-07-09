@@ -1559,6 +1559,128 @@ async function runCycle() {
   saveState();
 }
 
+// ============================================================================
+// WEBSOCKET REAL-TIME SOLANA DETECTOR (HYBRID MODE)
+// ============================================================================
+let activeSubscriptions = {}; // maps tokenAddress -> subscriptionId
+let solanaCycleTimeout = null;
+let solanaCyclePending = false;
+
+// Throttle function to run Solana price checks and executions at most twice per second
+function triggerSolanaCycleFast() {
+  if (solanaCycleTimeout) {
+    solanaCyclePending = true;
+    return;
+  }
+  
+  runSolanaCycle().then(() => {
+    solanaCycleTimeout = setTimeout(() => {
+      solanaCycleTimeout = null;
+      if (solanaCyclePending) {
+        solanaCyclePending = false;
+        triggerSolanaCycleFast();
+      }
+    }, 500); // Max 2 checks per second
+  }).catch(err => {
+    console.error('Error in throttled runSolanaCycle:', err);
+    solanaCycleTimeout = null;
+  });
+}
+
+// Fetches the pool address (pair address) for a Solana mint address from DexScreener
+async function getPoolAddress(mintAddress) {
+  try {
+    const r = await fetch(`https://api.dexscreener.com/latest/dex/tokens/${mintAddress}`);
+    if (r.ok) {
+      const d = await r.json();
+      if (d && d.pairs) {
+        const solPairs = d.pairs.filter(p => p.chainId === 'solana');
+        if (solPairs.length > 0) {
+          solPairs.sort((a, b) => (b.liquidity?.usd || 0) - (a.liquidity?.usd || 0));
+          return solPairs[0].pairAddress;
+        }
+      }
+    }
+  } catch (e) {
+    console.error('Error fetching pool address from DexScreener:', e.message);
+  }
+  return null;
+}
+
+// Dynamically updates Solana WebSocket subscriptions to match currently monitored watchItems
+async function syncSolanaSubscriptions() {
+  if (!monitorOn) {
+    await unsubscribeAllSolana();
+    return;
+  }
+
+  const rpcUrl = appConfig.solanaRpcUrl || process.env.SOLANA_RPC_URL || 'https://api.mainnet-beta.solana.com';
+  const connection = new Connection(rpcUrl, 'confirmed');
+  
+  const solanaItems = watchItems.filter(w => w.network === 'solana');
+  const watchedMints = new Set(solanaItems.map(w => w.address).filter(Boolean));
+
+  // 1. Unsubscribe from tokens no longer in watchlist
+  for (const mint of Object.keys(activeSubscriptions)) {
+    if (!watchedMints.has(mint)) {
+      try {
+        const subId = activeSubscriptions[mint];
+        await connection.removeAccountChangeListener(subId);
+        addLog(`Desuscrito de cambios Solana para token ${mint.slice(0, 8)}...`, 'info');
+      } catch (e) {
+        console.error(`Error removing account change listener for ${mint}:`, e.message);
+      }
+      delete activeSubscriptions[mint];
+    }
+  }
+
+  // 2. Subscribe to newly added tokens in watchlist
+  for (const w of solanaItems) {
+    if (!w.address) continue;
+    if (activeSubscriptions[w.address]) continue; // Already subscribed
+
+    try {
+      let poolAddress = w.poolAddress;
+      if (!poolAddress) {
+        poolAddress = await getPoolAddress(w.address);
+        if (poolAddress) {
+          w.poolAddress = poolAddress;
+          saveState();
+        }
+      }
+
+      const targetAddress = poolAddress || w.address;
+      
+      const subId = connection.onAccountChange(
+        new PublicKey(targetAddress),
+        (accountInfo, context) => {
+          console.log(`🔔 WS Solana: Account change detected on ${targetAddress} for ${w.symbol}`);
+          triggerSolanaCycleFast();
+        },
+        'confirmed'
+      );
+
+      activeSubscriptions[w.address] = subId;
+      addLog(`🔌 WebSocket Solana: Suscrito a cambios en tiempo real para ${w.symbol} (Pool: ${targetAddress.slice(0, 8)}...)`, 'info');
+    } catch (e) {
+      console.error(`Error establishing WebSocket subscription for ${w.symbol}:`, e.message);
+    }
+  }
+}
+
+async function unsubscribeAllSolana() {
+  const rpcUrl = appConfig.solanaRpcUrl || process.env.SOLANA_RPC_URL || 'https://api.mainnet-beta.solana.com';
+  const connection = new Connection(rpcUrl, 'confirmed');
+  
+  for (const mint of Object.keys(activeSubscriptions)) {
+    try {
+      const subId = activeSubscriptions[mint];
+      await connection.removeAccountChangeListener(subId);
+    } catch (e) {}
+  }
+  activeSubscriptions = {};
+}
+
 async function runSolanaCycle() {
   if (!monitorOn) return;
   lastSolanaCycleAt = Date.now();
@@ -1791,12 +1913,14 @@ function startLoop() {
   if (solanaTimer) clearInterval(solanaTimer);
   solanaTimer = setInterval(() => {
     if (monitorOn) runSolanaCycle();
-  }, 1000); // Monitoreo de alta frecuencia cada 1 segundo para Solana
+  }, 5000); // Relajado a 5 segundos gracias a WebSocket en tiempo real
   
   if (depositTimer) clearInterval(depositTimer);
   depositTimer = setInterval(() => {
     checkPendingDeposits();
   }, 60000); // Revisar depósitos cada minuto
+
+  syncSolanaSubscriptions().catch(err => console.error('Error starting subscriptions in startLoop:', err));
 }
 
 // Iniciar el loop si estaba encendido en el estado recuperado
@@ -1889,6 +2013,9 @@ app.post('/api/action', adminAuth, (req, res) => {
     }
     
     saveState();
+    if (['start', 'stop', 'addWatch', 'removeWatch', 'clearWatch'].includes(action)) {
+      syncSolanaSubscriptions().catch(err => console.error('Error syncing subscriptions in action:', err));
+    }
     res.json({ ok: true, status: 'ok' });
   } catch(e) {
     console.error("Error en /api/action:", e);
@@ -2860,9 +2987,12 @@ app.get('/api/state', async (req, res) => {
 });
 
 app.post('/api/state', adminAuth, (req, res) => {
-  const { sim, watch } = req.body;
+  const { sim, watch, solMode: clientSolMode } = req.body;
   if (sim) {
     Object.assign(SIM, sim);
+  }
+  if (clientSolMode) {
+    solMode = clientSolMode;
   }
   if (watch && Array.isArray(watch)) {
     watchItems = watch.map(clientItem => {
