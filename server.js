@@ -1150,6 +1150,66 @@ function getRpcEndpoints() {
 
 const SLIPPAGE_ESCALATION_FACTORS = [1, 1.6, 2.4]; // 2.5% -> 4% -> 6% (conservador)
 const PRIORITY_FEE_ESCALATION_FACTORS = [1, 3, 6];
+const quoteCache = new Map();
+const QUOTE_CACHE_TTL_MS = 4000;
+const PREWARM_PROXIMITY_PCT = 3;
+
+function getQuoteCacheKey(inputMint, outputMint, rawAmount, slippageBps) {
+  return `${inputMint}:${outputMint}:${rawAmount}:${slippageBps}`;
+}
+function getCachedQuote(key) {
+  const entry = quoteCache.get(key);
+  if (!entry) return null;
+  if (Date.now() - entry.ts > QUOTE_CACHE_TTL_MS) { quoteCache.delete(key); return null; }
+  return entry.quoteResponse;
+}
+function setCachedQuote(key, quoteResponse) {
+  quoteCache.set(key, { quoteResponse, ts: Date.now() });
+  if (quoteCache.size > 200) quoteCache.delete(quoteCache.keys().next().value);
+}
+
+async function preWarmNearbyQuotes() {
+  try {
+    const solanaItems = watchItems.filter(w => w.network === 'solana' && w.address);
+    for (const w of solanaItems) {
+      const pendingOrder = (w.orders || []).find(o => o.status === 'pending');
+      if (!pendingOrder || !w.currentPrice) continue;
+      const distancePct = Math.abs(w.currentPrice - pendingOrder.price) / pendingOrder.price * 100;
+      if (distancePct > PREWARM_PROXIMITY_PCT) continue;
+
+      const isSOL = (appConfig.solanaBaseToken !== 'USDC');
+      const baseMint = isSOL ? 'So11111111111111111111111111111111111111112' : 'EPjFWdd5AufqSSqeM2qN1xzybapC8G4wEGGkZwyTDt1v';
+      const baseSlip = appConfig.solanaSlippage || 2.5;
+      const slippageBps = Math.floor(baseSlip * 100);
+
+      let inputMint, outputMint, rawAmount;
+      if (pendingOrder.type !== 'sell_only') {
+        inputMint = baseMint;
+        outputMint = w.address;
+        if (isSOL) {
+          const solPrice = await mxPrice('SOL') || 140;
+          rawAmount = Math.floor((pendingOrder.amount / solPrice) * 1e9);
+        } else {
+          rawAmount = Math.floor(pendingOrder.amount * 1e6);
+        }
+      } else { continue; }
+
+      const key = getQuoteCacheKey(inputMint, outputMint, rawAmount, slippageBps);
+      if (getCachedQuote(key)) continue;
+
+      const quoteUrl = `https://transaction-v1.raydium.io/compute/swap-base-in?inputMint=${inputMint}&outputMint=${outputMint}&amount=${rawAmount}&slippageBps=${slippageBps}&txVersion=V0`;
+      const qr = await fetchWithRetry(quoteUrl, { timeout: 6000 }, 1, 500);
+      if (qr && qr.ok) {
+        const quoteResponse = await qr.json();
+        if (quoteResponse.success) setCachedQuote(key, quoteResponse);
+      }
+    }
+  } catch (e) {
+    console.error('[PreWarm] Error:', e.message);
+  }
+}
+setInterval(() => { if (monitorOn) preWarmNearbyQuotes(); }, 3000);
+
 const MAX_SWAP_ATTEMPTS = 3;
 
 function isFatalSwapError(message) {
@@ -1246,11 +1306,18 @@ async function executeSolanaTradeInternal(w, side, amountUSDT, price, pk, feePay
       let swapTransaction = null;
 
       try {
-        const quoteUrl = `https://transaction-v1.raydium.io/compute/swap-base-in?inputMint=${inputMint}&outputMint=${outputMint}&amount=${rawAmount}&slippageBps=${slippageBps}&txVersion=V0`;
-        const qr = await fetchWithRetry(quoteUrl, { timeout: 8000 }, 3, 1500);
-        if (!qr.ok) throw new Error(`Raydium Quote HTTP ${qr.status}`);
-        const quoteResponse = await qr.json();
-        if (!quoteResponse.success) throw new Error(quoteResponse.msg || 'Raydium Quote unsuccesful');
+        const cacheKey = getQuoteCacheKey(inputMint, outputMint, rawAmount, slippageBps);
+        let quoteResponse = getCachedQuote(cacheKey);
+        if (quoteResponse) {
+          addLog(`⚡ Usando cotización pre-calentada para ${side} ${w.symbol} (sin esperar red).`, 'info');
+        } else {
+          const quoteUrl = `https://transaction-v1.raydium.io/compute/swap-base-in?inputMint=${inputMint}&outputMint=${outputMint}&amount=${rawAmount}&slippageBps=${slippageBps}&txVersion=V0`;
+          const qr = await fetchWithRetry(quoteUrl, { timeout: 8000 }, 3, 1500);
+          if (!qr.ok) throw new Error(`Raydium Quote HTTP ${qr.status}`);
+          quoteResponse = await qr.json();
+          if (!quoteResponse.success) throw new Error(quoteResponse.msg || 'Raydium Quote unsuccesful');
+        }
+        quoteCache.delete(cacheKey);
 
         const bodyPayload = {
           swapResponse: quoteResponse,
