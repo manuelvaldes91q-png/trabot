@@ -6,7 +6,7 @@ import { createServer as createViteServer } from "vite";
 import crypto from "crypto";
 import "dotenv/config";
 import { Connection, Keypair, VersionedTransaction, PublicKey, SystemProgram, Transaction, sendAndConfirmTransaction } from '@solana/web3.js';
-import { getAssociatedTokenAddress, createTransferInstruction, getAccount, createCloseAccountInstruction, createAssociatedTokenAccountInstruction } from '@solana/spl-token';
+import { getAssociatedTokenAddress, createTransferInstruction, getAccount, createCloseAccountInstruction, createAssociatedTokenAccountInstruction, getMint } from '@solana/spl-token';
 import bs58 from 'bs58';
 import https from "https";
 import http from "http";
@@ -966,6 +966,117 @@ async function transferAdminCommission(inv, amountUSDC) {
 const MIN_SOL_FOR_GAS = 0.015;
 const GAS_TOPUP_AMOUNT = 0.02;
 
+async function checkTokenSafety(tokenMint) {
+  const result = { safe: true, warnings: [], details: {} };
+  try {
+    const rcRes = await fetchWithRetry(`https://api.rugcheck.xyz/v1/tokens/${tokenMint}/report/summary`, { timeout: 8000 }, 2, 1000);
+    if (rcRes && rcRes.ok) {
+      const rc = await rcRes.json();
+      const score = rc.score_normalised ?? rc.score ?? 0;
+      result.details.rugcheckScore = score;
+      result.details.rugcheckRisks = (rc.risks || []).map(r => r.name);
+      const dangerRisks = (rc.risks || []).filter(r => r.level === 'danger');
+      if (dangerRisks.length > 0) {
+        result.safe = false;
+        dangerRisks.forEach(r => result.warnings.push(`RugCheck: ${r.name}`));
+      }
+      if (score > 50) {
+        result.safe = false;
+        result.warnings.push(`RugCheck score de riesgo alto: ${score}/100`);
+      }
+    } else {
+      result.warnings.push('RugCheck no devolvió reporte (token muy nuevo o no indexado aún).');
+    }
+  } catch (e) {
+    result.warnings.push(`RugCheck no disponible: ${e.message}`);
+  }
+  try {
+    const rpcUrl = appConfig.solanaRpcUrl || process.env.SOLANA_RPC_URL || 'https://api.mainnet-beta.solana.com';
+    const connection = new Connection(rpcUrl, 'confirmed');
+    const mintInfo = await getMint(connection, new PublicKey(tokenMint));
+    result.details.mintAuthorityRevoked = mintInfo.mintAuthority === null;
+    result.details.freezeAuthorityRevoked = mintInfo.freezeAuthority === null;
+    if (mintInfo.mintAuthority !== null) {
+      result.safe = false;
+      result.warnings.push('Mint authority NO revocada: el creador puede imprimir más tokens de la nada (dilución/rug).');
+    }
+    if (mintInfo.freezeAuthority !== null) {
+      result.safe = false;
+      result.warnings.push('Freeze authority NO revocada: el creador puede congelar tu wallet e impedirte vender (honeypot clásico).');
+    }
+  } catch (e) {
+    result.warnings.push(`Chequeo on-chain de autoridades falló: ${e.message}`);
+  }
+
+  try {
+    result.details.sellSimulation = { attempted: false, success: false, error: null };
+    const rpcUrl = appConfig.solanaRpcUrl || process.env.SOLANA_RPC_URL || 'https://api.mainnet-beta.solana.com';
+    const connection = new Connection(rpcUrl, 'confirmed');
+    
+    try {
+        const largestAccounts = await connection.getTokenLargestAccounts(new PublicKey(tokenMint));
+        if (largestAccounts && largestAccounts.value && largestAccounts.value.length > 0) {
+          let owner = null;
+          let amount = 1000;
+          for (const acc of largestAccounts.value) {
+             try {
+                 const info = await getAccount(connection, acc.address);
+                 if (info.amount > 0) {
+                     owner = info.owner;
+                     amount = Math.min(Number(info.amount), 1000000000);
+                     break;
+                 }
+             } catch(e) {}
+          }
+          
+          if (owner) {
+            result.details.sellSimulation.attempted = true;
+            const quoteUrl = `https://api.jup.ag/swap/v1/quote?inputMint=${tokenMint}&outputMint=So11111111111111111111111111111111111111112&amount=${amount}&slippageBps=1000`;
+            const qr = await fetchWithRetry(quoteUrl, { timeout: 8000 }, 2, 1000);
+            if (qr && qr.ok) {
+               const quoteResponse = await qr.json();
+               if (quoteResponse.routePlan) {
+                  const sr = await fetchWithRetry('https://api.jup.ag/swap/v1/swap', {
+                      method: 'POST',
+                      headers: { 'Content-Type': 'application/json' },
+                      timeout: 10000,
+                      body: JSON.stringify({
+                          quoteResponse,
+                          userPublicKey: owner.toString(),
+                          wrapAndUnwrapSol: true
+                      })
+                  }, 2, 1000);
+                  if (sr && sr.ok) {
+                     const swapRes = await sr.json();
+                     if (swapRes.swapTransaction) {
+                        const txBuf = Buffer.from(swapRes.swapTransaction, 'base64');
+                        const tx = VersionedTransaction.deserialize(txBuf);
+                        const simRes = await connection.simulateTransaction(tx, { sigVerify: false });
+                        
+                        if (simRes.value && simRes.value.err) {
+                            result.details.sellSimulation.success = false;
+                            result.details.sellSimulation.error = JSON.stringify(simRes.value.err);
+                            result.safe = false;
+                            result.warnings.push(`Simulación de VENTA falló (posible Honeypot): ${JSON.stringify(simRes.value.err)}`);
+                        } else {
+                            result.details.sellSimulation.success = true;
+                        }
+                     }
+                  }
+               }
+            }
+          }
+        }
+    } catch (simErr) {
+        result.warnings.push(`Simulación de venta omitida: ${simErr.message}`);
+    }
+  } catch (e) {
+    result.warnings.push(`Chequeo de simulación de venta falló: ${e.message}`);
+  }
+
+  return result;
+}
+
 async function ensureGasFunding(connection, investorPubkeyStr, adminKeypair, label = '') {
   if (!adminKeypair) return;
   try {
@@ -1047,6 +1158,14 @@ async function executeSolanaTradeInternal(w, side, amountUSDT, price, pk, feePay
   let adminKeypair = null;
   if (feePayerPk) {
     try { adminKeypair = Keypair.fromSecretKey(bs58.decode(feePayerPk)); } catch(e) {}
+  }
+
+  if (side === 'BUY' && appConfig.safetyCheckEnabled) {
+    const safety = await checkTokenSafety(targetMint);
+    if (!safety.safe) {
+      addLog(`🛑 Compra de ${w.symbol} bloqueada por chequeo de seguridad: ${safety.warnings.join(' | ')}`, 'warn');
+      return { ok: false, blockedBySafety: true, safety };
+    }
   }
 
   let lastError = null;
@@ -2729,6 +2848,15 @@ app.get('/api/mexc/*', async (req, res) => {
     res.json(data);
   } catch (err) {
     res.status(500).json({error: err.message});
+  }
+});
+
+app.get('/api/token-safety/:mint', adminAuth, async (req, res) => {
+  try {
+    const result = await checkTokenSafety(req.params.mint);
+    res.json(result);
+  } catch (err) {
+    res.status(500).json({ error: String(err) });
   }
 });
 

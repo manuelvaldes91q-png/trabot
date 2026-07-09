@@ -1244,6 +1244,16 @@ async function openConfigModal() {
         </div>
       </div>
 
+      <!-- SECCIÓN RUGCHECK (SAFETY) -->
+      <div style="border-top:1px solid var(--bdr);margin-top:15px;padding-top:15px;margin-bottom:15px">
+        <div style="font-weight:600;color:var(--y);font-size:11px;margin-bottom:10px;text-transform:uppercase;letter-spacing:0.05em">🛡️ Seguridad Anti-Rug (RugCheck)</div>
+        <div style="margin-bottom:10px;display:flex;align-items:center;gap:10px;">
+          <input type="checkbox" id="cfgSafetyCheckEnabled" style="cursor:pointer">
+          <label for="cfgSafetyCheckEnabled" style="font-size:11px;color:var(--t1);cursor:pointer;">Habilitar Chequeo de Seguridad en Compras</label>
+        </div>
+        <div style="font-size:9px;color:var(--t2);">Evita compras de tokens marcados como Danger en RugCheck o con Autoridad de Mint/Freeze activa on-chain.</div>
+      </div>
+
       <div style="border-top:1px solid var(--bdr);margin-top:15px;padding-top:15px;margin-bottom:15px">
         <div style="font-weight:600;color:var(--b);font-size:11px;margin-bottom:10px;text-transform:uppercase;letter-spacing:0.05em">💬 Telegram Alerts</div>
         <div style="margin-bottom:10px">
@@ -1302,6 +1312,7 @@ async function openConfigModal() {
     document.getElementById('cfgSolBase').value = cfg.solanaBaseToken || 'SOL';
     document.getElementById('cfgSolSlippage').value = cfg.solanaSlippage || '2.5';
     document.getElementById('cfgSolPriority').value = cfg.solanaPriorityFee || 'auto';
+    document.getElementById('cfgSafetyCheckEnabled').checked = !!cfg.safetyCheckEnabled;
     document.getElementById('cfgDextoolsKey').value = cfg.dextoolsApiKey || '';
     document.getElementById('cfgTwitterKey').value = cfg.twitterBearerToken || '';
   } catch(e) {}
@@ -1383,6 +1394,7 @@ async function openConfigModal() {
         solanaBaseToken: document.getElementById('cfgSolBase').value,
         solanaSlippage: document.getElementById('cfgSolSlippage').value.trim() || '2.5',
         solanaPriorityFee: document.getElementById('cfgSolPriority').value,
+        safetyCheckEnabled: document.getElementById('cfgSafetyCheckEnabled').checked,
         dextoolsApiKey: document.getElementById('cfgDextoolsKey').value.trim(),
         twitterBearerToken: document.getElementById('cfgTwitterKey').value.trim()
       };
