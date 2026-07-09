@@ -2865,14 +2865,28 @@ const isProd = process.env.NODE_ENV === 'production';
 if (isProd) {
     const distPath = path.join(process.cwd(), 'dist');
     app.use(express.static(distPath));
+    app.get('/investor*', (req, res) => {
+      res.sendFile(path.join(process.cwd(), 'investor.html'));
+    });
     app.get('*', (req, res) => {
       res.sendFile(path.join(distPath, 'index.html'));
     });
 } else {
     // We can assume index.html is in root or handled by vite if vite is configured, but this server uses simple express static
     app.use(express.static('.'));
+    app.get('/investor*', (req, res) => {
+      res.sendFile(path.join(process.cwd(), 'investor.html'));
+    });
+    app.get('*', (req, res) => {
+      res.sendFile(path.join(process.cwd(), 'index.html'));
+    });
 }
 
-app.listen(PORT, '0.0.0.0', () => {
-    console.log(`Server is running on port ${PORT}`);
+// Para evitar conflictos con variables de entorno, forzamos el puerto 5000.
+// Sin embargo, si la app detecta que está corriendo dentro del entorno de desarrollo de AI Studio (Cloud Run), usa el 3000 por requerimiento interno.
+const ACTUAL_PORT = process.env.K_SERVICE ? 3000 : 5000;
+
+app.listen(ACTUAL_PORT, '0.0.0.0', () => {
+    console.log(`🚀 SERVIDOR VPS INICIADO 24/7 en puerto ${ACTUAL_PORT}`);
+    console.log(`📁 Panel de control accesible vía IP pública:${ACTUAL_PORT} o enlace generado.`);
 });
