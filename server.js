@@ -1673,12 +1673,19 @@ app.post('/api/investor/login', async (req, res) => {
   const { name, password } = req.body;
   if (!name || !password) return res.status(400).json({ error: 'Faltan datos' });
   const inv = poolConfig.investors.find(i => i.name.toLowerCase() === name.toLowerCase());
-  if (inv && await bcrypt.compare(password, inv.password)) {
-    const token = Buffer.from(`${name}:${password}`).toString('base64');
-    res.json({ status: 'ok', token, name: inv.name });
-  } else {
-    res.status(401).json({ error: 'Credenciales inválidas' });
+  if (inv) {
+    let isPasswordCorrect = false;
+    try {
+      isPasswordCorrect = await bcrypt.compare(password, inv.password);
+    } catch (e) {
+      isPasswordCorrect = (inv.password === password);
+    }
+    if (isPasswordCorrect) {
+      const token = Buffer.from(`${name}:${password}`).toString('base64');
+      return res.json({ status: 'ok', token, name: inv.name });
+    }
   }
+  res.status(401).json({ error: 'Credenciales inválidas' });
 });
 
 // ============================================
@@ -1691,9 +1698,17 @@ const investorAuth = async (req, res, next) => {
     const decoded = Buffer.from(token, 'base64').toString('utf8');
     const [name, password] = decoded.split(':');
     const inv = poolConfig.investors.find(i => i.name.toLowerCase() === name.toLowerCase());
-    if (inv && await bcrypt.compare(password, inv.password)) {
-      req.investor = inv;
-      return next();
+    if (inv) {
+      let isPasswordCorrect = false;
+      try {
+        isPasswordCorrect = await bcrypt.compare(password, inv.password);
+      } catch (e) {
+        isPasswordCorrect = (inv.password === password);
+      }
+      if (isPasswordCorrect) {
+        req.investor = inv;
+        return next();
+      }
     }
   } catch (e) {}
   res.status(401).json({error: 'Unauthorized Investor'});

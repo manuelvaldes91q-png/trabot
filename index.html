@@ -894,6 +894,7 @@ async function openPoolModal() {
                 <div style="color:${(i.profit||0)>0?'var(--g)':'var(--r)'}">${(i.profit||0)>=0?'+':''}$${(i.profit||0).toFixed(2)} PNL</div>
                 <button onclick="syncInvestorDeposit('${i.name}')" class="btn btn-a" style="font-size:9px;padding:2px 5px;">Sincronizar</button>
                 <button onclick="editInvestorDeposit('${i.name}', ${i.deposit})" class="btn btn-g" style="font-size:9px;padding:2px 5px;">Editar Depósito</button>
+                <button onclick="editInvestorPassword('${i.name}')" class="btn btn-a" style="font-size:9px;padding:2px 5px;">Editar Contraseña</button>
                 <button onclick="deletePoolInvestor('${i.name}')" class="btn" style="background:var(--r);font-size:9px;padding:2px 5px;">Eliminar</button>
               </div>
             </div>
@@ -1081,6 +1082,28 @@ async function editInvestorDeposit(name, current) {
   if (data.error) alert('Error: ' + data.error);
   else {
     alert('Depósito actualizado.');
+    const el = document.getElementById('poolModalOverlay');
+    if (el) el.remove();
+    openPoolModal();
+  }
+}
+
+async function editInvestorPassword(name) {
+  const password = prompt(`Introduce la nueva contraseña para el inversor ${name}:`);
+  if (password === null) return;
+  if (!password.trim()) {
+    alert("La contraseña no puede estar vacía.");
+    return;
+  }
+  const res = await myFetch('/api/pool/investor', {
+    method: 'POST',
+    headers: {'Content-Type':'application/json'},
+    body: JSON.stringify({ name, password })
+  });
+  const data = await res.json();
+  if (data.error) alert('Error: ' + data.error);
+  else {
+    alert('Contraseña actualizada correctamente.');
     const el = document.getElementById('poolModalOverlay');
     if (el) el.remove();
     openPoolModal();
