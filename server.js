@@ -11,6 +11,7 @@ import bs58 from 'bs58';
 import https from "https";
 import http from "http";
 import bcrypt from 'bcryptjs';
+import WebSocket from 'ws';
 
 const __filename = fileURLToPath(import.meta.url);
 const __dirname = path.dirname(__filename);
@@ -1562,7 +1563,15 @@ async function runCycle() {
 // ============================================================================
 // WEBSOCKET REAL-TIME SOLANA DETECTOR (HYBRID MODE)
 // ============================================================================
-let activeSubscriptions = {}; // maps tokenAddress -> subscriptionId
+let solanaWs = null;
+let solanaWsUrl = '';
+let wsReqId = 1;
+let wsReqMap = {}; // requestId -> address
+let wsSubIdToAddress = {}; // subscriptionId -> address
+let wsAddressToSubId = {}; // address -> subscriptionId
+let wsPingInterval = null;
+let reconnectTimeout = null;
+
 let solanaCycleTimeout = null;
 let solanaCyclePending = false;
 
@@ -1585,6 +1594,118 @@ function triggerSolanaCycleFast() {
     console.error('Error in throttled runSolanaCycle:', err);
     solanaCycleTimeout = null;
   });
+}
+
+function getSolanaWssUrl(rpcUrl) {
+  if (!rpcUrl) return 'wss://api.mainnet-beta.solana.com';
+  let wssUrl = rpcUrl;
+  if (wssUrl.startsWith('https://')) {
+    wssUrl = 'wss://' + wssUrl.substring(8);
+  } else if (wssUrl.startsWith('http://')) {
+    wssUrl = 'ws://' + wssUrl.substring(7);
+  } else if (!wssUrl.startsWith('wss://') && !wssUrl.startsWith('ws://')) {
+    wssUrl = 'wss://' + wssUrl;
+  }
+  return wssUrl;
+}
+
+function connectSolanaWs() {
+  if (solanaWs) {
+    try {
+      solanaWs.close();
+    } catch (e) {}
+  }
+  
+  if (reconnectTimeout) {
+    clearTimeout(reconnectTimeout);
+    reconnectTimeout = null;
+  }
+  
+  const rpcUrl = appConfig.solanaRpcUrl || process.env.SOLANA_RPC_URL || 'https://api.mainnet-beta.solana.com';
+  const wssUrl = getSolanaWssUrl(rpcUrl);
+  solanaWsUrl = wssUrl;
+  
+  addLog(`🔌 Conectando WebSocket de Solana a ${wssUrl.split('?')[0]}...`, 'info');
+  console.log(`[WS Solana] Connecting to ${wssUrl}`);
+  
+  try {
+    solanaWs = new WebSocket(wssUrl);
+    
+    solanaWs.on('open', () => {
+      addLog(`🔌 WebSocket de Solana Conectado exitosamente.`, 'info');
+      console.log(`[WS Solana] Connected to ${wssUrl}`);
+      
+      // Clear mappings on new connection
+      wsReqMap = {};
+      wsSubIdToAddress = {};
+      wsAddressToSubId = {};
+      
+      // Keep connection alive with websocket pings
+      if (wsPingInterval) clearInterval(wsPingInterval);
+      wsPingInterval = setInterval(() => {
+        if (solanaWs && solanaWs.readyState === WebSocket.OPEN) {
+          solanaWs.ping();
+        }
+      }, 20000);
+      
+      // Resubscribe all active watches
+      syncSolanaSubscriptions();
+    });
+    
+    solanaWs.on('message', (data) => {
+      try {
+        const msg = JSON.parse(data.toString());
+        
+        // Handle subscription response
+        if (msg.id && msg.result !== undefined) {
+          const address = wsReqMap[msg.id];
+          if (address) {
+            const subId = msg.result;
+            wsSubIdToAddress[subId] = address;
+            wsAddressToSubId[address] = subId;
+            console.log(`[WS Solana] Subscribed to address ${address} with subId ${subId}`);
+            delete wsReqMap[msg.id];
+          }
+        }
+        
+        // Handle account notification
+        if (msg.method === 'accountNotification' && msg.params) {
+          const subId = msg.params.subscription;
+          const address = wsSubIdToAddress[subId];
+          if (address) {
+            console.log(`🔔 [WS Solana] Change detected on ${address}!`);
+            triggerSolanaCycleFast();
+          }
+        }
+      } catch (e) {
+        console.error('[WS Solana] Error parsing WS message:', e.message);
+      }
+    });
+    
+    solanaWs.on('close', (code, reason) => {
+      console.warn(`[WS Solana] WS closed. Code: ${code}, Reason: ${reason}`);
+      if (wsPingInterval) {
+        clearInterval(wsPingInterval);
+        wsPingInterval = null;
+      }
+      scheduleWsReconnect();
+    });
+    
+    solanaWs.on('error', (err) => {
+      console.error(`[WS Solana] WS error:`, err.message);
+    });
+  } catch (err) {
+    console.error(`[WS Solana] Failed to create WebSocket connection:`, err.message);
+    scheduleWsReconnect();
+  }
+}
+
+function scheduleWsReconnect() {
+  if (reconnectTimeout) return;
+  reconnectTimeout = setTimeout(() => {
+    reconnectTimeout = null;
+    connectSolanaWs();
+  }, 5000); // Reconnect after 5 seconds
 }
 
 // Fetches the pool address (pair address) for a Solana mint address from DexScreener
@@ -1610,75 +1731,106 @@ async function getPoolAddress(mintAddress) {
 // Dynamically updates Solana WebSocket subscriptions to match currently monitored watchItems
 async function syncSolanaSubscriptions() {
   if (!monitorOn) {
-    await unsubscribeAllSolana();
+    unsubscribeAllSolana();
     return;
   }
 
-  const rpcUrl = appConfig.solanaRpcUrl || process.env.SOLANA_RPC_URL || 'https://api.mainnet-beta.solana.com';
-  const connection = new Connection(rpcUrl, 'confirmed');
-  
-  const solanaItems = watchItems.filter(w => w.network === 'solana');
-  const watchedMints = new Set(solanaItems.map(w => w.address).filter(Boolean));
+  if (!solanaWs || solanaWs.readyState !== WebSocket.OPEN) {
+    // If WS is not open, it will auto-sync once it opens
+    return;
+  }
 
-  // 1. Unsubscribe from tokens no longer in watchlist
-  for (const mint of Object.keys(activeSubscriptions)) {
-    if (!watchedMints.has(mint)) {
-      try {
-        const subId = activeSubscriptions[mint];
-        await connection.removeAccountChangeListener(subId);
-        addLog(`Desuscrito de cambios Solana para token ${mint.slice(0, 8)}...`, 'info');
-      } catch (e) {
-        console.error(`Error removing account change listener for ${mint}:`, e.message);
+  const solanaItems = watchItems.filter(w => w.network === 'solana');
+  
+  // Prepare a set of target addresses we want to subscribe to
+  const targets = {}; // mint -> target (pool or mint itself)
+  
+  for (const w of solanaItems) {
+    if (!w.address) continue;
+    let poolAddress = w.poolAddress;
+    if (!poolAddress) {
+      poolAddress = await getPoolAddress(w.address);
+      if (poolAddress) {
+        w.poolAddress = poolAddress;
+        saveState();
       }
-      delete activeSubscriptions[mint];
+    }
+    targets[w.address] = poolAddress || w.address;
+  }
+  
+  const targetAddresses = new Set(Object.values(targets));
+  const currentSubs = Object.keys(wsAddressToSubId);
+  
+  // 1. Unsubscribe from addresses no longer needed
+  for (const addr of currentSubs) {
+    if (!targetAddresses.has(addr)) {
+      const subId = wsAddressToSubId[addr];
+      if (subId) {
+        const req = {
+          jsonrpc: "2.0",
+          id: ++wsReqId,
+          method: "accountUnsubscribe",
+          params: [subId]
+        };
+        try {
+          solanaWs.send(JSON.stringify(req));
+          console.log(`[WS Solana] Sent unsubscribe for subId ${subId} (Address: ${addr})`);
+        } catch (e) {
+          console.error(`[WS Solana] Error sending unsubscribe for ${addr}:`, e.message);
+        }
+        delete wsAddressToSubId[addr];
+        delete wsSubIdToAddress[subId];
+      }
     }
   }
 
-  // 2. Subscribe to newly added tokens in watchlist
-  for (const w of solanaItems) {
-    if (!w.address) continue;
-    if (activeSubscriptions[w.address]) continue; // Already subscribed
-
-    try {
-      let poolAddress = w.poolAddress;
-      if (!poolAddress) {
-        poolAddress = await getPoolAddress(w.address);
-        if (poolAddress) {
-          w.poolAddress = poolAddress;
-          saveState();
-        }
-      }
-
-      const targetAddress = poolAddress || w.address;
+  // 2. Subscribe to newly added target addresses
+  for (const [mint, addr] of Object.entries(targets)) {
+    if (!wsAddressToSubId[addr] && !Object.values(wsReqMap).includes(addr)) {
+      const reqId = ++wsReqId;
+      wsReqMap[reqId] = addr;
       
-      const subId = connection.onAccountChange(
-        new PublicKey(targetAddress),
-        (accountInfo, context) => {
-          console.log(`🔔 WS Solana: Account change detected on ${targetAddress} for ${w.symbol}`);
-          triggerSolanaCycleFast();
-        },
-        'confirmed'
-      );
-
-      activeSubscriptions[w.address] = subId;
-      addLog(`🔌 WebSocket Solana: Suscrito a cambios en tiempo real para ${w.symbol} (Pool: ${targetAddress.slice(0, 8)}...)`, 'info');
-    } catch (e) {
-      console.error(`Error establishing WebSocket subscription for ${w.symbol}:`, e.message);
+      const req = {
+        jsonrpc: "2.0",
+        id: reqId,
+        method: "accountSubscribe",
+        params: [
+          addr,
+          {
+            encoding: "base64",
+            commitment: "confirmed"
+          }
+        ]
+      };
+      
+      try {
+        solanaWs.send(JSON.stringify(req));
+        addLog(`🔌 WebSocket Solana: Suscribiendo a cambios para ${mint.slice(0, 8)}... (Pool: ${addr.slice(0, 8)}...)`, 'info');
+        console.log(`[WS Solana] Sent subscribe for ${addr}`);
+      } catch (e) {
+        console.error(`[WS Solana] Error sending subscribe for ${addr}:`, e.message);
+      }
     }
   }
 }
 
-async function unsubscribeAllSolana() {
-  const rpcUrl = appConfig.solanaRpcUrl || process.env.SOLANA_RPC_URL || 'https://api.mainnet-beta.solana.com';
-  const connection = new Connection(rpcUrl, 'confirmed');
-  
-  for (const mint of Object.keys(activeSubscriptions)) {
-    try {
-      const subId = activeSubscriptions[mint];
-      await connection.removeAccountChangeListener(subId);
-    } catch (e) {}
+function unsubscribeAllSolana() {
+  if (solanaWs && solanaWs.readyState === WebSocket.OPEN) {
+    for (const [addr, subId] of Object.entries(wsAddressToSubId)) {
+      const req = {
+        jsonrpc: "2.0",
+        id: ++wsReqId,
+        method: "accountUnsubscribe",
+        params: [subId]
+      };
+      try {
+        solanaWs.send(JSON.stringify(req));
+      } catch (e) {}
+    }
   }
-  activeSubscriptions = {};
+  wsReqMap = {};
+  wsSubIdToAddress = {};
+  wsAddressToSubId = {};
 }
 
 async function runSolanaCycle() {
@@ -1925,6 +2077,7 @@ function startLoop() {
 
 // Iniciar el loop si estaba encendido en el estado recuperado
 startLoop();
+connectSolanaWs();
 
 
 // ============================================
@@ -3028,7 +3181,13 @@ app.post('/api/config', adminAuth, (req, res) => {
   if(tgChatId !== undefined) appConfig.tgChatId = tgChatId;
   if(appPassword !== undefined) appConfig.appPassword = appPassword;
   if(solanaPrivateKey !== undefined) appConfig.solanaPrivateKey = solanaPrivateKey;
-  if(solanaRpcUrl !== undefined) appConfig.solanaRpcUrl = solanaRpcUrl;
+  if(solanaRpcUrl !== undefined) {
+    const oldRpc = appConfig.solanaRpcUrl;
+    appConfig.solanaRpcUrl = solanaRpcUrl;
+    if (oldRpc !== solanaRpcUrl) {
+      connectSolanaWs();
+    }
+  }
   if(solanaBaseToken !== undefined) appConfig.solanaBaseToken = solanaBaseToken;
   if(solanaSlippage !== undefined) appConfig.solanaSlippage = parseFloat(solanaSlippage) || 2.5;
   if(solanaPriorityFee !== undefined) appConfig.solanaPriorityFee = solanaPriorityFee;
