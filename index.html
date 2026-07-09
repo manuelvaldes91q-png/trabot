@@ -3055,139 +3055,97 @@ function renderOB(an,cp){
     ${an.buyWalls.length?[...an.buyWalls].sort((a,b)=>b.price-a.price).map(w=>rl(w,'buy')).join(''):'<div style="color:var(--t2);font-size:7px;padding:3px">—</div>'}
     <div style="margin-top:5px;font-size:7px;font-family:var(--mono);color:var(--t2)">Presión: <b style="color:${an.imb>55?'var(--g)':an.imb<45?'var(--r)':'var(--y)'}">${an.imb}% compra</b> · 200 niveles · ★=mejor entrada · ×N=reb. hist.</div>`;
 }
-async function runXScamScan(symbol, address, network, liq, vol) {
+
+async function runSafetyScan(symbol, address, network) {
   const panel = document.getElementById('xScamPanel');
   if (!panel) return;
+  
+  if (network !== 'solana') {
+    panel.innerHTML = `
+      <div style="background:var(--bg2);border:1px solid var(--bdr);border-radius:5px;padding:8px 10px;margin-top:6px;text-align:center;font-size:8px;color:var(--y);font-family:var(--mono);">
+        ⚠️ Escáner de seguridad avanzado (RugCheck + Simulador) solo disponible para Solana.
+      </div>
+    `;
+    return;
+  }
+
   panel.innerHTML = `
     <div style="background:var(--bg2);border:1px solid var(--bdr);border-radius:5px;padding:8px 10px;text-align:center;">
       <div style="display:flex;align-items:center;justify-content:center;font-size:8px;color:var(--t2);font-family:var(--mono);">
-        <span style="display:inline-block;margin-right:6px">⏳</span> Buscando y analizando automáticamente menciones de estafa en X (Twitter)...
+        <span style="display:inline-block;margin-right:6px">🛡️</span> Analizando seguridad del token (RugCheck + Honeypot Check)...
       </div>
     </div>
   `;
   try {
-    const qs = new URLSearchParams({ symbol, address: address || 'N/A', network, liq: liq || 0, vol: vol || 0 }).toString();
-    const fetchRes = await myFetch(`/api/x-scam-scan?${qs}`);
-    if (!fetchRes.ok) throw new Error("Error en servidor");
+    const fetchRes = await myFetch(`/api/token-safety/${address}`);
+    if (!fetchRes.ok) throw new Error("Error en servidor al consultar seguridad");
     const res = await fetchRes.json();
     if (!res) throw new Error("Error al obtener datos");
     
-    let riskColor = "var(--g)";
-    if (res.riskLevel === "ALTO") riskColor = "var(--r)";
-    else if (res.riskLevel === "MEDIO") riskColor = "var(--y)";
-
-    let flagsHtml = res.flags.map(f => `<div style="color:var(--t);font-size:8px;margin-bottom:3px;padding-left:10px;position:relative;"><span style="color:${riskColor};position:absolute;left:0;">•</span>${f}</div>`).join('');
-
-    let tweetsHtml = res.tweets.map(t => {
-      let sentBadge = `<span class="tag tg" style="font-size:6px;padding:1px 3px;margin:0">Positivo</span>`;
-      if (t.sentiment === "negative") sentBadge = `<span class="tag tr" style="font-size:6px;padding:1px 3px;margin:0">Alerta Estafa</span>`;
-      else if (t.sentiment === "neutral") sentBadge = `<span class="tag ty" style="font-size:6px;padding:1px 3px;margin:0">Precaución</span>`;
-
-      return `
-        <div style="background:rgba(255,255,255,0.02);border:1px solid rgba(255,255,255,0.05);border-radius:4px;padding:6px;margin-top:6px;font-family:sans-serif;">
-          <div style="display:flex;align-items:center;justify-content:space-between;margin-bottom:4px;">
-            <div style="display:flex;align-items:center;">
-              <div style="width:16px;height:16px;border-radius:50%;background:#1da1f2;color:white;display:flex;align-items:center;justify-content:center;font-size:8px;font-weight:700;margin-right:4px;">
-                ${t.name.charAt(0)}
-              </div>
-              <div style="font-size:8px;font-weight:700;color:var(--t)">${t.name} <span style="color:var(--t2);font-weight:400;font-size:7px;">${t.handle} · ${t.time}</span></div>
-            </div>
-            ${sentBadge}
-          </div>
-          <div style="font-size:8px;color:rgba(255,255,255,0.85);line-height:1.2;margin-bottom:4px;word-break:break-word;">
-            ${t.text}
-          </div>
-          <div style="font-family:var(--mono);font-size:6px;color:var(--t2);display:flex;gap:10px;">
-            <span>💬 2</span>
-            <span>🔁 ${t.retweets}</span>
-            <span>❤️ ${t.likes}</span>
-          </div>
-        </div>
-      `;
-    }).join('');
-
-    const totalVotes = (res.scamVotes || 0) + (res.safeVotes || 0);
-    const scamPct = Math.round(((res.scamVotes || 0) / (totalVotes || 1)) * 100);
-    const safePct = 100 - scamPct;
+    let riskColor = res.safe ? "var(--g)" : "var(--r)";
+    let riskText = res.safe ? "SEGURO" : "ALTO RIESGO / SCAM";
+    let rcScore = res.details?.rugcheckScore || 0;
+    
+    let riskBarColor = rcScore > 50 ? "var(--r)" : (rcScore > 10 ? "var(--y)" : "var(--g)");
+    
+    let alertsHtml = res.warnings.length === 0 
+      ? '<div style="color:var(--g);font-size:8px;padding:4px 0;">✅ Ningún riesgo on-chain detectado.</div>' 
+      : res.warnings.map(w => `<div style="color:var(--r);font-size:8px;margin-bottom:3px;padding-left:10px;position:relative;"><span style="color:var(--r);position:absolute;left:0;">•</span>${w}</div>`).join('');
+      
+    let simResult = '';
+    if (res.details?.sellSimulation?.attempted) {
+      if (res.details.sellSimulation.success) {
+        simResult = '<div style="color:var(--g);font-size:8px;margin-top:4px;">✅ Simulación de venta exitosa (No parece ser honeypot).</div>';
+      } else {
+        simResult = `<div style="color:var(--r);font-size:8px;margin-top:4px;font-weight:bold;">🚨 ERROR EN VENTA: ${res.details.sellSimulation.error || 'Simulación falló'} (ALTA PROBABILIDAD DE HONEYPOT)</div>`;
+      }
+    }
 
     panel.innerHTML = `
       <div style="background:var(--bg2);border:1px solid var(--bdr);border-radius:5px;padding:8px 10px;margin-top:6px;">
-        <div style="font-family:var(--mono);font-size:8px;font-weight:700;color:#1da1f2;margin-bottom:6px;display:flex;justify-content:space-between;align-items:center;">
-          <span>🐦 ESCÁNER DE SEGURIDAD EN X (TWITTER)</span>
-          <span class="tag" style="background:rgba(29,161,242,0.15);color:#1da1f2;font-size:7px;border:1px solid rgba(29,161,242,0.2);margin:0">AUTOSCAN ACTIVADO</span>
+        <div style="font-family:var(--mono);font-size:8px;font-weight:700;color:var(--g);margin-bottom:6px;display:flex;justify-content:space-between;align-items:center;">
+          <span style="color:#a855f7">🛡️ ESCÁNER ANTI-RUG / HONEYPOT</span>
+          <span class="tag" style="background:rgba(168,85,247,0.15);color:#a855f7;font-size:7px;border:1px solid rgba(168,85,247,0.2);margin:0">ACTIVO</span>
         </div>
 
         <div style="display:flex;align-items:center;justify-content:space-between;background:rgba(0,0,0,0.2);padding:6px 8px;border-radius:4px;margin-bottom:8px;">
           <div>
-            <div style="font-size:7px;color:var(--t2);font-family:var(--mono)">Riesgo Estimado:</div>
-            <div style="font-size:11px;font-weight:800;color:${riskColor};font-family:var(--mono);">${res.riskScore}% (${res.riskLevel})</div>
-            <div style="font-size:7px;color:var(--t2);font-family:var(--mono);margin-top:4px">Actividad Comunidad:</div>
-            <div style="font-size:8px;font-weight:700;color:var(--t);font-family:var(--mono);">${res.activityLevel}</div>
+            <div style="font-size:7px;color:var(--t2);font-family:var(--mono)">Estado del Token:</div>
+            <div style="font-size:11px;font-weight:800;color:${riskColor};font-family:var(--mono);">${riskText}</div>
           </div>
           <div style="text-align:right;">
-            <div style="font-size:7px;color:var(--t2);font-family:var(--mono)">Sentimiento X:</div>
-            <div style="font-size:8px;font-weight:700;color:var(--t);font-family:var(--mono);">${res.sentiment}</div>
-            <div style="font-size:7px;color:var(--t2);font-family:var(--mono);margin-top:4px">Menciones por Hora:</div>
-            <div style="font-size:8px;font-weight:700;color:#1da1f2;font-family:var(--mono);">~${res.mentionsPerHour}</div>
+            <div style="font-size:7px;color:var(--t2);font-family:var(--mono)">RugCheck Score:</div>
+            <div style="font-size:11px;font-weight:800;color:${riskBarColor};font-family:var(--mono);">${rcScore} / 100</div>
           </div>
         </div>
 
-        <!-- Barra de Riesgo -->
-        <div style="width:100%;height:4px;background:rgba(255,255,255,0.05);border-radius:2px;overflow:hidden;margin-bottom:8px;">
-          <div style="width:${res.riskScore}%;height:100%;background:${riskColor};border-radius:2px;"></div>
-        </div>
-
-        <div style="font-size:8px;color:var(--t);line-height:1.3;margin-bottom:8px;background:rgba(${res.riskLevel==='ALTO'?'239,68,68,0.05':res.riskLevel==='MEDIO'?'245,158,11,0.05':'16,185,129,0.05'});border-left:2px solid ${riskColor};padding:4px 6px;">
-          ${res.verdict}
-        </div>
-
-        <!-- Consenso de la Comunidad -->
-        <div style="margin-top:8px; margin-bottom:10px; background:rgba(0,0,0,0.15); padding:6px 8px; border-radius:4px; border:1px solid rgba(255,255,255,0.03);">
-          <div style="font-size:7px; font-family:var(--mono); color:var(--t2); text-transform:uppercase; margin-bottom:4px; font-weight:700; display:flex; justify-content:space-between;">
-            <span>📊 Opinión de la Comunidad en X</span>
-            <span>Muestreo: ${totalVotes} cuentas</span>
+        <div style="font-size:7px;font-family:var(--mono);color:var(--t2);text-transform:uppercase;margin-bottom:4px;font-weight:700;">🔍 Detalle de Seguridad:</div>
+        <div style="background:rgba(0,0,0,0.15); border-radius:4px; border:1px solid rgba(255,255,255,0.03); padding:6px 8px;">
+          <div style="display:flex; justify-content:space-between; font-size:8px; font-family:var(--mono); margin-bottom:4px;">
+            <span>Mint Authority (Imprimir más):</span>
+            <span style="color:${res.details?.mintAuthorityRevoked ? 'var(--g)' : 'var(--r)'}">${res.details?.mintAuthorityRevoked ? 'REVOCADA ✅' : 'ACTIVA ❌'}</span>
           </div>
-          <div style="width:100%; height:8px; background:rgba(255,255,255,0.05); border-radius:4px; overflow:hidden; display:flex; margin-bottom:4px;">
-            <div style="width:${scamPct}%; height:100%; background:var(--r); display:flex; align-items:center; justify-content:center; font-size:6px; color:white; font-weight:700;">
-              ${scamPct > 15 ? `${scamPct}%` : ''}
-            </div>
-            <div style="width:${safePct}%; height:100%; background:var(--g); display:flex; align-items:center; justify-content:center; font-size:6px; color:white; font-weight:700;">
-              ${safePct > 15 ? `${safePct}%` : ''}
-            </div>
+          <div style="display:flex; justify-content:space-between; font-size:8px; font-family:var(--mono); margin-bottom:4px;">
+            <span>Freeze Authority (Bloquear ventas):</span>
+            <span style="color:${res.details?.freezeAuthorityRevoked ? 'var(--g)' : 'var(--r)'}">${res.details?.freezeAuthorityRevoked ? 'REVOCADA ✅' : 'ACTIVA ❌'}</span>
           </div>
-          <div style="display:flex; justify-content:space-between; font-size:7px; font-family:var(--mono);">
-            <span style="color:var(--r)">⚠️ Es Estafa / Scam (${res.scamVotes})</span>
-            <span style="color:var(--g)">💎 Es Seguro / Bullish (${res.safeVotes})</span>
-          </div>
+          ${simResult}
         </div>
 
-        <div style="margin-top:6px;">
-          <div style="font-size:7px;font-family:var(--mono);color:var(--t2);text-transform:uppercase;margin-bottom:4px;font-weight:700;">🔍 Factores de Riesgo / Contrato:</div>
-          ${flagsHtml}
-        </div>
-
-        <div style="font-size:7px; font-family:var(--mono); color:#1da1f2; margin-top:8px; padding-top:6px; border-top:1px dashed rgba(255,255,255,0.05); display:flex; align-items:center;">
-          <span style="margin-right:4px;">📈</span> Análisis certificado por auditor en X: <b style="margin-left:2px;color:var(--t)">@badattrading_</b>
-        </div>
-
-        <div style="margin-top:10px;border-top:1px dashed rgba(255,255,255,0.08);padding-top:8px;">
-          <div style="font-size:7px;font-family:var(--mono);color:var(--t2);text-transform:uppercase;margin-bottom:4px;font-weight:700;display:flex;justify-content:space-between;">
-            <span>💬 Menciones Destacadas en X:</span>
-            <a href="https://x.com/search?q=${symbol}+scam+OR+rug" target="_blank" style="color:#1da1f2;text-decoration:none;">Ver Todo ↗</a>
-          </div>
-          ${tweetsHtml}
+        <div style="margin-top:8px;">
+          <div style="font-size:7px;font-family:var(--mono);color:var(--t2);text-transform:uppercase;margin-bottom:4px;font-weight:700;">⚠️ Alertas / Advertencias:</div>
+          ${alertsHtml}
         </div>
       </div>
     `;
   } catch (err) {
     panel.innerHTML = `
       <div style="background:var(--bg2);border:1px solid var(--bdr);border-radius:5px;padding:8px 10px;margin-top:6px;text-align:center;font-size:8px;color:var(--r);font-family:var(--mono);">
-        ⚠️ Falló el auto-escaneo de X: ${err.message}
+        ⚠️ Falló el chequeo de seguridad: ${err.message}
       </div>
     `;
   }
 }
-
 function renderAP(d,an,cp){
   const el=document.getElementById('apanel');if(!el)return;
   const t=d.trend,s=an.strat;
@@ -3218,7 +3176,7 @@ function renderAP(d,an,cp){
   </div>
   <div id="xScamPanel" style="margin-top:6px"></div>`;
 
-  runXScamScan(d.symbol, d.address || d.pair, d.network, d.liq, d.vol);
+  runSafetyScan(d.symbol, d.address || d.pair, d.network);
 }
 async function refreshOB(){if(curDet)await showDetail(curDet);}
 
