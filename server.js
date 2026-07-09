@@ -990,10 +990,28 @@ async function checkTokenSafety(tokenMint) {
   } catch (e) {
     result.warnings.push(`RugCheck no disponible: ${e.message}`);
   }
-  try {
-    const rpcUrl = appConfig.solanaRpcUrl || process.env.SOLANA_RPC_URL || 'https://api.mainnet-beta.solana.com';
-    const connection = new Connection(rpcUrl, 'confirmed');
-    const mintInfo = await getMint(connection, new PublicKey(tokenMint));
+
+  const rpcs = [
+    appConfig.solanaRpcUrl || process.env.SOLANA_RPC_URL,
+    'https://api.mainnet-beta.solana.com',
+    'https://rpc.ankr.com/solana'
+  ].filter(Boolean);
+
+  let mintInfo = null;
+  let authorityCheckSuccess = false;
+  
+  for (const rpc of rpcs) {
+    try {
+      const connection = new Connection(rpc, 'confirmed');
+      mintInfo = await getMint(connection, new PublicKey(tokenMint));
+      authorityCheckSuccess = true;
+      break;
+    } catch (e) {
+      console.log(`Error checking authority with ${rpc}: ${e.message}`);
+    }
+  }
+
+  if (authorityCheckSuccess && mintInfo) {
     result.details.mintAuthorityRevoked = mintInfo.mintAuthority === null;
     result.details.freezeAuthorityRevoked = mintInfo.freezeAuthority === null;
     if (mintInfo.mintAuthority !== null) {
@@ -1004,74 +1022,82 @@ async function checkTokenSafety(tokenMint) {
       result.safe = false;
       result.warnings.push('Freeze authority NO revocada: el creador puede congelar tu wallet e impedirte vender (honeypot clásico).');
     }
-  } catch (e) {
-    result.warnings.push(`Chequeo on-chain de autoridades falló: ${e.message}`);
+  } else {
+    result.warnings.push(`Chequeo on-chain de autoridades falló en todos los RPCs.`);
+    // Omitimos invalidar el token si el RPC falla, asumiremos que RugCheck nos salva
   }
 
   try {
     result.details.sellSimulation = { attempted: false, success: false, error: null };
-    const rpcUrl = appConfig.solanaRpcUrl || process.env.SOLANA_RPC_URL || 'https://api.mainnet-beta.solana.com';
-    const connection = new Connection(rpcUrl, 'confirmed');
     
-    try {
-        const largestAccounts = await connection.getTokenLargestAccounts(new PublicKey(tokenMint));
-        if (largestAccounts && largestAccounts.value && largestAccounts.value.length > 0) {
-          let owner = null;
-          let amount = 1000;
-          for (const acc of largestAccounts.value) {
-             try {
-                 const info = await getAccount(connection, acc.address);
-                 if (info.amount > 0) {
-                     owner = info.owner;
-                     amount = Math.min(Number(info.amount), 1000000000);
-                     break;
-                 }
-             } catch(e) {}
-          }
-          
-          if (owner) {
-            result.details.sellSimulation.attempted = true;
-            const quoteUrl = `https://api.jup.ag/swap/v1/quote?inputMint=${tokenMint}&outputMint=So11111111111111111111111111111111111111112&amount=${amount}&slippageBps=1000`;
-            const qr = await fetchWithRetry(quoteUrl, { timeout: 8000 }, 2, 1000);
-            if (qr && qr.ok) {
-               const quoteResponse = await qr.json();
-               if (quoteResponse.routePlan) {
-                  const sr = await fetchWithRetry('https://api.jup.ag/swap/v1/swap', {
-                      method: 'POST',
-                      headers: { 'Content-Type': 'application/json' },
-                      timeout: 10000,
-                      body: JSON.stringify({
-                          quoteResponse,
-                          userPublicKey: owner.toString(),
-                          wrapAndUnwrapSol: true
-                      })
-                  }, 2, 1000);
-                  if (sr && sr.ok) {
-                     const swapRes = await sr.json();
-                     if (swapRes.swapTransaction) {
-                        const txBuf = Buffer.from(swapRes.swapTransaction, 'base64');
-                        const tx = VersionedTransaction.deserialize(txBuf);
-                        const simRes = await connection.simulateTransaction(tx, { sigVerify: false });
-                        
-                        if (simRes.value && simRes.value.err) {
-                            result.details.sellSimulation.success = false;
-                            result.details.sellSimulation.error = JSON.stringify(simRes.value.err);
-                            result.safe = false;
-                            result.warnings.push(`Simulación de VENTA falló (posible Honeypot): ${JSON.stringify(simRes.value.err)}`);
-                        } else {
-                            result.details.sellSimulation.success = true;
-                        }
-                     }
-                  }
-               }
-            }
-          }
-        }
-    } catch (simErr) {
-        result.warnings.push(`Simulación de venta omitida: ${simErr.message}`);
+    let largestAccounts = null;
+    let simConnection = null;
+    
+    for (const rpc of rpcs) {
+      try {
+        const conn = new Connection(rpc, 'confirmed');
+        largestAccounts = await conn.getTokenLargestAccounts(new PublicKey(tokenMint));
+        simConnection = conn;
+        break; // Éxito
+      } catch (e) {
+         console.log(`Error getTokenLargestAccounts con ${rpc}: ${e.message}`);
+      }
     }
-  } catch (e) {
-    result.warnings.push(`Chequeo de simulación de venta falló: ${e.message}`);
+
+    if (largestAccounts && largestAccounts.value && largestAccounts.value.length > 0) {
+      let owner = null;
+      let amount = 1000;
+      for (const acc of largestAccounts.value) {
+         try {
+             const info = await getAccount(simConnection, acc.address);
+             if (info.amount > 0) {
+                 owner = info.owner;
+                 amount = Math.min(Number(info.amount), 1000000000);
+                 break;
+             }
+         } catch(e) {}
+      }
+      
+      if (owner) {
+        result.details.sellSimulation.attempted = true;
+        const quoteUrl = `https://api.jup.ag/swap/v1/quote?inputMint=${tokenMint}&outputMint=So11111111111111111111111111111111111111112&amount=${amount}&slippageBps=1000`;
+        const qr = await fetchWithRetry(quoteUrl, { timeout: 8000 }, 2, 1000);
+        if (qr && qr.ok) {
+           const quoteResponse = await qr.json();
+           if (quoteResponse.routePlan) {
+              const sr = await fetchWithRetry('https://api.jup.ag/swap/v1/swap', {
+                  method: 'POST',
+                  headers: { 'Content-Type': 'application/json' },
+                  timeout: 10000,
+                  body: JSON.stringify({
+                      quoteResponse,
+                      userPublicKey: owner.toString(),
+                      wrapAndUnwrapSol: true
+                  })
+              }, 2, 1000);
+              if (sr && sr.ok) {
+                 const swapRes = await sr.json();
+                 if (swapRes.swapTransaction) {
+                    const txBuf = Buffer.from(swapRes.swapTransaction, 'base64');
+                    const tx = VersionedTransaction.deserialize(txBuf);
+                    const simRes = await simConnection.simulateTransaction(tx, { sigVerify: false });
+                    
+                    if (simRes.value && simRes.value.err) {
+                        result.details.sellSimulation.success = false;
+                        result.details.sellSimulation.error = JSON.stringify(simRes.value.err);
+                        result.safe = false;
+                        result.warnings.push(`Simulación de VENTA falló (posible Honeypot): ${JSON.stringify(simRes.value.err)}`);
+                    } else {
+                        result.details.sellSimulation.success = true;
+                    }
+                 }
+              }
+           }
+        }
+      }
+    }
+  } catch (simErr) {
+    result.warnings.push(`Simulación de venta omitida: ${simErr.message}`);
   }
 
   return result;
@@ -1779,6 +1805,96 @@ startLoop();
 
 // ============================================
 // PUBLIC ENDPOINTS
+
+
+// Endpoint para acciones desde la interfaz de administrador
+app.post('/api/action', adminAuth, (req, res) => {
+  const { action, payload } = req.body;
+  if (!action) return res.status(400).json({error: 'Action required'});
+
+  try {
+    if (action === 'setMode') {
+      if (payload.mode) {
+        mode = payload.mode;
+        addLog(`Modo cambiado a: ${mode.toUpperCase()}`, 'warn');
+      }
+      if (payload.solMode) {
+        solMode = payload.solMode;
+        addLog(`Modo Solana cambiado a: ${solMode === 'sim' ? 'SIMULADO' : (solMode === 'wallet' ? 'WALLET REAL' : 'POOL REAL')}`, 'warn');
+      }
+    } else if (action === 'start') {
+      monitorOn = true;
+      if (payload.interval) monitorInterval = payload.interval;
+      addLog(`▶️ Monitor INICIADO (${monitorInterval}s)`, 'info');
+      startLoop();
+    } else if (action === 'stop') {
+      monitorOn = false;
+      addLog(`⏸️ Monitor DETENIDO`, 'warn');
+    } else if (action === 'updateInterval') {
+      monitorInterval = payload.interval;
+      addLog(`⏱️ Intervalo cambiado a ${monitorInterval}s`, 'info');
+      startLoop();
+    } else if (action === 'addWatch') {
+      watchItems.push(payload);
+      addLog(`👀 Moneda agregada: ${payload.symbol}`, 'info');
+    } else if (action === 'removeWatch') {
+      watchItems.splice(payload.index, 1);
+    } else if (action === 'clearWatch') {
+      watchItems = payload.items || [];
+      addLog(`🧹 Watchlist limpiada`, 'info');
+    } else if (action === 'addOrder') {
+      if (watchItems[payload.wi]) {
+        watchItems[payload.wi].orders.push(payload.order);
+      }
+    } else if (action === 'editOrder') {
+      if (watchItems[payload.wi] && watchItems[payload.wi].orders[payload.oi]) {
+        Object.assign(watchItems[payload.wi].orders[payload.oi], payload.updates);
+      }
+    } else if (action === 'manualFill') {
+      if (watchItems[payload.wi] && watchItems[payload.wi].orders[payload.oi]) {
+        const w = watchItems[payload.wi];
+        const o = w.orders[payload.oi];
+        o.status = 'done';
+        SIM.balance -= o.amount;
+        addLog(`✅ Orden manual FILL: ${w.symbol} a ${o.price}`, 'buy');
+      }
+    } else if (action === 'resumeOrder') {
+      if (watchItems[payload.wi] && watchItems[payload.wi].orders[payload.oi]) {
+        watchItems[payload.wi].orders[payload.oi].status = 'pending';
+      }
+    } else if (action === 'unFill') {
+      if (watchItems[payload.wi] && watchItems[payload.wi].orders[payload.oi]) {
+        const o = watchItems[payload.wi].orders[payload.oi];
+        o.status = 'pending';
+        SIM.balance += o.amount;
+      }
+    } else if (action === 'closeTrade') {
+      if (watchItems[payload.index]) {
+        const w = watchItems[payload.index];
+        let totalInv = 0;
+        w.orders.forEach(o => { if (o.status === 'done') { totalInv += o.amount; o.status = 'closed'; } });
+        SIM.balance += totalInv; 
+        addLog(`📉 Posición cerrada manualmente: ${w.symbol}`, 'sell');
+      }
+    } else if (action === 'resetSim') {
+      SIM.balance = 1000;
+      SIM.solBalance = 10;
+      SIM.pnl = 0;
+      SIM.wins = 0;
+      SIM.losses = 0;
+      SIM.totalExec = 0;
+      if (payload.clearLogs) logs.length = 0;
+    } else if (action === 'quickMarketBuy') {
+      // Opcional: implementar compras a mercado rápido aquí
+    }
+    
+    saveState();
+    res.json({ ok: true, status: 'ok' });
+  } catch(e) {
+    console.error("Error en /api/action:", e);
+    res.status(500).json({ error: e.message });
+  }
+});
 
 app.post('/api/login', (req, res) => {
   const pwd = appConfig.appPassword || process.env.APP_PASSWORD || 'admin123';
