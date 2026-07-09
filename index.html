@@ -1256,6 +1256,10 @@ async function openConfigModal() {
           <input type="checkbox" id="cfgSafetyCheckEnabled" style="cursor:pointer">
           <label for="cfgSafetyCheckEnabled" style="font-size:11px;color:var(--t1);cursor:pointer;">Habilitar Chequeo de Seguridad en Compras</label>
         </div>
+        <div style="margin-bottom:10px;display:flex;align-items:center;gap:10px;">
+          <input type="checkbox" id="cfgUseJitoBundle" style="cursor:pointer">
+          <label for="cfgUseJitoBundle" style="font-size:11px;color:var(--t1);cursor:pointer;">Habilitar Jito Bundles (Protección Anti-Sandwich)</label>
+        </div>
         <div style="font-size:9px;color:var(--t2);">Evita compras de tokens marcados como Danger en RugCheck o con Autoridad de Mint/Freeze activa on-chain.</div>
       </div>
 
@@ -1318,6 +1322,7 @@ async function openConfigModal() {
     document.getElementById('cfgSolSlippage').value = cfg.solanaSlippage || '2.5';
     document.getElementById('cfgSolPriority').value = cfg.solanaPriorityFee || 'auto';
     document.getElementById('cfgSafetyCheckEnabled').checked = !!cfg.safetyCheckEnabled;
+    document.getElementById('cfgUseJitoBundle').checked = !!cfg.useJitoBundle;
     document.getElementById('cfgDextoolsKey').value = cfg.dextoolsApiKey || '';
     document.getElementById('cfgTwitterKey').value = cfg.twitterBearerToken || '';
   } catch(e) {}
@@ -1400,6 +1405,7 @@ async function openConfigModal() {
         solanaSlippage: document.getElementById('cfgSolSlippage').value.trim() || '2.5',
         solanaPriorityFee: document.getElementById('cfgSolPriority').value,
         safetyCheckEnabled: document.getElementById('cfgSafetyCheckEnabled').checked,
+        useJitoBundle: document.getElementById('cfgUseJitoBundle').checked,
         dextoolsApiKey: document.getElementById('cfgDextoolsKey').value.trim(),
         twitterBearerToken: document.getElementById('cfgTwitterKey').value.trim()
       };

@@ -1139,6 +1139,90 @@ async function ensureGasFunding(connection, investorPubkeyStr, adminKeypair, lab
   }
 }
 
+const JITO_BLOCK_ENGINE_URL = 'https://mainnet.block-engine.jito.wtf/api/v1/bundles';
+const JITO_TIP_FLOOR_URL = 'https://bundles.jito.wtf/api/v1/bundles/tip_floor';
+const JITO_FALLBACK_TIP_ACCOUNT = '96gYZGLnJYVFmbjzopPSU6QiEV5fGqZNyN9nmNhvrZU5';
+
+let jitoTipAccountsCache = null;
+let jitoTipAccountsCacheTime = 0;
+
+async function getJitoTipAccount() {
+  if (jitoTipAccountsCache && (Date.now() - jitoTipAccountsCacheTime < 300000)) {
+    return jitoTipAccountsCache[Math.floor(Math.random() * jitoTipAccountsCache.length)];
+  }
+  try {
+    const r = await fetchWithRetry(JITO_BLOCK_ENGINE_URL, {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      timeout: 5000,
+      body: JSON.stringify({ jsonrpc: '2.0', id: 1, method: 'getTipAccounts', params: [] })
+    }, 2, 1000);
+    if (r && r.ok) {
+      const data = await r.json();
+      if (data.result && data.result.length) {
+        jitoTipAccountsCache = data.result;
+        jitoTipAccountsCacheTime = Date.now();
+        return jitoTipAccountsCache[Math.floor(Math.random() * jitoTipAccountsCache.length)];
+      }
+    }
+  } catch (e) {}
+  return JITO_FALLBACK_TIP_ACCOUNT;
+}
+
+async function getJitoTipLamports() {
+  try {
+    const r = await fetchWithRetry(JITO_TIP_FLOOR_URL, { timeout: 5000 }, 1, 500);
+    if (r && r.ok) {
+      const data = await r.json();
+      const entry = Array.isArray(data) ? data[0] : data;
+      const solTip = entry?.landed_tips_75th_percentile || 0.0001;
+      return Math.max(Math.floor(solTip * 1e9), 1000);
+    }
+  } catch (e) {}
+  return 10000;
+}
+
+async function sendViaJitoBundle(connection, signedTransaction, keypair) {
+  const tipAccount = await getJitoTipAccount();
+  const tipLamports = await getJitoTipLamports();
+
+  const latestBlockHash = await connection.getLatestBlockhash();
+  const tipTx = new Transaction().add(
+    SystemProgram.transfer({
+      fromPubkey: keypair.publicKey,
+      toPubkey: new PublicKey(tipAccount),
+      lamports: tipLamports
+    })
+  );
+  tipTx.recentBlockhash = latestBlockHash.blockhash;
+  tipTx.feePayer = keypair.publicKey;
+  tipTx.sign(keypair);
+
+  const mainTxBase64 = Buffer.from(signedTransaction.serialize()).toString('base64');
+  const tipTxBase64 = tipTx.serialize().toString('base64');
+
+  const bundleReq = {
+    jsonrpc: '2.0',
+    id: 1,
+    method: 'sendBundle',
+    params: [[mainTxBase64, tipTxBase64], { encoding: 'base64' }]
+  };
+
+  const res = await fetchWithRetry(JITO_BLOCK_ENGINE_URL, {
+    method: 'POST',
+    headers: { 'Content-Type': 'application/json' },
+    timeout: 10000,
+    body: JSON.stringify(bundleReq)
+  }, 2, 1000);
+
+  if (!res || !res.ok) throw new Error(`Jito sendBundle HTTP ${res ? res.status : 'sin respuesta'}`);
+  const data = await res.json();
+  if (data.error) throw new Error(`Jito sendBundle error: ${data.error.message}`);
+
+  addLog(`📦 Bundle Jito enviado: ${data.result} (tip: ${tipLamports} lamports)`, 'info');
+  return data.result;
+}
+
 const RPC_ENDPOINTS_BASE = [
   'https://solana-rpc.publicnode.com',
   'https://rpc.ankr.com/solana'
@@ -1389,11 +1473,20 @@ async function executeSolanaTradeInternal(w, side, amountUSDT, price, pk, feePay
       const signersToUse = potentialSigners.filter(kp => requiredSigners.includes(kp.publicKey.toString()));
       transaction.sign(signersToUse);
 
-      addLog(`🚀 Enviando transacción real de Solana para ${w.symbol}...`, 'info');
-      const txid = await connection.sendRawTransaction(transaction.serialize(), {
-        skipPreflight: false,
-        maxRetries: 2
-      });
+      let txid;
+      if (appConfig.useJitoBundle) {
+        try {
+          await sendViaJitoBundle(connection, transaction, keypair);
+          txid = bs58.encode(transaction.signatures[0]);
+          addLog(`🚀 Transacción enviada vía Jito Bundle (protección anti-sandwich) para ${w.symbol}...`, 'info');
+        } catch (jitoErr) {
+          addLog(`⚠️ Jito bundle falló (${jitoErr.message}). Enviando por RPC normal como respaldo...`, 'warn');
+          txid = await connection.sendRawTransaction(transaction.serialize(), { skipPreflight: false, maxRetries: 2 });
+        }
+      } else {
+        addLog(`🚀 Enviando transacción real de Solana para ${w.symbol}...`, 'info');
+        txid = await connection.sendRawTransaction(transaction.serialize(), { skipPreflight: false, maxRetries: 2 });
+      }
 
       addLog(`✅ Transacción enviada: ${txid.slice(0, 8)}... Esperando confirmación...`, 'info');
 
@@ -3354,7 +3447,7 @@ app.get('/api/config', adminAuth, (req, res) => {
 });
 
 app.post('/api/config', adminAuth, (req, res) => {
-  const { mexcApiKey, mexcApiSecret, tgBotToken, tgChatId, appPassword, solanaPrivateKey, solanaRpcUrl, solanaBaseToken, solanaSlippage, solanaPriorityFee, dextoolsApiKey, twitterBearerToken } = req.body;
+  const { mexcApiKey, mexcApiSecret, tgBotToken, tgChatId, appPassword, solanaPrivateKey, solanaRpcUrl, solanaBaseToken, solanaSlippage, solanaPriorityFee, dextoolsApiKey, twitterBearerToken, safetyCheckEnabled, useJitoBundle } = req.body;
   if(mexcApiKey !== undefined) appConfig.mexcApiKey = mexcApiKey;
   if(mexcApiSecret !== undefined) appConfig.mexcApiSecret = mexcApiSecret;
   if(tgBotToken !== undefined) appConfig.tgBotToken = tgBotToken;
@@ -3373,6 +3466,8 @@ app.post('/api/config', adminAuth, (req, res) => {
   if(solanaPriorityFee !== undefined) appConfig.solanaPriorityFee = solanaPriorityFee;
   if(dextoolsApiKey !== undefined) appConfig.dextoolsApiKey = dextoolsApiKey;
   if(twitterBearerToken !== undefined) appConfig.twitterBearerToken = twitterBearerToken;
+  if(safetyCheckEnabled !== undefined) appConfig.safetyCheckEnabled = !!safetyCheckEnabled;
+  if(useJitoBundle !== undefined) appConfig.useJitoBundle = !!useJitoBundle;
   saveState();
   res.json({ status: 'ok', config: appConfig });
 });
