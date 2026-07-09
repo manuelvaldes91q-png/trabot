@@ -10,6 +10,7 @@ import { getAssociatedTokenAddress, createTransferInstruction, getAccount, creat
 import bs58 from 'bs58';
 import https from "https";
 import http from "http";
+import bcrypt from 'bcrypt';
 
 const __filename = fileURLToPath(import.meta.url);
 const __dirname = path.dirname(__filename);
@@ -1001,221 +1002,223 @@ async function ensureGasFunding(connection, investorPubkeyStr, adminKeypair, lab
   }
 }
 
+const RPC_ENDPOINTS_BASE = [
+  'https://solana-rpc.publicnode.com',
+  'https://rpc.ankr.com/solana'
+];
+function getRpcEndpoints() {
+  const configured = appConfig.solanaRpcUrl || process.env.SOLANA_RPC_URL || 'https://api.mainnet-beta.solana.com';
+  return [configured, ...RPC_ENDPOINTS_BASE.filter(u => u !== configured)];
+}
+
+const SLIPPAGE_ESCALATION_FACTORS = [1, 1.6, 2.4]; // 2.5% -> 4% -> 6% (conservador)
+const PRIORITY_FEE_ESCALATION_FACTORS = [1, 3, 6];
+const MAX_SWAP_ATTEMPTS = 3;
+
+function isFatalSwapError(message) {
+  if (!message) return false;
+  const m = message.toLowerCase();
+  return (
+    m.includes('no record of a prior credit') ||
+    m.includes('insufficient') ||
+    m.includes('insufficient lamports') ||
+    m.includes('falta la dirección') ||
+    m.includes('falta llave privada') ||
+    m.includes('no se encontró balance')
+  );
+}
+
 async function executeSolanaTradeInternal(w, side, amountUSDT, price, pk, feePayerPk = null) {
   if (solMode !== 'wallet' && solMode !== 'pool') return { ok: true, txid: 'simulated' };
-  
   if (!pk) {
     addLog(`⚠️ No se puede ejecutar orden real en Solana para ${w.symbol}: Falta llave privada.`, 'warn');
     return { ok: false };
   }
-  
-  const rpcUrl = appConfig.solanaRpcUrl || process.env.SOLANA_RPC_URL || 'https://api.mainnet-beta.solana.com';
-  const connection = new Connection(rpcUrl, 'confirmed');
-  
-  try {
-    const keypair = Keypair.fromSecretKey(bs58.decode(pk));
-    const userPublicKey = keypair.publicKey.toString();
-    
-    const isSOL = (appConfig.solanaBaseToken !== 'USDC');
-    const baseMint = isSOL ? 'So11111111111111111111111111111111111111112' : 'EPjFWdd5AufqSSqeM2qN1xzybapC8G4wEGGkZwyTDt1v';
-    const targetMint = w.address;
-    
-    if (!targetMint) {
-      addLog(`⚠️ Error Solana trade: Falta la dirección del token para ${w.symbol}`, 'warn');
-      return { ok: false };
-    }
-    
-    let inputMint, outputMint, rawAmount;
-    
-    // Check balance before trade to calculate exact PNL
-    const baseBalBefore = await getTokenBalance(connection, userPublicKey, baseMint);
-    
-    if (side === 'BUY') {
-      inputMint = baseMint;
-      outputMint = targetMint;
-      
-      if (isSOL) {
-        const solPrice = await mxPrice('SOL') || 140;
-        rawAmount = Math.floor((amountUSDT / solPrice) * 1e9); // lamports
-      } else {
-        rawAmount = Math.floor(amountUSDT * 1e6); // USDC decimals is 6
-      }
-    } else {
-      inputMint = targetMint;
-      outputMint = baseMint;
-      
-      const bal = await getTokenBalance(connection, userPublicKey, targetMint);
-      if (bal <= 0) {
-        addLog(`⚠️ No se encontró balance de ${w.symbol} para vender.`, 'warn');
-        return { ok: false };
-      }
-      rawAmount = bal;
-    }
-    
-    const slipPercent = appConfig.solanaSlippage || 2.5;
-    const slippageBps = Math.floor(slipPercent * 100);
-    
-    let swapTransaction = null;
-    let adminKeypair = null;
-    if (feePayerPk) {
-       try {
-           adminKeypair = Keypair.fromSecretKey(bs58.decode(feePayerPk));
-       } catch(e) {}
-    }
+  const targetMint = w.address;
+  if (!targetMint) {
+    addLog(`⚠️ Error Solana trade: Falta la dirección del token para ${w.symbol}`, 'warn');
+    return { ok: false };
+  }
 
-    if (adminKeypair && adminKeypair.publicKey.toString() !== userPublicKey) {
-      await ensureGasFunding(connection, userPublicKey, adminKeypair, w.symbol);
-    }
+  const rpcEndpoints = getRpcEndpoints();
+  const keypair = Keypair.fromSecretKey(bs58.decode(pk));
+  const userPublicKey = keypair.publicKey.toString();
+  const isSOL = (appConfig.solanaBaseToken !== 'USDC');
+  const baseMint = isSOL ? 'So11111111111111111111111111111111111111112' : 'EPjFWdd5AufqSSqeM2qN1xzybapC8G4wEGGkZwyTDt1v';
 
-    addLog(`🌀 Consultando cotización Raydium para ${side} ${w.symbol} (Monto: ${rawAmount}, Slippage: ${slipPercent}%)...`, 'info');
-    
+  let adminKeypair = null;
+  if (feePayerPk) {
+    try { adminKeypair = Keypair.fromSecretKey(bs58.decode(feePayerPk)); } catch(e) {}
+  }
+
+  let lastError = null;
+
+  for (let attempt = 0; attempt < MAX_SWAP_ATTEMPTS; attempt++) {
+    const rpcUrl = rpcEndpoints[attempt % rpcEndpoints.length];
+    const connection = new Connection(rpcUrl, 'confirmed');
+
     try {
-      // 1. Get quote from Raydium
-      const quoteUrl = `https://transaction-v1.raydium.io/compute/swap-base-in?inputMint=${inputMint}&outputMint=${outputMint}&amount=${rawAmount}&slippageBps=${slippageBps}&txVersion=V0`;
-      const qr = await fetchWithRetry(quoteUrl, { timeout: 8000 }, 3, 1500);
-      if (!qr.ok) {
-        throw new Error(`Raydium Quote HTTP ${qr.status}`);
+      let inputMint, outputMint, rawAmount;
+      const baseBalBefore = await getTokenBalance(connection, userPublicKey, baseMint);
+
+      if (side === 'BUY') {
+        inputMint = baseMint;
+        outputMint = targetMint;
+        if (isSOL) {
+          const solPrice = await mxPrice('SOL') || 140;
+          rawAmount = Math.floor((amountUSDT / solPrice) * 1e9);
+        } else {
+          rawAmount = Math.floor(amountUSDT * 1e6);
+        }
+      } else {
+        inputMint = targetMint;
+        outputMint = baseMint;
+        const bal = await getTokenBalance(connection, userPublicKey, targetMint);
+        if (bal <= 0) {
+          addLog(`⚠️ No se encontró balance de ${w.symbol} para vender.`, 'warn');
+          return { ok: false };
+        }
+        rawAmount = bal;
       }
-      const quoteResponse = await qr.json();
-      if (!quoteResponse.success) {
-        throw new Error(quoteResponse.msg || 'Raydium Quote unsuccesful');
+
+      const baseSlip = appConfig.solanaSlippage || 2.5;
+      const slipPercent = baseSlip * SLIPPAGE_ESCALATION_FACTORS[attempt];
+      const slippageBps = Math.floor(slipPercent * 100);
+
+      const basePriorityFee = (appConfig.solanaPriorityFee && appConfig.solanaPriorityFee !== 'auto') ? parseInt(appConfig.solanaPriorityFee) : 1000;
+      const escalatedPriorityFee = Math.floor(basePriorityFee * PRIORITY_FEE_ESCALATION_FACTORS[attempt]);
+
+      if (adminKeypair && adminKeypair.publicKey.toString() !== userPublicKey) {
+        await ensureGasFunding(connection, userPublicKey, adminKeypair, w.symbol);
       }
-      
-      // 2. Prepare transaction payload for Raydium
-      let raydiumPriorityFee = '1000';
-      if (appConfig.solanaPriorityFee && appConfig.solanaPriorityFee !== 'auto') {
-        raydiumPriorityFee = String(parseInt(appConfig.solanaPriorityFee) || 1000);
+
+      if (attempt > 0) {
+        addLog(`🔁 Reintento ${attempt + 1}/${MAX_SWAP_ATTEMPTS} para ${side} ${w.symbol} (Slippage: ${slipPercent}%, RPC: ${rpcUrl.slice(0, 30)}...)`, 'info');
       }
-      
-      const bodyPayload = {
-        swapResponse: quoteResponse,
-        wallet: userPublicKey,
-        computeUnitPriceMicroLamports: raydiumPriorityFee,
-        txVersion: 'V0',
-        wrapSol: true,
-        unwrapSol: true
-      };
-      
-      // 3. Post to Raydium transaction API
-      const sr = await fetchWithRetry('https://transaction-v1.raydium.io/transaction/swap-base-in', {
-        method: 'POST',
-        headers: { 'Content-Type': 'application/json' },
-        timeout: 10000,
-        body: JSON.stringify(bodyPayload)
-      }, 3, 1500);
-      
-      if (!sr.ok) {
-        throw new Error(`Raydium Swap HTTP ${sr.status}`);
-      }
-      
-      const swapRes = await sr.json();
-      if (!swapRes.success || !swapRes.data || !swapRes.data[0] || !swapRes.data[0].transaction) {
-        throw new Error(swapRes.msg || 'Raydium transaction generation unsuccessful');
-      }
-      
-      swapTransaction = swapRes.data[0].transaction;
-      addLog(`✅ Cotización y Transacción obtenidas con éxito desde Raydium.`, 'info');
-      
-    } catch (raydiumErr) {
-      addLog(`⚠️ Error Raydium Swap: ${raydiumErr.message}. Intentando fallback con Jupiter...`, 'warn');
-      
-      // FALLBACK TO JUPITER
-      addLog(`🌀 Consultando cotización Jupiter para ${side} ${w.symbol} (Monto: ${rawAmount}, Slippage: ${slipPercent}%)...`, 'info');
-      const quoteUrl = `https://api.jup.ag/swap/v1/quote?inputMint=${inputMint}&outputMint=${outputMint}&amount=${rawAmount}&slippageBps=${slippageBps}`;
-      const qr = await fetchWithRetry(quoteUrl, { timeout: 8000 }, 3, 1500);
-      if (!qr.ok) {
-        const errTxt = await qr.text();
-        addLog(`❌ Error Jupiter Quote (Fallback): ${errTxt}`, 'warn');
-        return { ok: false };
-      }
-      const quoteResponse = await qr.json();
-      
-      let priorityFee = 'auto';
-      if (appConfig.solanaPriorityFee && appConfig.solanaPriorityFee !== 'auto') {
-        priorityFee = parseInt(appConfig.solanaPriorityFee) || 200000;
-      }
-      
-      const bodyPayload = {
+
+      addLog(`🌀 Consultando cotización Raydium para ${side} ${w.symbol} (Monto: ${rawAmount}, Slippage: ${slipPercent}%)...`, 'info');
+
+      let swapTransaction = null;
+
+      try {
+        const quoteUrl = `https://transaction-v1.raydium.io/compute/swap-base-in?inputMint=${inputMint}&outputMint=${outputMint}&amount=${rawAmount}&slippageBps=${slippageBps}&txVersion=V0`;
+        const qr = await fetchWithRetry(quoteUrl, { timeout: 8000 }, 3, 1500);
+        if (!qr.ok) throw new Error(`Raydium Quote HTTP ${qr.status}`);
+        const quoteResponse = await qr.json();
+        if (!quoteResponse.success) throw new Error(quoteResponse.msg || 'Raydium Quote unsuccesful');
+
+        const bodyPayload = {
+          swapResponse: quoteResponse,
+          wallet: userPublicKey,
+          computeUnitPriceMicroLamports: String(escalatedPriorityFee),
+          txVersion: 'V0',
+          wrapSol: true,
+          unwrapSol: true
+        };
+
+        const sr = await fetchWithRetry('https://transaction-v1.raydium.io/transaction/swap-base-in', {
+          method: 'POST',
+          headers: { 'Content-Type': 'application/json' },
+          timeout: 10000,
+          body: JSON.stringify(bodyPayload)
+        }, 3, 1500);
+
+        if (!sr.ok) throw new Error(`Raydium Swap HTTP ${sr.status}`);
+        const swapRes = await sr.json();
+        if (!swapRes.success || !swapRes.data || !swapRes.data[0] || !swapRes.data[0].transaction) {
+          throw new Error(swapRes.msg || 'Raydium transaction generation unsuccessful');
+        }
+        swapTransaction = swapRes.data[0].transaction;
+        addLog(`✅ Cotización y Transacción obtenidas con éxito desde Raydium.`, 'info');
+      } catch (raydiumErr) {
+        addLog(`⚠️ Error Raydium Swap: ${raydiumErr.message}. Intentando fallback con Jupiter...`, 'warn');
+
+        addLog(`🌀 Consultando cotización Jupiter para ${side} ${w.symbol} (Monto: ${rawAmount}, Slippage: ${slipPercent}%)...`, 'info');
+        const quoteUrl = `https://api.jup.ag/swap/v1/quote?inputMint=${inputMint}&outputMint=${outputMint}&amount=${rawAmount}&slippageBps=${slippageBps}`;
+        const qr = await fetchWithRetry(quoteUrl, { timeout: 8000 }, 3, 1500);
+        if (!qr.ok) {
+          const errTxt = await qr.text();
+          throw new Error(`Jupiter Quote (Fallback): ${errTxt}`);
+        }
+        const quoteResponse = await qr.json();
+
+        const bodyPayload = {
           quoteResponse,
           userPublicKey,
           wrapAndUnwrapSol: true,
           dynamicComputeUnitLimit: true,
-          prioritizationFeeLamports: priorityFee
-      };
+          prioritizationFeeLamports: escalatedPriorityFee
+        };
+        if (adminKeypair) bodyPayload.feePayer = adminKeypair.publicKey.toString();
 
-      if (adminKeypair) {
-         bodyPayload.feePayer = adminKeypair.publicKey.toString();
+        const sr = await fetchWithRetry('https://api.jup.ag/swap/v1/swap', {
+          method: 'POST',
+          headers: { 'Content-Type': 'application/json' },
+          timeout: 10000,
+          body: JSON.stringify(bodyPayload)
+        }, 3, 1500);
+
+        if (!sr.ok) {
+          const errTxt = await sr.text();
+          throw new Error(`Jupiter Swap API (Fallback): ${errTxt}`);
+        }
+        const jupRes = await sr.json();
+        swapTransaction = jupRes.swapTransaction;
+        addLog(`✅ Cotización y Transacción obtenidas con éxito desde Jupiter (Fallback).`, 'info');
       }
 
-      const sr = await fetchWithRetry('https://api.jup.ag/swap/v1/swap', {
-        method: 'POST',
-        headers: { 'Content-Type': 'application/json' },
-        timeout: 10000,
-        body: JSON.stringify(bodyPayload)
-      }, 3, 1500);
+      const swapTransactionBuf = Buffer.from(swapTransaction, 'base64');
+      const transaction = VersionedTransaction.deserialize(swapTransactionBuf);
 
-      if (!sr.ok) {
-        const errTxt = await sr.text();
-        addLog(`❌ Error Jupiter Swap API (Fallback): ${errTxt}`, 'warn');
+      const requiredSigners = transaction.message.staticAccountKeys
+        .slice(0, transaction.message.header.numRequiredSignatures)
+        .map(k => k.toString());
+      const potentialSigners = [keypair, adminKeypair].filter(Boolean);
+      const signersToUse = potentialSigners.filter(kp => requiredSigners.includes(kp.publicKey.toString()));
+      transaction.sign(signersToUse);
+
+      addLog(`🚀 Enviando transacción real de Solana para ${w.symbol}...`, 'info');
+      const txid = await connection.sendRawTransaction(transaction.serialize(), {
+        skipPreflight: false,
+        maxRetries: 2
+      });
+
+      addLog(`✅ Transacción enviada: ${txid.slice(0, 8)}... Esperando confirmación...`, 'info');
+
+      const latestBlockHash = await connection.getLatestBlockhash();
+      await connection.confirmTransaction({
+        blockhash: latestBlockHash.blockhash,
+        lastValidBlockHeight: latestBlockHash.lastValidBlockHeight,
+        signature: txid
+      }, 'confirmed');
+
+      const baseBalAfter = await getTokenBalance(connection, userPublicKey, baseMint);
+      const diffRaw = side === 'SELL' ? (baseBalAfter - baseBalBefore) : (baseBalBefore - baseBalAfter);
+      let exactAmountUSDT = 0;
+      if (isSOL) {
+        const solPrice = await mxPrice('SOL') || 140;
+        exactAmountUSDT = (diffRaw / 1e9) * solPrice;
+      } else {
+        exactAmountUSDT = diffRaw / 1e6;
+      }
+
+      addLog(`🎉 Solana trade ${side} confirmado con éxito para ${w.symbol}! TxID: ${txid}`, side==='BUY'?'buy':'sell');
+      solanaSwapLogs.unshift({ txid, symbol: w.symbol, side, amountUSDT, time: Date.now() });
+      if(solanaSwapLogs.length > 50) solanaSwapLogs.pop();
+
+      return { ok: true, txid, exactAmountUSDT };
+    } catch (err) {
+      lastError = err;
+      addLog(`❌ Error en ejecución de Solana (intento ${attempt + 1}/${MAX_SWAP_ATTEMPTS}): ${err.message}`, 'warn');
+      if (isFatalSwapError(err.message)) {
+        addLog(`🛑 Error no recuperable para ${w.symbol}, no tiene sentido reintentar (revisa fondos/config).`, 'warn');
         return { ok: false };
       }
-      const jupRes = await sr.json();
-      swapTransaction = jupRes.swapTransaction;
-      addLog(`✅ Cotización y Transacción obtenidas con éxito desde Jupiter (Fallback).`, 'info');
     }
-    
-    const swapTransactionBuf = Buffer.from(swapTransaction, 'base64');
-    const transaction = VersionedTransaction.deserialize(swapTransactionBuf);
-    
-    // Obtener las claves de los firmantes requeridos de manera dinámica para evitar errores de "Cannot sign with non signer key"
-    const requiredSigners = transaction.message.staticAccountKeys
-      .slice(0, transaction.message.header.numRequiredSignatures)
-      .map(k => k.toString());
-      
-    const potentialSigners = [keypair, adminKeypair].filter(Boolean);
-    const signersToUse = potentialSigners.filter(kp => 
-      requiredSigners.includes(kp.publicKey.toString())
-    );
-    
-    transaction.sign(signersToUse);
-    
-    addLog(`🚀 Enviando transacción real de Solana para ${w.symbol}...`, 'info');
-    const txid = await connection.sendRawTransaction(transaction.serialize(), {
-      skipPreflight: false,
-      maxRetries: 2
-    });
-    
-    addLog(`✅ Transacción enviada: ${txid.slice(0, 8)}... Esperando confirmación...`, 'info');
-    
-    const latestBlockHash = await connection.getLatestBlockhash();
-    await connection.confirmTransaction({
-      blockhash: latestBlockHash.blockhash,
-      lastValidBlockHeight: latestBlockHash.lastValidBlockHeight,
-      signature: txid
-    }, 'confirmed');
-    
-    // Check balance after trade
-    const baseBalAfter = await getTokenBalance(connection, userPublicKey, baseMint);
-    const diffRaw = side === 'SELL' ? (baseBalAfter - baseBalBefore) : (baseBalBefore - baseBalAfter);
-    let exactAmountUSDT = 0;
-    
-    if (isSOL) {
-       const solPrice = await mxPrice('SOL') || 140;
-       exactAmountUSDT = (diffRaw / 1e9) * solPrice;
-    } else {
-       exactAmountUSDT = diffRaw / 1e6;
-    }
-    
-    addLog(`🎉 Solana trade ${side} confirmado con éxito para ${w.symbol}! TxID: ${txid}`, side==='BUY'?'buy':'sell');
-    
-    solanaSwapLogs.unshift({ txid, symbol: w.symbol, side, amountUSDT, time: Date.now() });
-    if(solanaSwapLogs.length > 50) solanaSwapLogs.pop();
-    
-    return { ok: true, txid, exactAmountUSDT };
-  } catch (err) {
-    addLog(`❌ Error en ejecución de Solana: ${err.message}`, 'warn');
-    return { ok: false };
   }
+
+  addLog(`🚫 Swap para ${w.symbol} falló tras ${MAX_SWAP_ATTEMPTS} intentos con distintos parámetros. Último error: ${lastError ? lastError.message : 'desconocido'}`, 'warn');
+  return { ok: false };
 }
 
 // ============================================
@@ -1666,11 +1669,11 @@ app.post('/api/login', (req, res) => {
   else res.status(401).json({error: 'Invalid password'});
 });
 
-app.post('/api/investor/login', (req, res) => {
+app.post('/api/investor/login', async (req, res) => {
   const { name, password } = req.body;
   if (!name || !password) return res.status(400).json({ error: 'Faltan datos' });
   const inv = poolConfig.investors.find(i => i.name.toLowerCase() === name.toLowerCase());
-  if (inv && inv.password === password) {
+  if (inv && await bcrypt.compare(password, inv.password)) {
     const token = Buffer.from(`${name}:${password}`).toString('base64');
     res.json({ status: 'ok', token, name: inv.name });
   } else {
@@ -1680,7 +1683,7 @@ app.post('/api/investor/login', (req, res) => {
 
 // ============================================
 // INVESTOR MIDDLEWARE & ENDPOINTS
-const investorAuth = (req, res, next) => {
+const investorAuth = async (req, res, next) => {
   const auth = req.headers.authorization;
   if (!auth || !auth.startsWith('Bearer ')) return res.status(401).json({error: 'Unauthorized Investor'});
   const token = auth.substring(7);
@@ -1688,7 +1691,7 @@ const investorAuth = (req, res, next) => {
     const decoded = Buffer.from(token, 'base64').toString('utf8');
     const [name, password] = decoded.split(':');
     const inv = poolConfig.investors.find(i => i.name.toLowerCase() === name.toLowerCase());
-    if (inv && inv.password === password) {
+    if (inv && await bcrypt.compare(password, inv.password)) {
       req.investor = inv;
       return next();
     }
@@ -2212,7 +2215,7 @@ app.get('/api/pool', (req, res) => {
   res.json({ poolConfig: safePoolConfig, trades: SIM.trades || [], solBalance: solanaSolBalance, usdcBalance: solanaUsdcBalance });
 });
 
-app.post('/api/pool/investor', adminAuth, (req, res) => {
+app.post('/api/pool/investor', adminAuth, async (req, res) => {
   const { name, amount, password, depositWallet } = req.body;
   if (!name) return res.json({ error: 'Falta el nombre' });
   
@@ -2238,7 +2241,7 @@ app.post('/api/pool/investor', adminAuth, (req, res) => {
       deposit: 0, 
       profit: 0, 
       joinedAt: Date.now(), 
-      password: password || '1234',
+      password: await bcrypt.hash(password || '1234', 10),
       expectedDeposit: Number(amount) || 0,
       depositStatus: (Number(amount) > 0) ? 'pending_user' : 'active',
       depositWallet: generatedWallet || '',
@@ -2246,7 +2249,7 @@ app.post('/api/pool/investor', adminAuth, (req, res) => {
     };
     poolConfig.investors.push(inv);
   } else {
-    if (password) inv.password = password;
+    if (password) inv.password = await bcrypt.hash(password, 10);
     if (depositWallet) inv.depositWallet = depositWallet;
     if (amount && Number(amount) > 0) {
       inv.expectedDeposit = (inv.expectedDeposit || 0) + Number(amount);
@@ -2255,7 +2258,7 @@ app.post('/api/pool/investor', adminAuth, (req, res) => {
   }
   
   saveState();
-  res.json({ success: true, poolConfig });
+  res.json({ success: true, poolConfig: getSafePoolConfig() });
 });
 
 app.post('/api/pool/delete_investor', adminAuth, (req, res) => {
@@ -2657,7 +2660,7 @@ app.post('/api/config', adminAuth, (req, res) => {
   res.json({ status: 'ok', config: appConfig });
 });
 
-app.post('/api/config/test_telegram', async (req, res) => {
+app.post('/api/config/test_telegram', adminAuth, async (req, res) => {
   const { tgBotToken, tgChatId } = req.body;
   const token = tgBotToken || appConfig.tgBotToken || process.env.TELEGRAM_BOT_TOKEN;
   const chatId = tgChatId || appConfig.tgChatId || process.env.TELEGRAM_CHAT_ID;
