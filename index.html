@@ -3209,9 +3209,17 @@ async function runSafetyScan(symbol, address, network) {
           <div style="font-size:6.5px;color:var(--t2);font-family:var(--mono);margin-top:2px;">
             ✅ ${hc.poolsExcluded > 0 ? `Se excluyeron ${hc.poolsExcluded} cuenta(s) de pool/contrato — solo se muestran wallets reales.` : 'No se detectaron pools entre los top holders.'}
           </div>
-          <a href="https://app.bubblemaps.io/sol/token/${address}" target="_blank" rel="noopener" style="display:inline-block;margin-top:6px;font-size:8px;font-family:var(--mono);color:#a855f7;text-decoration:underline;">
-            🔗 Ver mapa completo con clusters en Bubblemaps.io →
-          </a>
+          <div style="display:flex;gap:6px;margin-top:6px;">
+            <a href="https://app.bubblemaps.io/sol/token/${address}" target="_blank" rel="noopener" style="flex:1;text-align:center;font-size:8px;font-family:var(--mono);color:#a855f7;text-decoration:none;border:1px solid #a855f7;padding:4px;border-radius:4px;background:rgba(168,85,247,0.1);">
+              🫧 Bubblemaps
+            </a>
+            <a href="https://solsniffer.com/scanner/${address}" target="_blank" rel="noopener" style="flex:1;text-align:center;font-size:8px;font-family:var(--mono);color:#3b82f6;text-decoration:none;border:1px solid #3b82f6;padding:4px;border-radius:4px;background:rgba(59,130,246,0.1);">
+              🐶 Solsniffer
+            </a>
+            <a href="https://rugcheck.xyz/tokens/${address}" target="_blank" rel="noopener" style="flex:1;text-align:center;font-size:8px;font-family:var(--mono);color:#10b981;text-decoration:none;border:1px solid #10b981;padding:4px;border-radius:4px;background:rgba(16,185,129,0.1);">
+              🛡️ RugCheck
+            </a>
+          </div>
           <button class="btn btn-d btn-xs" style="margin-top:8px;width:100%;font-size:9px" onclick="openWhaleMap('${address}', '${d.symbol}')">🫧 Ver Mapa de Ballenas en Vivo (Requiere VPS)</button>
         </div>
       `;
