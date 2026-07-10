@@ -3236,8 +3236,10 @@ async function runSafetyScan(symbol, address, network) {
 
     // DEV
     let creatorBalance = res.details?.creatorBalance || 0;
-    let devPct = '0%';
-    let devColor = 'var(--g)';
+    let tokenSupply = res.details?.tokenSupply || 0;
+    let devPctVal = tokenSupply > 0 ? ((creatorBalance / tokenSupply) * 100).toFixed(2) : 0;
+    let devPct = devPctVal + '%';
+    let devColor = devPctVal > 5 ? 'var(--r)' : 'var(--g)';
 
     // Holders
     let holders = res.details?.totalHolders || '--';
@@ -3246,9 +3248,9 @@ async function runSafetyScan(symbol, address, network) {
     let snipers = '0%';
 
     // Insiders
-    let insidersCount = res.details?.graphInsidersDetected || 0;
-    let insiders = insidersCount > 0 ? (insidersCount > 10 ? 'Alta' : 'Baja') : '0%';
-    let insidersColor = insidersCount > 0 ? 'var(--r)' : 'var(--g)';
+    let insiderPct = res.details?.insiderPct || 0;
+    let insiders = insiderPct > 0 ? insiderPct.toFixed(1) + '%' : '0%';
+    let insidersColor = insiderPct > 10 ? 'var(--r)' : (insiderPct > 0 ? 'var(--y)' : 'var(--g)');
 
     // Phishing
     let hasPhishing = rcRisks.some(r => r.toLowerCase().includes('phishing'));

@@ -978,6 +978,14 @@ async function checkTokenSafety(tokenMint) {
       result.details.rugcheckRisks = (rc.risks || []).map(r => r.name);
       result.details.totalHolders = rc.totalHolders;
       result.details.creatorBalance = rc.creatorBalance;
+      result.details.tokenSupply = rc.token?.supply;
+      result.details.tokenDecimals = rc.token?.decimals;
+      
+      const networks = rc.insiderNetworks || [];
+      let totalInsider = 0;
+      for (const n of networks) { totalInsider += n.tokenAmount; }
+      result.details.insiderPct = rc.token?.supply > 0 ? (totalInsider / rc.token.supply) * 100 : 0;
+      
       result.details.totalMarketLiquidity = rc.totalMarketLiquidity;
       result.details.graphInsidersDetected = rc.graphInsidersDetected;
       result.details.markets = rc.markets;
