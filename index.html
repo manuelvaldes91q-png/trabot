@@ -2564,6 +2564,7 @@ setInterval(async () => {
       if(newLogs[0].type === 'buy') showFlash('buy','✅ COMPRA AUTO VPS', newLogs[0].msg);
       if(newLogs[0].type === 'sell' || newLogs[0].type === 'tp') showFlash('tp','💰 VPS CERRADA', newLogs[0].msg);
       if(newLogs[0].type === 'sl_') showFlash('sell','❌ SL VPS', newLogs[0].msg);
+      if(newLogs[0].type === 'alert') showFlash('sell','🚨 ALERTA CRÍTICA', newLogs[0].msg);
     }
     
     logs_ = newLogs;

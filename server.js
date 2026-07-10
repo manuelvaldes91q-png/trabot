@@ -2268,6 +2268,98 @@ async function checkPendingDeposits() {
   }
 }
 
+let whaleCache = {};
+let whaleMonitorInterval = null;
+
+async function runWhaleMonitor() {
+  if (!monitorOn) return;
+  const solanaItems = watchItems.filter(w => w.network === 'solana' && w.address);
+  if (!solanaItems.length) return;
+
+  const rpcs = [
+    appConfig.solanaRpcUrl,
+    ...RPC_ENDPOINTS_BASE.filter(u => u !== appConfig.solanaRpcUrl)
+  ].filter(Boolean);
+
+  let connection = null;
+  for (const rpc of rpcs) {
+    try { connection = new Connection(rpc, 'confirmed'); await connection.getSlot(); break; } catch (e) {}
+  }
+  if (!connection) return;
+
+  const SYSTEM_PROGRAM = '11111111111111111111111111111111111111111';
+
+  for (const w of solanaItems) {
+    const mintStr = w.address;
+    if (!whaleCache[mintStr]) {
+       try {
+         const tokenMint = new PublicKey(mintStr);
+         const mintInfo = await getMint(connection, tokenMint);
+         const decimals = mintInfo.decimals;
+         let totalSupply = Number(mintInfo.supply) / (10 ** decimals);
+         
+         const largest = await connection.getTokenLargestAccounts(tokenMint);
+         if (!largest.value || largest.value.length === 0) continue;
+
+         const rawHolders = [];
+         const ownerPubkeys = [];
+         for (const acc of largest.value.slice(0, 10)) {
+           try {
+             const info = await getAccount(connection, acc.address);
+             const amount = Number(acc.amount) / (10 ** decimals);
+             rawHolders.push({ address: acc.address, owner: info.owner, amount });
+             ownerPubkeys.push(info.owner);
+           } catch (e) {}
+         }
+
+         let ownerInfos = [];
+         try { ownerInfos = await connection.getMultipleAccountsInfo(ownerPubkeys); } catch(e) {}
+         
+         const realHolders = rawHolders.map((h, i) => {
+           const ownerAccInfo = ownerInfos[i];
+           const isPool = ownerAccInfo ? ownerAccInfo.owner.toString() !== SYSTEM_PROGRAM : false;
+           return { address: h.address, owner: h.owner, amount: h.amount, isPool };
+         }).filter(h => !h.isPool);
+
+         whaleCache[mintStr] = { totalSupply, decimals, holders: realHolders };
+       } catch (e) {
+       }
+    } else {
+       const cache = whaleCache[mintStr];
+       if (!cache.holders || cache.holders.length === 0) continue;
+
+       const accountPubkeys = cache.holders.map(h => h.address);
+       try {
+          const accInfos = await connection.getMultipleAccountsInfo(accountPubkeys);
+          for (let i=0; i<cache.holders.length; i++) {
+             const h = cache.holders[i];
+             const info = accInfos[i];
+             
+             let currentAmount = 0;
+             if (info && info.data && info.data.length >= 72) {
+                const amountRaw = info.data.readBigUInt64LE(64);
+                currentAmount = Number(amountRaw) / (10 ** cache.decimals);
+             } else if (!info) {
+                currentAmount = 0;
+             } else {
+                continue;
+             }
+             
+             const diff = h.amount - currentAmount;
+             const pctMoved = cache.totalSupply ? (diff / cache.totalSupply) * 100 : 0;
+             
+             if (pctMoved > 5) {
+                addLog(`¡BALLENA MOVIENDO FONDOS! Holder ${h.owner.toString().slice(0,4)}...${h.owner.toString().slice(-4)} movió ${pctMoved.toFixed(2)}% del supply de ${w.symbol}.`, 'alert');
+                h.amount = currentAmount;
+             } else if (Math.abs(diff) > 0) {
+                h.amount = currentAmount;
+             }
+          }
+       } catch (e) {}
+    }
+  }
+}
+
 function startLoop() {
   if (loopTimer) clearInterval(loopTimer);
   loopTimer = setInterval(() => {
@@ -2283,6 +2375,11 @@ function startLoop() {
   depositTimer = setInterval(() => {
     checkPendingDeposits();
   }, 60000); // Revisar depósitos cada minuto
+
+  if (whaleMonitorInterval) clearInterval(whaleMonitorInterval);
+  whaleMonitorInterval = setInterval(() => {
+    if (monitorOn) runWhaleMonitor();
+  }, 15000);
 
   syncSolanaSubscriptions().catch(err => console.error('Error starting subscriptions in startLoop:', err));
 }
