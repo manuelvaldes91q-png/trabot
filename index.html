@@ -2362,7 +2362,7 @@ function openWhaleMap(mint, symbol) {
   
   document.body.appendChild(modal);
 
-  fetch('/api/whale-map/' + mint).then(r => r.json()).then(d => {
+  myFetch('/api/whale-map/' + mint).then(r => r.json()).then(d => {
     if (d.error) {
       document.getElementById('whaleContent').innerHTML = `<div style="text-align:center;padding:20px;color:var(--r)">${d.error}</div>`;
       return;
@@ -3217,36 +3217,66 @@ async function runSafetyScan(symbol, address, network) {
       `;
     }
 
+    let rcRisks = res.details?.rugcheckRisks || [];
+    let isLpUnlocked = rcRisks.some(r => r.toLowerCase().includes('lp unlocked') || r.toLowerCase().includes('liquidity not locked'));
+    
+    let formatBool = (val, trueText, falseText) => {
+        if (val === true) return `<div style="color:var(--g);display:flex;align-items:center;gap:3px"><span>✅</span> ${trueText}</div>`;
+        if (val === false) return `<div style="color:var(--r);display:flex;align-items:center;gap:3px"><span>❌</span> ${falseText}</div>`;
+        return `<div style="color:var(--t3)">--</div>`;
+    };
+
+    let top10Pct = res.details?.holderConcentration?.top10Pct;
+    let top10Str = top10Pct !== null && top10Pct !== undefined ? top10Pct + '%' : '--';
+    let top10Color = top10Pct !== null && top10Pct > 50 ? 'var(--r)' : (top10Pct !== null ? 'var(--g)' : 'var(--t3)');
+    let top10Icon = top10Pct !== null && top10Pct > 50 ? '⚠️ ' : (top10Pct !== null ? '✅ ' : '');
+
+    let mintStr = formatBool(res.details?.mintAuthorityRevoked, 'No Mint', 'Activa');
+    let freezeStr = formatBool(res.details?.freezeAuthorityRevoked, 'No Freeze', 'Activa');
+    let lpStr = formatBool(!isLpUnlocked, 'Bloqueada', 'Desbloqueada');
+    
+    let isHoneypot = res.details?.sellSimulation?.attempted ? !res.details?.sellSimulation?.success : null;
+    let hpStr = isHoneypot === null ? '<div style="color:var(--t3)">--</div>' : formatBool(!isHoneypot, 'Pasó Venta', 'Honeypot');
+
+    let gridHtml = `
+      <div style="display:grid;grid-template-columns:repeat(3, 1fr);gap:10px;background:rgba(0,0,0,0.2);padding:12px;border-radius:6px;margin-bottom:8px;">
+        <div style="display:flex;flex-direction:column;">
+            <div style="font-size:7px;color:var(--t2);font-family:var(--mono);margin-bottom:2px;text-transform:uppercase">Top 10</div>
+            <div style="font-size:11px;font-weight:700;color:${top10Color};font-family:var(--mono)">${top10Icon}${top10Str}</div>
+        </div>
+        <div style="display:flex;flex-direction:column;">
+            <div style="font-size:7px;color:var(--t2);font-family:var(--mono);margin-bottom:2px;text-transform:uppercase">Mint Auth</div>
+            <div style="font-size:11px;font-weight:700;font-family:var(--mono)">${mintStr}</div>
+        </div>
+        <div style="display:flex;flex-direction:column;">
+            <div style="font-size:7px;color:var(--t2);font-family:var(--mono);margin-bottom:2px;text-transform:uppercase">Freeze Auth</div>
+            <div style="font-size:11px;font-weight:700;font-family:var(--mono)">${freezeStr}</div>
+        </div>
+        <div style="display:flex;flex-direction:column;">
+            <div style="font-size:7px;color:var(--t2);font-family:var(--mono);margin-bottom:2px;text-transform:uppercase">Liquidez</div>
+            <div style="font-size:11px;font-weight:700;font-family:var(--mono)">${lpStr}</div>
+        </div>
+        <div style="display:flex;flex-direction:column;">
+            <div style="font-size:7px;color:var(--t2);font-family:var(--mono);margin-bottom:2px;text-transform:uppercase">Test Venta</div>
+            <div style="font-size:11px;font-weight:700;font-family:var(--mono)">${hpStr}</div>
+        </div>
+        <div style="display:flex;flex-direction:column;">
+            <div style="font-size:7px;color:var(--t2);font-family:var(--mono);margin-bottom:2px;text-transform:uppercase">Prob de Rug</div>
+            <div style="font-size:11px;font-weight:700;color:${riskBarColor};font-family:var(--mono)">${rcScore}%</div>
+        </div>
+      </div>
+    `;
+
     panel.innerHTML = `
       <div style="background:var(--bg2);border:1px solid var(--bdr);border-radius:5px;padding:8px 10px;margin-top:6px;">
         <div style="font-family:var(--mono);font-size:8px;font-weight:700;color:var(--g);margin-bottom:6px;display:flex;justify-content:space-between;align-items:center;">
           <span style="color:#a855f7">🛡️ ESCÁNER ANTI-RUG / HONEYPOT</span>
-          <span class="tag" style="background:rgba(168,85,247,0.15);color:#a855f7;font-size:7px;border:1px solid rgba(168,85,247,0.2);margin:0">ACTIVO</span>
+          <span class="tag" style="background:rgba(168,85,247,0.15);color:#a855f7;font-size:7px;border:1px solid rgba(168,85,247,0.2);margin:0">${riskText}</span>
         </div>
 
-        <div style="display:flex;align-items:center;justify-content:space-between;background:rgba(0,0,0,0.2);padding:6px 8px;border-radius:4px;margin-bottom:8px;">
-          <div>
-            <div style="font-size:7px;color:var(--t2);font-family:var(--mono)">Estado del Token:</div>
-            <div style="font-size:11px;font-weight:800;color:${riskColor};font-family:var(--mono);">${riskText}</div>
-          </div>
-          <div style="text-align:right;">
-            <div style="font-size:7px;color:var(--t2);font-family:var(--mono)">RugCheck Score:</div>
-            <div style="font-size:11px;font-weight:800;color:${riskBarColor};font-family:var(--mono);">${rcScore} / 100</div>
-          </div>
-        </div>
+        ${gridHtml}
 
-        <div style="font-size:7px;font-family:var(--mono);color:var(--t2);text-transform:uppercase;margin-bottom:4px;font-weight:700;">🔍 Detalle de Seguridad:</div>
-        <div style="background:rgba(0,0,0,0.15); border-radius:4px; border:1px solid rgba(255,255,255,0.03); padding:6px 8px;">
-          <div style="display:flex; justify-content:space-between; font-size:8px; font-family:var(--mono); margin-bottom:4px;">
-            <span>Mint Authority (Imprimir más):</span>
-            ${authorityLabel(res.details?.mintAuthorityRevoked)}
-          </div>
-          <div style="display:flex; justify-content:space-between; font-size:8px; font-family:var(--mono); margin-bottom:4px;">
-            <span>Freeze Authority (Bloquear ventas):</span>
-            ${authorityLabel(res.details?.freezeAuthorityRevoked)}
-          </div>
-          ${simResult}
-        </div>
+        ${simResult}
 
         ${bubbleMapHtml}
 
