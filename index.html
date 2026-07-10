@@ -2332,12 +2332,82 @@ function renderWatchList(){
         <div style="display:flex;gap:3px;flex-wrap:wrap;margin-top:4px">
           ${filledOrds.length?`<button class="btn btn-y btn-xs" onclick="closeTrade(${wi})">💰 Cerrar</button>` :''}
           <button class="btn btn-d btn-xs" onclick="addOrderToWatch(${wi})">+ Orden</button>
+          ${w.network === 'solana' && w.address ? `<button class="btn btn-d btn-xs" onclick="openWhaleMap('${w.address}', '${w.symbol}')">🫧 Mapa</button>` : ''}
           <a href="${w.network === 'solana' ? 'https://dexscreener.com/solana/' + (w.address || '') : 'https://www.mexc.com/exchange/' + w.pair.replace('USDT','_USDT')}" target="_blank" class="btn btn-d btn-xs">${w.network === 'solana' ? 'DexS' : 'MEXC'}↗</a>
           ${w.lastUpdate?`<span style="font-size:7px;color:var(--t3);font-family:var(--mono);padding-top:3px">${new Date(w.lastUpdate).toLocaleTimeString('es',{hour:'2-digit',minute:'2-digit',second:'2-digit'})}</span>` :''}
         </div>
       </div>
     </div>`;
   }).join('');
+}
+
+function openWhaleMap(mint, symbol) {
+  let modal = document.getElementById('whaleModal');
+  if (modal) modal.remove();
+
+  modal = document.createElement('div');
+  modal.id = 'whaleModal';
+  modal.style.cssText = 'position:fixed;top:0;left:0;width:100%;height:100%;background:rgba(0,0,0,0.8);z-index:9999;display:flex;justify-content:center;align-items:center;padding:10px;backdrop-filter:blur(3px);';
+  
+  modal.innerHTML = `
+  <div style="background:var(--bg);border:1px solid var(--bdr);border-radius:10px;width:100%;max-width:450px;padding:15px;box-shadow:0 10px 30px rgba(0,0,0,0.5)">
+    <div style="display:flex;justify-content:space-between;align-items:center;margin-bottom:15px">
+      <div style="font-family:var(--mono);font-size:12px;font-weight:700;color:var(--g)">🫧 WHALE MAP LIVE: ${symbol}</div>
+      <button class="btn btn-d btn-xs" onclick="document.getElementById('whaleModal').remove()">✕</button>
+    </div>
+    <div id="whaleContent" style="min-height:200px;display:flex;flex-direction:column;gap:10px;justify-content:center;align-items:center;color:var(--t2)">
+      ⏳ Cargando datos de ballenas...
+    </div>
+  </div>`;
+  
+  document.body.appendChild(modal);
+
+  fetch('/api/whale-map/' + mint).then(r => r.json()).then(d => {
+    if (d.error) {
+      document.getElementById('whaleContent').innerHTML = `<div style="text-align:center;padding:20px;color:var(--r)">${d.error}</div>`;
+      return;
+    }
+    
+    const cache = d.data;
+    if (!cache.holders || !cache.holders.length) {
+      document.getElementById('whaleContent').innerHTML = `<div style="text-align:center;padding:20px;color:var(--y)">Aún no hay datos.</div>`;
+      return;
+    }
+    
+    const maxAmount = Math.max(...cache.holders.map(h => h.amount));
+    
+    const bubbles = cache.holders.map((h, i) => {
+      const r = 15 + (h.amount / (maxAmount || 1)) * 40;
+      let fill = 'rgba(139, 92, 246, 0.4)';
+      let stroke = '#8b5cf6';
+      if (h.netChange > 0) { fill = 'rgba(0, 229, 160, 0.4)'; stroke = 'var(--g)'; }
+      else if (h.netChange < 0) { fill = 'rgba(239, 68, 68, 0.4)'; stroke = 'var(--r)'; }
+      
+      const cx = 70 + (i % 3) * 130;
+      const row = Math.floor(i / 3);
+      const cy = 70 + row * 115;
+      const pct = cache.totalSupply ? ((h.amount / cache.totalSupply) * 100).toFixed(2) : '0.00';
+      
+      let sign = h.netChange > 0 ? '+' : '';
+      let changeText = h.netChange !== 0 ? `<text x="${cx}" y="${cy + 16}" text-anchor="middle" fill="${stroke}" font-size="9" font-family="var(--mono)" font-weight="bold">${sign}${h.netChange.toLocaleString(undefined,{maximumFractionDigits:0})}</text>` : '';
+
+      return `<circle cx="${cx}" cy="${cy}" r="${r}" fill="${fill}" stroke="${stroke}" stroke-width="2">
+                <title>Wallet: ${h.owner}\nBalance: ${h.amount.toLocaleString()}\nNet Change: ${h.netChange.toLocaleString()}</title>
+              </circle>
+              <text x="${cx}" y="${cy}" text-anchor="middle" dominant-baseline="central" font-size="11" fill="#fff" font-family="var(--mono)" font-weight="bold">${pct}%</text>
+              ${changeText}`;
+    }).join('');
+
+    const html = `
+      <div style="font-size:10px;color:var(--t2);text-align:center;margin-bottom:10px;line-height:1.4">
+        Rastreo en vivo de las principales wallets (excluyendo pools).<br>
+        <span style="color:var(--g);font-weight:bold">Verde (+ entradas)</span> • 
+        <span style="color:var(--r);font-weight:bold">Rojo (- salidas / ganancias)</span>
+      </div>
+      <svg viewBox="0 0 400 480" style="width:100%;height:auto;background:rgba(0,0,0,0.2);border-radius:8px;border:1px solid var(--bdr);">${bubbles}</svg>
+    `;
+    document.getElementById('whaleContent').innerHTML = html;
+  });
 }
 
 // EDITAR ORDEN INDIVIDUAL (inline popup)

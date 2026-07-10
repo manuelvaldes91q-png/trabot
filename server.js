@@ -2318,7 +2318,7 @@ async function runWhaleMonitor() {
          const realHolders = rawHolders.map((h, i) => {
            const ownerAccInfo = ownerInfos[i];
            const isPool = ownerAccInfo ? ownerAccInfo.owner.toString() !== SYSTEM_PROGRAM : false;
-           return { address: h.address, owner: h.owner, amount: h.amount, isPool };
+           return { address: h.address, owner: h.owner.toString(), amount: h.amount, initialAmount: h.amount, netChange: 0, isPool, history: [] };
          }).filter(h => !h.isPool);
 
          whaleCache[mintStr] = { totalSupply, decimals, holders: realHolders };
@@ -2328,7 +2328,7 @@ async function runWhaleMonitor() {
        const cache = whaleCache[mintStr];
        if (!cache.holders || cache.holders.length === 0) continue;
 
-       const accountPubkeys = cache.holders.map(h => h.address);
+       const accountPubkeys = cache.holders.map(h => new PublicKey(h.address));
        try {
           const accInfos = await connection.getMultipleAccountsInfo(accountPubkeys);
           for (let i=0; i<cache.holders.length; i++) {
@@ -2345,13 +2345,17 @@ async function runWhaleMonitor() {
                 continue;
              }
              
-             const diff = h.amount - currentAmount;
-             const pctMoved = cache.totalSupply ? (diff / cache.totalSupply) * 100 : 0;
+             const diff = currentAmount - h.amount;
+             const pctMoved = cache.totalSupply ? (Math.abs(diff) / cache.totalSupply) * 100 : 0;
              
-             if (pctMoved > 5) {
-                addLog(`¡BALLENA MOVIENDO FONDOS! Holder ${h.owner.toString().slice(0,4)}...${h.owner.toString().slice(-4)} movió ${pctMoved.toFixed(2)}% del supply de ${w.symbol}.`, 'alert');
-                h.amount = currentAmount;
-             } else if (Math.abs(diff) > 0) {
+             if (Math.abs(diff) > 0) {
+                h.netChange += diff;
+                h.history.unshift({ type: diff > 0 ? 'in' : 'out', amount: Math.abs(diff), time: Date.now() });
+                if (h.history.length > 5) h.history.length = 5;
+
+                if (pctMoved > 5) {
+                   addLog(`¡BALLENA MOVIENDO FONDOS! Holder ${h.owner.slice(0,4)}...${h.owner.slice(-4)} movió ${pctMoved.toFixed(2)}% del supply de ${w.symbol}.`, 'alert');
+                }
                 h.amount = currentAmount;
              }
           }
@@ -3491,6 +3495,15 @@ app.post('/api/pool/reset_investor', adminAuth, (req, res) => {
 });
 
 // ============================================
+
+app.get('/api/whale-map/:mint', (req, res) => {
+  const mint = req.params.mint;
+  const cache = whaleCache[mint];
+  if (!cache || !cache.holders || cache.holders.length === 0) {
+    return res.json({ error: 'El token no está siendo monitoreado por el Whale Tracker o aún no se han cargado las ballenas. Añádelo al VPS.' });
+  }
+  res.json({ ok: true, data: cache });
+});
 
 app.get('/api/state', async (req, res) => {
   res.setHeader('Cache-Control', 'no-store, no-cache, must-revalidate, proxy-revalidate');
