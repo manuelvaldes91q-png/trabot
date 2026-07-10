@@ -3212,6 +3212,7 @@ async function runSafetyScan(symbol, address, network) {
           <a href="https://app.bubblemaps.io/sol/token/${address}" target="_blank" rel="noopener" style="display:inline-block;margin-top:6px;font-size:8px;font-family:var(--mono);color:#a855f7;text-decoration:underline;">
             🔗 Ver mapa completo con clusters en Bubblemaps.io →
           </a>
+          <button class="btn btn-d btn-xs" style="margin-top:8px;width:100%;font-size:9px" onclick="openWhaleMap('${address}', '${d.symbol}')">🫧 Ver Mapa de Ballenas en Vivo (Requiere VPS)</button>
         </div>
       `;
     }
