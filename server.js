@@ -1047,6 +1047,25 @@ async function checkTokenSafety(tokenMint) {
     }
 
     if (largestAccounts && largestAccounts.value && largestAccounts.value.length > 0) {
+      try {
+        const decimals = mintInfo ? mintInfo.decimals : 0;
+        const totalSupply = mintInfo ? Number(mintInfo.supply) / (10 ** decimals) : null;
+
+        const topHolders = largestAccounts.value.slice(0, 10).map(acc => {
+          const amount = decimals ? Number(acc.amount) / (10 ** decimals) : Number(acc.amount);
+          const pct = totalSupply ? (amount / totalSupply) * 100 : null;
+          return { address: acc.address.toString(), amount, pct: pct !== null ? +pct.toFixed(2) : null };
+        });
+
+        const top10Pct = totalSupply ? +topHolders.reduce((a, h) => a + (h.pct || 0), 0).toFixed(2) : null;
+        result.details.holderConcentration = { topHolders, top10Pct };
+
+        if (top10Pct !== null && top10Pct > 80) {
+          result.warnings.push(`⚠️ Alta concentración: el top 10 de holders tiene ${top10Pct}% del supply (puede incluir el pool de liquidez, revisa el bubble map para confirmar).`);
+        }
+      } catch (e) {
+        result.warnings.push(`No se pudo calcular concentración de holders: ${e.message}`);
+      }
       let owner = null;
       let amount = 1000;
       for (const acc of largestAccounts.value) {

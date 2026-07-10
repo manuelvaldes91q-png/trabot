@@ -3115,6 +3115,36 @@ async function runSafetyScan(symbol, address, network) {
       }
     }
 
+    let bubbleMapHtml = '';
+    const hc = res.details?.holderConcentration;
+    if (hc && hc.topHolders && hc.topHolders.length) {
+      const colors = ['#a855f7','#8b5cf6','#7c3aed','#6d28d9','#5b21b6','#4c1d95','#3730a3','#312e81','#1e3a8a','#1e40af'];
+      const maxPct = Math.max(...hc.topHolders.map(h => h.pct || h.amount));
+      const bubbles = hc.topHolders.map((h, i) => {
+        const val = h.pct !== null ? h.pct : h.amount;
+        const r = 8 + (val / (maxPct || 1)) * 34;
+        const label = h.pct !== null ? `${h.pct}%` : h.amount.toLocaleString();
+        return `<circle cx="${40 + (i % 5) * 78}" cy="${i < 5 ? 45 : 105}" r="${r.toFixed(1)}" fill="${colors[i]}" fill-opacity="0.55" stroke="${colors[i]}" stroke-width="1.5"><title>${h.address}: ${label}</title></circle>
+                <text x="${40 + (i % 5) * 78}" y="${i < 5 ? 45 : 105}" text-anchor="middle" dominant-baseline="central" font-size="8" fill="#fff" font-family="monospace">${label}</text>`;
+      }).join('');
+
+      bubbleMapHtml = `
+        <div style="margin-top:8px;background:rgba(0,0,0,0.15);border-radius:4px;border:1px solid rgba(255,255,255,0.03);padding:8px;">
+          <div style="display:flex;justify-content:space-between;align-items:center;margin-bottom:4px;">
+            <span style="font-size:7px;font-family:var(--mono);color:var(--t2);text-transform:uppercase;font-weight:700;">🫧 Concentración de Holders (Top 10)</span>
+            ${hc.top10Pct !== null ? `<span style="font-size:9px;font-family:var(--mono);font-weight:800;color:${hc.top10Pct > 80 ? 'var(--r)' : 'var(--t2)'}">${hc.top10Pct}% del supply</span>` : ''}
+          </div>
+          <svg viewBox="0 0 430 140" style="width:100%;height:auto;">${bubbles}</svg>
+          <div style="font-size:6.5px;color:var(--t2);font-family:var(--mono);margin-top:2px;">
+            ⚠️ Puede incluir el pool de liquidez como "holder" — no asumas que es una sola persona sin confirmar.
+          </div>
+          <a href="https://app.bubblemaps.io/sol/token/${address}" target="_blank" rel="noopener" style="display:inline-block;margin-top:6px;font-size:8px;font-family:var(--mono);color:#a855f7;text-decoration:underline;">
+            🔗 Ver mapa completo con clusters en Bubblemaps.io →
+          </a>
+        </div>
+      `;
+    }
+
     panel.innerHTML = `
       <div style="background:var(--bg2);border:1px solid var(--bdr);border-radius:5px;padding:8px 10px;margin-top:6px;">
         <div style="font-family:var(--mono);font-size:8px;font-weight:700;color:var(--g);margin-bottom:6px;display:flex;justify-content:space-between;align-items:center;">
@@ -3145,6 +3175,8 @@ async function runSafetyScan(symbol, address, network) {
           </div>
           ${simResult}
         </div>
+
+        ${bubbleMapHtml}
 
         <div style="margin-top:8px;">
           <div style="font-size:7px;font-family:var(--mono);color:var(--t2);text-transform:uppercase;margin-bottom:4px;font-weight:700;">⚠️ Alertas / Advertencias:</div>
