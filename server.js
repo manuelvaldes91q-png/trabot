@@ -422,6 +422,8 @@ function saveState() {
     delete safeAppConfig.tgBotToken;
     delete safeAppConfig.dextoolsApiKey;
     delete safeAppConfig.twitterBearerToken;
+    delete safeAppConfig.solanaTrackerApiKey;
+    delete safeAppConfig.solanaRpcUrl;
 
     fs.writeFileSync(tmp, JSON.stringify({ SIM, watchItems, logs, monitorOn, monitorInterval, mode, solMode, appConfig: safeAppConfig, poolConfig: safePoolConfig }));
     fs.renameSync(tmp, STATE_FILE);
@@ -966,6 +968,26 @@ async function transferAdminCommission(inv, amountUSDC) {
 
 const MIN_SOL_FOR_GAS = 0.015;
 const GAS_TOPUP_AMOUNT = 0.02;
+
+
+async function fetchSolanaTrackerData(tokenMint) {
+  const apiKey = appConfig.solanaTrackerApiKey || process.env.SOLANATRACKER_API_KEY;
+  if (!apiKey) return null;
+  try {
+    const res = await fetchWithRetry(`https://data.solanatracker.io/tokens/${tokenMint}`, {
+      headers: { 'x-api-key': apiKey },
+      timeout: 8000
+    }, 2, 1000);
+    if (!res || !res.ok) return null;
+    return await res.json();
+  } catch (e) {
+    return null;
+  }
+}
+
+async function detectSnipersAndBundlers(connection, tokenMint, currentHoldersMap) {
+  return { snipers: 0, bundlers: 0, sniperWalletsCount: 0, bundlerGroups: 0, note: "Fallback local detection not implemented yet" };
+}
 
 async function checkTokenSafety(tokenMint) {
   const result = { safe: true, warnings: [], details: {} };
@@ -3618,11 +3640,12 @@ app.get('/api/config', adminAuth, (req, res) => {
   delete safeConfig.tgBotToken;
   delete safeConfig.dextoolsApiKey;
   delete safeConfig.twitterBearerToken;
+  delete safeConfig.solanaTrackerApiKey;
   res.json(safeConfig);
 });
 
 app.post('/api/config', adminAuth, (req, res) => {
-  const { mexcApiKey, mexcApiSecret, tgBotToken, tgChatId, appPassword, solanaPrivateKey, solanaRpcUrl, solanaBaseToken, solanaSlippage, solanaPriorityFee, dextoolsApiKey, twitterBearerToken, safetyCheckEnabled, useJitoBundle } = req.body;
+  const { mexcApiKey, mexcApiSecret, tgBotToken, tgChatId, appPassword, solanaPrivateKey, solanaRpcUrl, solanaBaseToken, solanaSlippage, solanaPriorityFee, dextoolsApiKey, twitterBearerToken, solanaTrackerApiKey, safetyCheckEnabled, useJitoBundle } = req.body;
   if(mexcApiKey !== undefined) appConfig.mexcApiKey = mexcApiKey;
   if(mexcApiSecret !== undefined) appConfig.mexcApiSecret = mexcApiSecret;
   if(tgBotToken !== undefined) appConfig.tgBotToken = tgBotToken;
@@ -3633,6 +3656,7 @@ app.post('/api/config', adminAuth, (req, res) => {
     const oldRpc = appConfig.solanaRpcUrl;
     appConfig.solanaRpcUrl = solanaRpcUrl;
     if (oldRpc !== solanaRpcUrl) {
+      console.log('⚠️ ADVERTENCIA: La URL de Solana RPC ha sido cambiada. Asegúrate de copiarla en el archivo .env como SOLANA_RPC_URL para que sobreviva a los reinicios.');
       connectSolanaWs();
     }
   }
@@ -3641,6 +3665,7 @@ app.post('/api/config', adminAuth, (req, res) => {
   if(solanaPriorityFee !== undefined) appConfig.solanaPriorityFee = solanaPriorityFee;
   if(dextoolsApiKey !== undefined) appConfig.dextoolsApiKey = dextoolsApiKey;
   if(twitterBearerToken !== undefined) appConfig.twitterBearerToken = twitterBearerToken;
+  if(solanaTrackerApiKey !== undefined) appConfig.solanaTrackerApiKey = solanaTrackerApiKey;
   if(safetyCheckEnabled !== undefined) appConfig.safetyCheckEnabled = !!safetyCheckEnabled;
   if(useJitoBundle !== undefined) appConfig.useJitoBundle = !!useJitoBundle;
   saveState();
