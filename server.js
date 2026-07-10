@@ -1048,20 +1048,52 @@ async function checkTokenSafety(tokenMint) {
 
     if (largestAccounts && largestAccounts.value && largestAccounts.value.length > 0) {
       try {
-        const decimals = mintInfo ? mintInfo.decimals : 0;
-        const totalSupply = mintInfo ? Number(mintInfo.supply) / (10 ** decimals) : null;
+        let totalSupply = mintInfo ? Number(mintInfo.supply) / (10 ** mintInfo.decimals) : null;
+        if (totalSupply === null) {
+          for (const rpc of rpcs) {
+            try {
+              const conn = new Connection(rpc, 'confirmed');
+              const supplyInfo = await conn.getTokenSupply(new PublicKey(tokenMint));
+              totalSupply = supplyInfo.value.uiAmount;
+              break;
+            } catch (e) {}
+          }
+        }
 
-        const topHolders = largestAccounts.value.slice(0, 10).map(acc => {
-          const amount = decimals ? Number(acc.amount) / (10 ** decimals) : Number(acc.amount);
-          const pct = totalSupply ? (amount / totalSupply) * 100 : null;
-          return { address: acc.address.toString(), amount, pct: pct !== null ? +pct.toFixed(2) : null };
+        const rawHolders = [];
+        const ownerPubkeys = [];
+        for (const acc of largestAccounts.value.slice(0, 10)) {
+          try {
+            const info = await getAccount(simConnection, acc.address);
+            const amount = acc.decimals !== undefined
+              ? Number(acc.amount) / (10 ** acc.decimals)
+              : Number(info.amount) / (10 ** (mintInfo ? mintInfo.decimals : 0));
+            rawHolders.push({ address: acc.address.toString(), owner: info.owner, amount });
+            ownerPubkeys.push(info.owner);
+          } catch (e) {}
+        }
+
+        const SYSTEM_PROGRAM = '11111111111111111111111111111111111111111';
+        let ownerInfos = [];
+        try {
+          ownerInfos = await simConnection.getMultipleAccountsInfo(ownerPubkeys);
+        } catch (e) {}
+
+        const allHolders = rawHolders.map((h, i) => {
+          const ownerAccInfo = ownerInfos[i];
+          const isPool = ownerAccInfo ? ownerAccInfo.owner.toString() !== SYSTEM_PROGRAM : false;
+          const pct = totalSupply ? (h.amount / totalSupply) * 100 : null;
+          return { address: h.address, amount: h.amount, pct: pct !== null ? +pct.toFixed(2) : null, isPool };
         });
 
-        const top10Pct = totalSupply ? +topHolders.reduce((a, h) => a + (h.pct || 0), 0).toFixed(2) : null;
-        result.details.holderConcentration = { topHolders, top10Pct };
+        const realHolders = allHolders.filter(h => !h.isPool);
+        const poolsExcluded = allHolders.length - realHolders.length;
+        const top10Pct = totalSupply ? +realHolders.reduce((a, h) => a + (h.pct || 0), 0).toFixed(2) : null;
+
+        result.details.holderConcentration = { topHolders: realHolders, poolsExcluded, top10Pct };
 
         if (top10Pct !== null && top10Pct > 80) {
-          result.warnings.push(`⚠️ Alta concentración: el top 10 de holders tiene ${top10Pct}% del supply (puede incluir el pool de liquidez, revisa el bubble map para confirmar).`);
+          result.warnings.push(`⚠️ Alta concentración real (excluyendo pools de liquidez): el top de holders reales tiene ${top10Pct}% del supply.`);
         }
       } catch (e) {
         result.warnings.push(`No se pudo calcular concentración de holders: ${e.message}`);

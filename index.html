@@ -3136,7 +3136,7 @@ async function runSafetyScan(symbol, address, network) {
           </div>
           <svg viewBox="0 0 430 140" style="width:100%;height:auto;">${bubbles}</svg>
           <div style="font-size:6.5px;color:var(--t2);font-family:var(--mono);margin-top:2px;">
-            ⚠️ Puede incluir el pool de liquidez como "holder" — no asumas que es una sola persona sin confirmar.
+            ✅ ${hc.poolsExcluded > 0 ? `Se excluyeron ${hc.poolsExcluded} cuenta(s) de pool/contrato — solo se muestran wallets reales.` : 'No se detectaron pools entre los top holders.'}
           </div>
           <a href="https://app.bubblemaps.io/sol/token/${address}" target="_blank" rel="noopener" style="display:inline-block;margin-top:6px;font-size:8px;font-family:var(--mono);color:#a855f7;text-decoration:underline;">
             🔗 Ver mapa completo con clusters en Bubblemaps.io →
