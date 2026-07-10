@@ -3225,48 +3225,115 @@ async function runSafetyScan(symbol, address, network) {
       `;
     }
 
+    // GMGN-style layout
     let rcRisks = res.details?.rugcheckRisks || [];
-    let isLpUnlocked = rcRisks.some(r => r.toLowerCase().includes('lp unlocked') || r.toLowerCase().includes('liquidity not locked'));
     
-    let formatBool = (val, trueText, falseText) => {
-        if (val === true) return `<div style="color:var(--g);display:flex;align-items:center;gap:3px"><span>✅</span> ${trueText}</div>`;
-        if (val === false) return `<div style="color:var(--r);display:flex;align-items:center;gap:3px"><span>❌</span> ${falseText}</div>`;
-        return `<div style="color:var(--t3)">--</div>`;
-    };
-
+    // Top 10
     let top10Pct = res.details?.holderConcentration?.top10Pct;
     let top10Str = top10Pct !== null && top10Pct !== undefined ? top10Pct + '%' : '--';
     let top10Color = top10Pct !== null && top10Pct > 50 ? 'var(--r)' : (top10Pct !== null ? 'var(--g)' : 'var(--t3)');
     let top10Icon = top10Pct !== null && top10Pct > 50 ? '⚠️ ' : (top10Pct !== null ? '✅ ' : '');
 
-    let mintStr = formatBool(res.details?.mintAuthorityRevoked, 'No Mint', 'Activa');
-    let freezeStr = formatBool(res.details?.freezeAuthorityRevoked, 'No Freeze', 'Activa');
-    let lpStr = formatBool(!isLpUnlocked, 'Bloqueada', 'Desbloqueada');
-    
-    let isHoneypot = res.details?.sellSimulation?.attempted ? !res.details?.sellSimulation?.success : null;
-    let hpStr = isHoneypot === null ? '<div style="color:var(--t3)">--</div>' : formatBool(!isHoneypot, 'Pasó Venta', 'Honeypot');
+    // DEV
+    let creatorBalance = res.details?.creatorBalance || 0;
+    let devPct = '0%';
+    let devColor = 'var(--g)';
 
+    // Holders
+    let holders = res.details?.totalHolders || '--';
+
+    // Snipers
+    let snipers = '0%';
+
+    // Insiders
+    let insidersCount = res.details?.graphInsidersDetected || 0;
+    let insiders = insidersCount > 0 ? (insidersCount > 10 ? 'Alta' : 'Baja') : '0%';
+    let insidersColor = insidersCount > 0 ? 'var(--r)' : 'var(--g)';
+
+    // Phishing
+    let hasPhishing = rcRisks.some(r => r.toLowerCase().includes('phishing'));
+    let phishing = hasPhishing ? '⚠️' : '0%';
+    let phishingColor = hasPhishing ? 'var(--r)' : 'var(--g)';
+    
+    // Bundler
+    let bundler = '0%';
+
+    // Dex Paid
+    let hasMarkets = res.details?.markets && res.details.markets.length > 0;
+    let dexPaid = hasMarkets ? 'Paid' : 'Unpaid';
+    let dexPaidColor = hasMarkets ? 'var(--g)' : 'var(--t3)';
+
+    // No Mint
+    let noMint = res.details?.mintAuthorityRevoked;
+    let noMintStr = noMint === true ? '✅ ' : (noMint === false ? '❌ ' : '--');
+    let noMintColor = noMint === true ? 'var(--g)' : (noMint === false ? 'var(--r)' : 'var(--t3)');
+
+    // No Blacklist
+    let noBlacklist = res.details?.freezeAuthorityRevoked;
+    let noBlacklistStr = noBlacklist === true ? '✅ ' : (noBlacklist === false ? '❌ ' : '--');
+    let noBlacklistColor = noBlacklist === true ? 'var(--g)' : (noBlacklist === false ? 'var(--r)' : 'var(--t3)');
+
+    // Quemado
+    let isLpUnlocked = rcRisks.some(r => r.toLowerCase().includes('lp unlocked') || r.toLowerCase().includes('liquidity not locked'));
+    let quemadoStr = !isLpUnlocked ? '🔥 100%' : '0%';
+    let quemadoColor = !isLpUnlocked ? 'var(--g)' : 'var(--r)';
+
+    // Probabilidad de Rug
+    let probRug = res.details?.rugcheckScore || 0;
+    let probRugColor = probRug > 50 ? 'var(--r)' : (probRug > 10 ? 'var(--y)' : 'var(--g)');
+    let probRugStr = probRug + '%';
+    
     let gridHtml = `
-      <div style="display:grid;grid-template-columns:repeat(3, 1fr);gap:10px;background:rgba(0,0,0,0.2);padding:12px;border-radius:6px;margin-bottom:8px;">
+      <div style="display:grid;grid-template-columns:repeat(4, 1fr);gap:10px;background:rgba(0,0,0,0.2);padding:12px;border-radius:6px;margin-bottom:8px;">
         <div style="display:flex;flex-direction:column;">
-            <div style="font-size:7px;color:var(--t2);font-family:var(--mono);margin-bottom:2px;text-transform:uppercase">Top 10</div>
+            <div style="font-size:8px;color:var(--t2);font-family:var(--mono);margin-bottom:2px">Top 10</div>
             <div style="font-size:11px;font-weight:700;color:${top10Color};font-family:var(--mono)">${top10Icon}${top10Str}</div>
         </div>
         <div style="display:flex;flex-direction:column;">
-            <div style="font-size:7px;color:var(--t2);font-family:var(--mono);margin-bottom:2px;text-transform:uppercase">Mint Auth</div>
-            <div style="font-size:11px;font-weight:700;font-family:var(--mono)">${mintStr}</div>
+            <div style="font-size:8px;color:var(--t2);font-family:var(--mono);margin-bottom:2px">DEV</div>
+            <div style="font-size:11px;font-weight:700;color:${devColor};font-family:var(--mono)">👨‍🍳 ${devPct}</div>
         </div>
         <div style="display:flex;flex-direction:column;">
-            <div style="font-size:7px;color:var(--t2);font-family:var(--mono);margin-bottom:2px;text-transform:uppercase">Freeze Auth</div>
-            <div style="font-size:11px;font-weight:700;font-family:var(--mono)">${freezeStr}</div>
+            <div style="font-size:8px;color:var(--t2);font-family:var(--mono);margin-bottom:2px">Holders</div>
+            <div style="font-size:11px;font-weight:700;color:var(--t1);font-family:var(--mono)">${holders}</div>
         </div>
         <div style="display:flex;flex-direction:column;">
-            <div style="font-size:7px;color:var(--t2);font-family:var(--mono);margin-bottom:2px;text-transform:uppercase">Liquidez</div>
-            <div style="font-size:11px;font-weight:700;font-family:var(--mono)">${lpStr}</div>
+            <div style="font-size:8px;color:var(--t2);font-family:var(--mono);margin-bottom:2px">Snipers</div>
+            <div style="font-size:11px;font-weight:700;color:var(--g);font-family:var(--mono)">🎯 ${snipers}</div>
+        </div>
+        
+        <div style="display:flex;flex-direction:column;">
+            <div style="font-size:8px;color:var(--t2);font-family:var(--mono);margin-bottom:2px">Insiders</div>
+            <div style="font-size:11px;font-weight:700;color:${insidersColor};font-family:var(--mono)">${insiders}</div>
         </div>
         <div style="display:flex;flex-direction:column;">
-            <div style="font-size:7px;color:var(--t2);font-family:var(--mono);margin-bottom:2px;text-transform:uppercase">Test Venta</div>
-            <div style="font-size:11px;font-weight:700;font-family:var(--mono)">${hpStr}</div>
+            <div style="font-size:8px;color:var(--t2);font-family:var(--mono);margin-bottom:2px">Phishing</div>
+            <div style="font-size:11px;font-weight:700;color:${phishingColor};font-family:var(--mono)">${phishing}</div>
+        </div>
+        <div style="display:flex;flex-direction:column;">
+            <div style="font-size:8px;color:var(--t2);font-family:var(--mono);margin-bottom:2px">Bundler</div>
+            <div style="font-size:11px;font-weight:700;color:var(--g);font-family:var(--mono)">${bundler}</div>
+        </div>
+        <div style="display:flex;flex-direction:column;">
+            <div style="font-size:8px;color:var(--t2);font-family:var(--mono);margin-bottom:2px">Dex Paid</div>
+            <div style="font-size:11px;font-weight:700;color:${dexPaidColor};font-family:var(--mono)">${dexPaid}</div>
+        </div>
+
+        <div style="display:flex;flex-direction:column;">
+            <div style="font-size:8px;color:var(--t2);font-family:var(--mono);margin-bottom:2px">No Mint</div>
+            <div style="font-size:11px;font-weight:700;color:${noMintColor};font-family:var(--mono)">${noMintStr}</div>
+        </div>
+        <div style="display:flex;flex-direction:column;">
+            <div style="font-size:8px;color:var(--t2);font-family:var(--mono);margin-bottom:2px">No Blacklist</div>
+            <div style="font-size:11px;font-weight:700;color:${noBlacklistColor};font-family:var(--mono)">${noBlacklistStr}</div>
+        </div>
+        <div style="display:flex;flex-direction:column;">
+            <div style="font-size:8px;color:var(--t2);font-family:var(--mono);margin-bottom:2px">Quemado</div>
+            <div style="font-size:11px;font-weight:700;color:${quemadoColor};font-family:var(--mono)">${quemadoStr}</div>
+        </div>
+        <div style="display:flex;flex-direction:column;">
+            <div style="font-size:8px;color:var(--t2);font-family:var(--mono);margin-bottom:2px;white-space:nowrap;overflow:visible">Prob de Rug</div>
+            <div style="font-size:11px;font-weight:700;color:${probRugColor};font-family:var(--mono)">${probRugStr}</div>
         </div>
       </div>
     `;

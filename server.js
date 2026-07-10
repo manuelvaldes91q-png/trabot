@@ -970,12 +970,18 @@ const GAS_TOPUP_AMOUNT = 0.02;
 async function checkTokenSafety(tokenMint) {
   const result = { safe: true, warnings: [], details: {} };
   try {
-    const rcRes = await fetchWithRetry(`https://api.rugcheck.xyz/v1/tokens/${tokenMint}/report/summary`, { timeout: 8000 }, 2, 1000);
+    const rcRes = await fetchWithRetry(`https://api.rugcheck.xyz/v1/tokens/${tokenMint}/report`, { timeout: 8000 }, 2, 1000);
     if (rcRes && rcRes.ok) {
       const rc = await rcRes.json();
       const score = rc.score_normalised ?? rc.score ?? 0;
       result.details.rugcheckScore = score;
       result.details.rugcheckRisks = (rc.risks || []).map(r => r.name);
+      result.details.totalHolders = rc.totalHolders;
+      result.details.creatorBalance = rc.creatorBalance;
+      result.details.totalMarketLiquidity = rc.totalMarketLiquidity;
+      result.details.graphInsidersDetected = rc.graphInsidersDetected;
+      result.details.markets = rc.markets;
+      result.details.topHoldersRc = rc.topHolders;
       const dangerRisks = (rc.risks || []).filter(r => r.level === 'danger');
       if (dangerRisks.length > 0) {
         result.safe = false;
