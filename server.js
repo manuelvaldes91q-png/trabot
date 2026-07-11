@@ -145,6 +145,8 @@ async function fetchWithRetry(url, options = {}, retries = 3, initialDelay = 100
 let SIM = { balance: 1000, solBalance: 10, initBal: 1000, trades: [], pnl: 0, wins: 0, losses: 0, totalExec: 0 };
 let watchItems = [];
 let autopilotTradedMints = [];
+let autopilotRejectedMints = {}; // { mintAddress: timestampMs }
+const AUTOPILOT_REJECT_COOLDOWN_MS = 6 * 60 * 60 * 1000; // 6 horas
 let logs = [];
 let monitorOn = false;
 let monitorInterval = 15;
@@ -152,6 +154,7 @@ let cycleN = 0;
 let mode = 'simulated';
 let solMode = 'sim'; // 'sim' o 'wallet'
 let appConfig = {
+  appPassword: 'admin123',
   mexcApiKey: process.env.MEXC_API_KEY || '',
   mexcApiSecret: process.env.MEXC_API_SECRET || '',
   tgBotToken: process.env.TELEGRAM_BOT_TOKEN || '',
@@ -440,7 +443,7 @@ function saveState() {
     delete safeAppConfig.solanaTrackerApiKey;
     delete safeAppConfig.solanaRpcUrl;
 
-    fs.writeFileSync(tmp, JSON.stringify({ SIM, watchItems, autopilotTradedMints, logs, monitorOn, monitorInterval, mode, solMode, appConfig: safeAppConfig, poolConfig: safePoolConfig }));
+    fs.writeFileSync(tmp, JSON.stringify({ SIM, watchItems, autopilotTradedMints, autopilotRejectedMints, logs, monitorOn, monitorInterval, mode, solMode, appConfig: safeAppConfig, poolConfig: safePoolConfig }));
     fs.renameSync(tmp, STATE_FILE);
   } catch (e) {
     console.error("Error guardando estado:", e);
@@ -454,6 +457,7 @@ function loadState() {
       if (data.SIM) SIM = data.SIM;
       if (data.watchItems) watchItems = data.watchItems;
       if (data.autopilotTradedMints) autopilotTradedMints = data.autopilotTradedMints;
+  if (data.autopilotRejectedMints) autopilotRejectedMints = data.autopilotRejectedMints;
       if (data.logs) logs = data.logs;
       if (data.monitorOn !== undefined) monitorOn = data.monitorOn;
       if (data.monitorInterval) monitorInterval = data.monitorInterval;
@@ -2606,12 +2610,19 @@ async function executeAutoTraderCycle() {
       
       const isAlreadyTraded = autopilotTradedMints.some(m => m.toLowerCase() === tokenAddress.toLowerCase());
       if (isAlreadyTraded) continue;
+
+      const rejectedAt = autopilotRejectedMints[tokenAddress.toLowerCase()];
+      if (rejectedAt && (Date.now() - rejectedAt) < AUTOPILOT_REJECT_COOLDOWN_MS) {
+        continue;
+      }
       
       // Safety/Anti-Rug Check
       addLog(`🛡️ [Copiloto] Analizando seguridad de ${p.baseToken.symbol}...`, 'info');
       const safety = await checkTokenSafety(tokenAddress);
       if (!safety.safe) {
-        addLog(`⚠️ [Copiloto] Token ${p.baseToken.symbol} descartado por seguridad: ${safety.warnings.join(', ')}`, 'warn');
+        addLog(`⚠️ [Copiloto] Token ${p.baseToken.symbol} descartado por seguridad: ${safety.warnings.join(', ')}`, 'info');
+        autopilotRejectedMints[tokenAddress.toLowerCase()] = Date.now();
+        saveState();
         continue;
       }
       
@@ -4239,10 +4250,6 @@ async function getAmmLiquidityAnalysis(mint) {
               amountUsd = isUsdc ? quoteDiff : quoteDiff * solPrice;
             } else if (baseDiff > 0) {
               amountUsd = baseDiff * currentPrice;
-            }
-            
-            if (amountUsd === 0) {
-              amountUsd = (volume24h * 0.005) * (1 + Math.random() * 2);
             }
             
             if (amountUsd > 100) {
