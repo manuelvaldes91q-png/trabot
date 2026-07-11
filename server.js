@@ -2617,24 +2617,16 @@ async function executeAutoTraderCycle() {
       
       // Passed safety! Let's analyze its orderbook to find the strongest support wall
       addLog(`🛡️ [Copiloto] ${p.baseToken.symbol} pasó el control de seguridad. Buscando pared de soporte...`, 'info');
-      const obAnalysis = await getAmmLiquidityAnalysis(tokenAddress);
-      if (!obAnalysis || !obAnalysis.available || !obAnalysis.bids || obAnalysis.bids.length === 0) {
+      const wall = await findBestSupportWall(tokenAddress, p.priceUsd);
+      if (!wall || wall.wallPrice <= 0) {
         addLog(`⚠️ [Copiloto] No se pudo encontrar pared de soporte para ${p.baseToken.symbol}.`, 'warn');
         continue;
       }
       
-      // Filter bids to a reasonable pullback range (e.g., between 5% and 25% offset) to avoid placing orders too far down (like -80%)
-      const reasonableBids = obAnalysis.bids.filter(b => b.offsetPct >= 5 && b.offsetPct <= 25);
-      const candidateBids = reasonableBids.length > 0 ? reasonableBids : obAnalysis.bids.filter(b => b.offsetPct >= 3 && b.offsetPct <= 40);
-      
-      // Find the bid wall with maximum total USD support within the candidate range
-      const sortedBids = [...candidateBids].sort((a,b) => b.totalUsd - a.totalUsd);
-      const strongestWall = sortedBids[0];
-      if (!strongestWall || strongestWall.price <= 0) continue;
-      
-      const wallPrice = strongestWall.price;
+      const wallPrice = wall.wallPrice;
       const buyPrice = wallPrice * 1.002;
-      const currentPrice = obAnalysis.currentPrice || p.priceUsd;
+      const currentPrice = wall.currentPrice || p.priceUsd;
+      const wallSourceLabel = wall.isRealOrderbook ? '📖 Orderbook real (Phoenix)' : '📐 Estimación matemática (pool AMM)';
       
       if (buyPrice >= currentPrice * 1.02) {
         continue; // Don't place support order if wall is too high or above current
@@ -2671,7 +2663,7 @@ async function executeAutoTraderCycle() {
             level: 1,
             price: buyPrice,
             amount: tradeAmount,
-            note: `Pared de soporte detectada a $${fpZ(wallPrice, wallPrice)} (+0.2% offset)`,
+            note: `Pared de soporte detectada a $${fpZ(wallPrice, wallPrice)} (+0.2% offset) | ${wallSourceLabel}`,
             status: 'pending',
             type: 'dca',
             sl: stopLossPct,
@@ -2687,8 +2679,8 @@ async function executeAutoTraderCycle() {
       }
       saveState();
       
-      addLog(`🤖 <b>[Copiloto] ORDEN AUTOMÁTICA COLOCADA</b> para <b>${p.baseToken.symbol}</b> en pared de soporte a $${fpZ(buyPrice, buyPrice)} (Monto: $${tradeAmount}, SL: -${stopLossPct}%, TP1: +${takeProfit1Pct}%, TP2: +${takeProfit2Pct}%)`, 'info');
-      sendTelegram(`🤖 <b>[Copiloto Auto-Trading]</b>\n\n🎯 <b>Nueva Orden en Pared de Soporte</b>\nMoneda: <b>${p.baseToken.symbol}</b>\nEntrada en Soporte: <code>$${fpZ(buyPrice, buyPrice)}</code>\nMonto: $${tradeAmount} USD\n🛡️ Seguridad: PASADA (Score: ${safety.details?.rugcheckScore ?? 0}/100)\n\n<i>El bot comprará automáticamente cuando el precio retroceda al soporte.</i>`).catch(() => {});
+      addLog(`🤖 <b>[Copiloto] ORDEN AUTOMÁTICA COLOCADA</b> para <b>${p.baseToken.symbol}</b> en pared de soporte a $${fpZ(buyPrice, buyPrice)} (Monto: $${tradeAmount}, SL: -${stopLossPct}%, TP1: +${takeProfit1Pct}%, TP2: +${takeProfit2Pct}%, Fuente: ${wallSourceLabel})`, 'info');
+      sendTelegram(`🤖 <b>[Copiloto Auto-Trading]</b>\n\n🎯 <b>Nueva Orden en Pared de Soporte</b>\nMoneda: <b>${p.baseToken.symbol}</b>\nEntrada en Soporte: <code>$${fpZ(buyPrice, buyPrice)}</code>\nMonto: $${tradeAmount} USD\n🛡️ Seguridad: PASADA (Score: ${safety.details?.rugcheckScore ?? 0}/100)\n📖 Fuente: ${wallSourceLabel}\n\n<i>El bot comprará automáticamente cuando el precio retroceda al soporte.</i>`).catch(() => {});
       
       break; // Limit to 1 token per cycle
     }
@@ -4163,12 +4155,11 @@ async function getAmmLiquidityAnalysis(mint) {
     const bidWalls = bids.map((b, idx) => {
       const prevDepth = idx === 0 ? 0 : bids[idx - 1].depthUsd;
       const wallUsd = b.depthUsd - prevDepth;
-      // Add minor organic variation to represent typical AMM LP distribution/concentration
-      const modifiedWallUsd = Math.max(10, wallUsd * (1 + (Math.sin(idx * 1.5) * 0.15)));
+      const wallUsdFinal = Math.max(10, wallUsd);
       return {
         price: b.price,
-        quantity: modifiedWallUsd / b.price, // Quantity of base token in wall
-        totalUsd: modifiedWallUsd,
+        quantity: wallUsdFinal / b.price, // Quantity of base token in wall
+        totalUsd: wallUsdFinal,
         offsetPct: b.offsetPct
       };
     });
@@ -4176,11 +4167,11 @@ async function getAmmLiquidityAnalysis(mint) {
     const askWalls = asks.map((a, idx) => {
       const prevDepth = idx === 0 ? 0 : asks[idx - 1].depthUsd;
       const wallUsd = a.depthUsd - prevDepth;
-      const modifiedWallUsd = Math.max(10, wallUsd * (1 + (Math.cos(idx * 1.5) * 0.15)));
+      const wallUsdFinal = Math.max(10, wallUsd);
       return {
         price: a.price,
-        quantity: modifiedWallUsd / a.price,
-        totalUsd: modifiedWallUsd,
+        quantity: wallUsdFinal / a.price,
+        totalUsd: wallUsdFinal,
         offsetPct: a.offsetPct
       };
     });
@@ -4274,36 +4265,7 @@ async function getAmmLiquidityAnalysis(mint) {
       console.warn(`[getAmmLiquidityAnalysis] Error parsing on-chain LP events:`, err.message);
     }
     
-    // Fallback LP Event Generator for fast UI response & resilient operation
-    if (lpEvents.length === 0) {
-      const wallets = [
-        "9xQdDae", "Gv4nWe", "3J7y9w", "FRnZ5q",
-        "8K2xPw", "Hw12sF", "7Yt1Kq", "4t8vSq"
-      ];
-      const now = Date.now();
-      const numEvents = 5 + Math.floor(Math.random() * 4);
-      
-      for (let i = 0; i < numEvents; i++) {
-        const type = Math.random() > 0.35 ? "ADD_LIQUIDITY" : "REMOVE_LIQUIDITY";
-        const isMassive = Math.random() > 0.8;
-        const baseAmount = isMassive ? (liquidityUsd * 0.15) : (liquidityUsd * 0.015);
-        const amountUsd = baseAmount * (0.5 + Math.random());
-        
-        if (amountUsd > 100) {
-          const randWallet = wallets[Math.floor(Math.random() * wallets.length)] + "..." + Math.floor(1000 + Math.random() * 9000);
-          lpEvents.push({
-            signature: "LP_Tx" + Math.random().toString(36).slice(2, 10),
-            timestamp: now - (i * (15 + Math.floor(Math.random() * 45)) * 60000),
-            signer: randWallet + " (Parsed via Solscan/FM Signature)",
-            signerShort: randWallet,
-            type,
-            amountUsd,
-            amountTokens: amountUsd / currentPrice,
-            realOnChain: false
-          });
-        }
-      }
-    }
+    // Removed fallback LP generator
     
     const LPAdditions = lpEvents.filter(e => e.type === "ADD_LIQUIDITY");
     let whaleLpSupport = null;
@@ -4331,7 +4293,8 @@ async function getAmmLiquidityAnalysis(mint) {
       bids: bidWalls,
       asks: askWalls,
       recentLpEvents: lpEvents.sort((a,b) => b.timestamp - a.timestamp),
-      whaleLpSupport
+      whaleLpSupport,
+      lpDataLimited: lpEvents.length === 0
     };
     
   } catch (err) {
@@ -4340,6 +4303,57 @@ async function getAmmLiquidityAnalysis(mint) {
   }
 }
 
+
+async function findBestSupportWall(tokenMint, currentPriceHint) {
+  if (phoenixClient) {
+    let targetMarketKey = null;
+    let isQuote = false;
+    for (const [address, market] of phoenixClient.marketStates.entries()) {
+      const base = market.data.header.baseParams.mintKey.toBase58();
+      const quote = market.data.header.quoteParams.mintKey.toBase58();
+      if (base === tokenMint || quote === tokenMint) {
+        targetMarketKey = address;
+        isQuote = (quote === tokenMint);
+        break;
+      }
+    }
+    if (targetMarketKey && !isQuote) {
+      try {
+        await phoenixClient.refreshMarket(targetMarketKey);
+        const ladder = phoenixClient.getUiLadder(targetMarketKey, 15);
+        if (ladder.bids && ladder.bids.length > 0) {
+          const sortedBids = [...ladder.bids].sort((a, b) => (b.price * b.quantity) - (a.price * a.quantity));
+          const strongestWall = sortedBids[0];
+          return {
+            source: 'phoenix',
+            isRealOrderbook: true,
+            wallPrice: strongestWall.price,
+            wallSizeBase: strongestWall.quantity,
+            currentPrice: ladder.asks?.[0]?.price || currentPriceHint,
+            market: targetMarketKey
+          };
+        }
+      } catch (e) {
+        console.warn(`[findBestSupportWall] Error con mercado Phoenix: ${e.message}`);
+      }
+    }
+  }
+  const obAnalysis = await getAmmLiquidityAnalysis(tokenMint);
+  if (!obAnalysis || !obAnalysis.available || !obAnalysis.bids || obAnalysis.bids.length === 0) return null;
+  const reasonableBids = obAnalysis.bids.filter(b => b.offsetPct >= 5 && b.offsetPct <= 25);
+  const candidateBids = reasonableBids.length > 0 ? reasonableBids : obAnalysis.bids.filter(b => b.offsetPct >= 3 && b.offsetPct <= 40);
+  const sortedBids = [...candidateBids].sort((a, b) => b.totalUsd - a.totalUsd);
+  const strongestWall = sortedBids[0];
+  if (!strongestWall || strongestWall.price <= 0) return null;
+  return {
+    source: 'amm_estimate',
+    isRealOrderbook: false,
+    wallPrice: strongestWall.price,
+    wallSizeUsd: strongestWall.totalUsd,
+    currentPrice: obAnalysis.currentPrice,
+    note: obAnalysis.note
+  };
+}
 
 app.get('/api/orderbook/:tokenMint', adminAuth, async (req, res) => {
    const mint = req.params.tokenMint;

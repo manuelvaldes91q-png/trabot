@@ -3399,7 +3399,7 @@ async function showDetail(d){
              html += '</div>';
 
              // LP Activity Log
-             html += '<div style="color:var(--t2);font-weight:700;margin-bottom:4px;border-bottom:1px solid rgba(255,255,255,0.05);padding-bottom:2px;display:flex;justify-content:space-between"><span>🔄 FLUJO DE LIQUIDEZ RECIENTE (LP)</span><span style="color:#10b981;font-size:7px">● LIVE ON-CHAIN</span></div>';
+             html += `<div style="color:var(--t2);font-weight:700;margin-bottom:4px;border-bottom:1px solid rgba(255,255,255,0.05);padding-bottom:2px;display:flex;justify-content:space-between"><span>🔄 FLUJO DE LIQUIDEZ RECIENTE (LP)</span><span style="color:${amm.recentLpEvents.length > 0 ? '#10b981' : 'var(--t2)'};font-size:7px">● ${amm.recentLpEvents.length > 0 ? 'LIVE ON-CHAIN' : 'NO DATA'}</span></div>`;
              html += '<div style="display:flex;flex-direction:column;gap:2px;max-height:85px;overflow-y:auto;padding-right:2px">';
              
              amm.recentLpEvents.slice(0, 5).forEach(ev => {
@@ -3417,6 +3417,10 @@ async function showDetail(d){
                    <span style="color:var(--t2);font-size:7px">${agoText} ago</span>
                  </div>`;
              });
+             
+             if (amm.recentLpEvents.length === 0) {
+                 html += '<div style="color:var(--t2);font-size:8px;padding:4px;text-align:center">No se detectó actividad reciente</div>';
+             }
              
              html += '</div>';
 
