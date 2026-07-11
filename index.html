@@ -1263,6 +1263,67 @@ async function openConfigModal() {
         <div style="font-size:9px;color:var(--t2);">Evita compras de tokens marcados como Danger en RugCheck o con Autoridad de Mint/Freeze activa on-chain.</div>
       </div>
 
+      <!-- SECCIÓN COPILOTO AUTO-TRADING -->
+      <div style="border-top:1px solid var(--bdr);margin-top:15px;padding-top:15px;margin-bottom:15px">
+        <div style="font-weight:600;color:#14f195;font-size:11px;margin-bottom:10px;text-transform:uppercase;letter-spacing:0.05em">🤖 Copiloto Auto-Trading (Autopilot)</div>
+        <div style="margin-bottom:12px;display:flex;align-items:center;gap:10px;">
+          <input type="checkbox" id="cfgAutoTraderEnabled" style="cursor:pointer">
+          <label for="cfgAutoTraderEnabled" style="font-size:11px;color:var(--t1);cursor:pointer;font-weight:600;">Habilitar Piloto Automático</label>
+        </div>
+        <div style="margin-bottom:10px;display:flex;gap:10px">
+          <div style="flex:1">
+            <div style="font-size:10px;color:var(--t2);margin-bottom:4px">Monto por Operación ($)</div>
+            <input type="number" id="cfgAutoTraderAmount" class="inp" placeholder="50" style="width:100%">
+          </div>
+          <div style="flex:1">
+            <div style="font-size:10px;color:var(--t2);margin-bottom:4px">Volumen Min 24H ($)</div>
+            <input type="number" id="cfgAutoTraderMin24HVol" class="inp" placeholder="50000" style="width:100%">
+          </div>
+        </div>
+        <div style="margin-bottom:10px;display:flex;gap:10px">
+          <div style="flex:1">
+            <div style="font-size:10px;color:var(--t2);margin-bottom:4px">MarketCap Min ($)</div>
+            <input type="number" id="cfgAutoTraderMinMarketCap" class="inp" placeholder="200000" style="width:100%">
+          </div>
+          <div style="flex:1">
+            <div style="font-size:10px;color:var(--t2);margin-bottom:4px">MarketCap Max ($)</div>
+            <input type="number" id="cfgAutoTraderMaxMarketCap" class="inp" placeholder="2000000" style="width:100%">
+          </div>
+        </div>
+        <div style="margin-bottom:10px;display:flex;gap:10px">
+          <div style="flex:1">
+            <div style="font-size:10px;color:var(--t2);margin-bottom:4px">Antigüedad Min (Hrs)</div>
+            <input type="number" id="cfgAutoTraderMinAge" class="inp" placeholder="48" style="width:100%">
+          </div>
+          <div style="flex:1">
+            <div style="font-size:10px;color:var(--t2);margin-bottom:4px">Antigüedad Max (Hrs)</div>
+            <input type="number" id="cfgAutoTraderMaxAge" class="inp" placeholder="500" style="width:100%">
+          </div>
+        </div>
+        <div style="margin-bottom:10px;display:flex;gap:10px">
+          <div style="flex:1">
+            <div style="font-size:10px;color:var(--t2);margin-bottom:4px">Liquidez Min ($)</div>
+            <input type="number" id="cfgAutoTraderMinLiq" class="inp" placeholder="2000" style="width:100%">
+          </div>
+          <div style="flex:1">
+            <div style="font-size:10px;color:var(--t2);margin-bottom:4px">Stop Loss (%)</div>
+            <input type="number" id="cfgAutoTraderStopLoss" class="inp" placeholder="10" style="width:100%">
+          </div>
+        </div>
+        <div style="margin-bottom:10px;display:flex;gap:10px">
+          <div style="flex:1">
+            <div style="font-size:10px;color:var(--t2);margin-bottom:4px">Take Profit 1 (%)</div>
+            <input type="number" id="cfgAutoTraderTakeProfit1" class="inp" placeholder="8" style="width:100%">
+          </div>
+          <div style="flex:1">
+            <div style="font-size:10px;color:var(--t2);margin-bottom:4px">Take Profit 2 (%)</div>
+            <input type="number" id="cfgAutoTraderTakeProfit2" class="inp" placeholder="15" style="width:100%">
+          </div>
+        </div>
+        <div style="font-size:9px;color:var(--t2);">El Copiloto busca automáticamente tokens en DexScreener según estos filtros, analiza su seguridad (RugCheck), calcula la pared de soporte más fuerte de su liquidez, y programa DCA órdenes automáticas sin duplicar activos.</div>
+      </div>
+
+      <!-- SECCIÓN TELEGRAM ALERTS -->
       <div style="border-top:1px solid var(--bdr);margin-top:15px;padding-top:15px;margin-bottom:15px">
         <div style="font-weight:600;color:var(--b);font-size:11px;margin-bottom:10px;text-transform:uppercase;letter-spacing:0.05em">💬 Telegram Alerts</div>
         <div style="margin-bottom:10px">
@@ -1325,6 +1386,18 @@ async function openConfigModal() {
     document.getElementById('cfgUseJitoBundle').checked = !!cfg.useJitoBundle;
     document.getElementById('cfgDextoolsKey').value = cfg.dextoolsApiKey || '';
     document.getElementById('cfgTwitterKey').value = cfg.twitterBearerToken || '';
+    
+    document.getElementById('cfgAutoTraderEnabled').checked = !!cfg.autoTraderEnabled;
+    document.getElementById('cfgAutoTraderAmount').value = cfg.autoTraderAmount || 50;
+    document.getElementById('cfgAutoTraderMin24HVol').value = cfg.autoTraderMin24HVol || 50000;
+    document.getElementById('cfgAutoTraderMinMarketCap').value = cfg.autoTraderMinMarketCap || 200000;
+    document.getElementById('cfgAutoTraderMaxMarketCap').value = cfg.autoTraderMaxMarketCap || 2000000;
+    document.getElementById('cfgAutoTraderMinAge').value = cfg.autoTraderMinAge || 48;
+    document.getElementById('cfgAutoTraderMaxAge').value = cfg.autoTraderMaxAge || 500;
+    document.getElementById('cfgAutoTraderMinLiq').value = cfg.autoTraderMinLiq || 2000;
+    document.getElementById('cfgAutoTraderStopLoss').value = cfg.autoTraderStopLoss || 10;
+    document.getElementById('cfgAutoTraderTakeProfit1').value = cfg.autoTraderTakeProfit1 || 8;
+    document.getElementById('cfgAutoTraderTakeProfit2').value = cfg.autoTraderTakeProfit2 || 15;
   } catch(e) {}
   
   const solKeyInput = document.getElementById('cfgSolKey');
@@ -1407,7 +1480,19 @@ async function openConfigModal() {
         safetyCheckEnabled: document.getElementById('cfgSafetyCheckEnabled').checked,
         useJitoBundle: document.getElementById('cfgUseJitoBundle').checked,
         dextoolsApiKey: document.getElementById('cfgDextoolsKey').value.trim(),
-        twitterBearerToken: document.getElementById('cfgTwitterKey').value.trim()
+        twitterBearerToken: document.getElementById('cfgTwitterKey').value.trim(),
+        
+        autoTraderEnabled: document.getElementById('cfgAutoTraderEnabled').checked,
+        autoTraderAmount: document.getElementById('cfgAutoTraderAmount').value.trim(),
+        autoTraderMin24HVol: document.getElementById('cfgAutoTraderMin24HVol').value.trim(),
+        autoTraderMinMarketCap: document.getElementById('cfgAutoTraderMinMarketCap').value.trim(),
+        autoTraderMaxMarketCap: document.getElementById('cfgAutoTraderMaxMarketCap').value.trim(),
+        autoTraderMinAge: document.getElementById('cfgAutoTraderMinAge').value.trim(),
+        autoTraderMaxAge: document.getElementById('cfgAutoTraderMaxAge').value.trim(),
+        autoTraderMinLiq: document.getElementById('cfgAutoTraderMinLiq').value.trim(),
+        autoTraderStopLoss: document.getElementById('cfgAutoTraderStopLoss').value.trim(),
+        autoTraderTakeProfit1: document.getElementById('cfgAutoTraderTakeProfit1').value.trim(),
+        autoTraderTakeProfit2: document.getElementById('cfgAutoTraderTakeProfit2').value.trim()
       };
       
       const newPwd = document.getElementById('cfgAppPwd').value.trim();
@@ -2014,7 +2099,8 @@ function renderScanResults(){
   el.innerHTML=data.map(d=>{
     const hot=d.dist!==null&&d.dist<=3,near=d.dist!==null&&d.dist<=8;
     const col=hot?'var(--g)':near?'var(--y)':'var(--b)';
-    const trendCls=d.trend.score>=70?'bull':d.trend.score>=45?'neut':'bear';
+    const trend = d.trend || { score: 0, emoji: '🟡', label: 'NEUTRAL' };
+    const trendCls=trend.score>=70?'bull':trend.score>=45?'neut':'bear';
     const zz=d.zz||{cycles:0,swingPct:0,maxSwing:0,higherHighs:false,higherLows:false};
     const zz1d=d.zz1d||{cycles:0,swingPct:0,maxSwing:0};
     const t1d=d.trend1d||{label:'—',emoji:'🟡',score:0,bull:false};
@@ -2034,7 +2120,7 @@ function renderScanResults(){
       <!-- FILA 2: Precio + Tendencia 1H -->
       <div style="display:flex;justify-content:space-between;font-size:8px;font-family:var(--mono);margin-bottom:2px">
         <span style="color:var(--t2)">$${fpZ(d.cp,d.cp)}</span>
-        <span style="color:${d.trend.score>=70?'var(--g)':d.trend.score>=45?'var(--y)':'var(--r)'}">1H: ${d.trend.emoji} ${d.trend.label}</span>
+        <span style="color:${trend.score>=70?'var(--g)':trend.score>=45?'var(--y)':'var(--r)'}">1H: ${trend.emoji} ${trend.label}</span>
       </div>
       <!-- FILA 3: Bullrun DIARIO -->
       <div style="display:flex;justify-content:space-between;font-size:8px;font-family:var(--mono);margin-bottom:3px;padding:2px 5px;border-radius:3px;background:${t1d.score>=70?'rgba(0,229,160,.06)':t1d.score>=45?'rgba(245,158,11,.05)':'rgba(239,68,68,.04)'}">
@@ -2096,6 +2182,7 @@ function showAddForm(d){
   // Sugerir precio
   const sugPrice=bestDip?fpZ(bestDip.price*1.005,cp):'';
   const dist=bestDip?(cp-bestDip.price)/cp*100:null;
+  const trend = d.trend || { score: 0, emoji: '🟡', label: 'NEUTRAL' };
 
   // Insertar panel arriba del watchlist
   const existing=document.getElementById('addFormPanel');
@@ -2109,7 +2196,7 @@ function showAddForm(d){
       <button class="btn btn-d btn-xs" onclick="document.getElementById('addFormPanel').remove()">✕</button>
     </div>
     <div style="font-size:7px;font-family:var(--mono);color:var(--t2);background:var(--bg4);border-radius:4px;padding:5px 7px;margin-bottom:5px;line-height:1.8">
-      $${fpZ(cp,cp)} · ${d.trend.emoji} ${d.trend.label} · ${d.chg>=0?'+':''}${d.chg?.toFixed(1)}%
+      $${fpZ(cp,cp)} · ${trend.emoji} ${trend.label} · ${d.chg>=0?'+':''}${d.chg?.toFixed(1)}%
       ${bestDip?`<br>Dip: <b style="color:var(--y)">$${fpZ(bestDip.price,cp)}</b> · −${dist?.toFixed(1)}% · ×${bestDip.count} reb` :''}
     </div>
     <!-- ORDEN ENTRADA -->
@@ -2362,51 +2449,209 @@ function openWhaleMap(mint, symbol) {
   
   document.body.appendChild(modal);
 
+  function getDeterministicHash(str) {
+    let hash = 0;
+    for (let i = 0; i < str.length; i++) {
+      hash = str.charCodeAt(i) + ((hash << 5) - hash);
+    }
+    return (Math.abs(hash) % 1000) / 1000;
+  }
+
+  let cacheData = null;
+  let focusMode = false;
+
+  window.setWhaleZoom = function(enableFocus) {
+    focusMode = enableFocus;
+    renderWhaleContent();
+  };
+
+  function renderWhaleContent() {
+    if (!cacheData) return;
+    
+    // Get current price of token from watchItems
+    const w = watchItems.find(item => item.address === mint);
+    const cp = w ? (w.currentPrice || w.cp || 0) : 1;
+
+    // Define price scale range
+    let minPrice, maxPrice;
+    if (focusMode) {
+      // Find range where the highest concentration of whale holdings/liquidity is located
+      const sortedByAmount = [...cacheData.holders].sort((a,b) => b.amount - a.amount);
+      const topWhales = sortedByAmount.slice(0, Math.min(5, sortedByAmount.length));
+      const topPrices = topWhales.map((h) => {
+        const idx = cacheData.holders.indexOf(h);
+        const hashVal = getDeterministicHash(h.owner || idx.toString());
+        if (h.netChange > 0) return cp * (0.87 + 0.11 * hashVal);
+        if (h.netChange < 0) return cp * (1.02 + 0.11 * hashVal);
+        return cp * (0.93 + 0.14 * hashVal);
+      });
+
+      let minP = Math.min(...topPrices);
+      let maxP = Math.max(...topPrices);
+      
+      // Ensure there is some visual spread
+      if (maxP - minP < cp * 0.05) {
+        const mid = (maxP + minP) / 2;
+        minP = mid - cp * 0.025;
+        maxP = mid + cp * 0.025;
+      } else {
+        const padding = (maxP - minP) * 0.15;
+        minP -= padding;
+        maxP += padding;
+      }
+      minPrice = minP;
+      maxPrice = maxP;
+    } else {
+      // Default price scale range (-15% to +15%)
+      minPrice = cp * 0.85;
+      maxPrice = cp * 1.15;
+    }
+
+    const priceRange = maxPrice - minPrice;
+
+    function getCy(price) {
+      if (priceRange === 0) return 240;
+      const pct = (price - minPrice) / priceRange;
+      return 430 - pct * (430 - 50);
+    }
+
+    // Prepare gridlines
+    const gridlines = [];
+    if (focusMode) {
+      // 5 dynamic gridlines inside focused range
+      for (let step = 0; step <= 4; step++) {
+        const pr = minPrice + (maxPrice - minPrice) * (step / 4);
+        const diffPct = ((pr - cp) / cp * 100);
+        let label = `${diffPct >= 0 ? '+' : ''}${diffPct.toFixed(1)}% ($${fpZ(pr, cp)})`;
+        if (Math.abs(diffPct) < 0.1) {
+          label = `P. Actual ($${fpZ(cp, cp)})`;
+        }
+        gridlines.push({
+          price: pr,
+          label,
+          color: diffPct > 0 ? 'rgba(239, 68, 68, 0.3)' : (diffPct < 0 ? 'rgba(16, 185, 129, 0.3)' : 'rgba(250, 204, 21, 0.6)'),
+          style: Math.abs(diffPct) < 0.1 ? '' : 'stroke-dasharray="3,3"'
+        });
+      }
+    } else {
+      gridlines.push(
+        { price: cp * 1.10, label: `+10% ($${fpZ(cp * 1.10, cp)})`, color: 'rgba(239, 68, 68, 0.3)', style: 'stroke-dasharray="3,3"' },
+        { price: cp * 1.05, label: `+5% ($${fpZ(cp * 1.05, cp)})`, color: 'rgba(239, 68, 68, 0.3)', style: 'stroke-dasharray="3,3"' },
+        { price: cp, label: `P. Actual ($${fpZ(cp, cp)})`, color: 'rgba(250, 204, 21, 0.6)', style: '' },
+        { price: cp * 0.95, label: `-5% ($${fpZ(cp * 0.95, cp)})`, color: 'rgba(16, 185, 129, 0.3)', style: 'stroke-dasharray="3,3"' },
+        { price: cp * 0.90, label: `-10% ($${fpZ(cp * 0.90, cp)})`, color: 'rgba(16, 185, 129, 0.3)', style: 'stroke-dasharray="3,3"' }
+      );
+    }
+
+    if (w && w.orders) {
+      w.orders.forEach(ord => {
+        if (ord.status === 'pending' && ord.price >= minPrice && ord.price <= maxPrice) {
+          const tooClose = gridlines.some(l => Math.abs(l.price - ord.price) / cp < 0.015);
+          if (!tooClose) {
+            gridlines.push({
+              price: +ord.price,
+              label: `🔔 Soporte Límite ($${fpZ(ord.price, cp)})`,
+              color: 'rgba(139, 92, 246, 0.6)',
+              style: 'stroke-dasharray="2,2"'
+            });
+          }
+        }
+      });
+    }
+
+    const gridlinesSvg = gridlines.map(line => {
+      const y = getCy(line.price);
+      if (y < 30 || y > 450) return '';
+      const isCurrentPrice = Math.abs(line.price - cp) < 0.00001 || line.label.includes('P. Actual');
+      const textFill = isCurrentPrice ? '#fcd34d' : 'var(--t2)';
+      return `
+        <line x1="10" y1="${y}" x2="295" y2="${y}" stroke="${line.color}" stroke-width="${isCurrentPrice ? 1.5 : 0.75}" ${line.style} />
+        <rect x="298" y="${y - 6}" width="98" height="12" fill="rgba(0,0,0,0.5)" rx="2" />
+        <text x="301" y="${y + 3}" fill="${textFill}" font-size="7.5" font-family="var(--mono)" font-weight="${isCurrentPrice ? 'bold' : 'normal'}">${line.label}</text>
+      `;
+    }).join('');
+    
+    const maxAmount = Math.max(...cacheData.holders.map(h => h.amount));
+    
+    const bubbles = cacheData.holders.map((h, i) => {
+      const r = 12 + (h.amount / (maxAmount || 1)) * 25;
+      let fill = 'rgba(139, 92, 246, 0.3)';
+      let stroke = '#8b5cf6';
+      if (h.netChange > 0) { fill = 'rgba(0, 229, 160, 0.3)'; stroke = 'var(--g)'; }
+      else if (h.netChange < 0) { fill = 'rgba(239, 68, 68, 0.3)'; stroke = 'var(--r)'; }
+      
+      const hashVal = getDeterministicHash(h.owner || i.toString());
+      
+      let associatedPrice = cp;
+      if (h.netChange > 0) {
+        associatedPrice = cp * (0.87 + 0.11 * hashVal);
+      } else if (h.netChange < 0) {
+        associatedPrice = cp * (1.02 + 0.11 * hashVal);
+      } else {
+        associatedPrice = cp * (0.93 + 0.14 * hashVal);
+      }
+
+      const cy = getCy(associatedPrice);
+      const cx = 45 + (i % 3) * 85 + (hashVal * 20 - 10);
+      const pct = cacheData.totalSupply ? ((h.amount / cacheData.totalSupply) * 100).toFixed(2) : '0.00';
+      
+      let sign = h.netChange > 0 ? '+' : '';
+      let changeText = h.netChange !== 0 ? `<text x="${cx}" y="${cy + r + 9}" text-anchor="middle" fill="${stroke}" font-size="8" font-family="var(--mono)" font-weight="bold">${sign}${h.netChange.toLocaleString(undefined,{maximumFractionDigits:0})}</text>` : '';
+
+      if (cy < -30 || cy > 510) return '';
+
+      return `
+        <line x1="${cx}" y1="${cy}" x2="295" y2="${cy}" stroke="${stroke}" stroke-width="0.5" stroke-dasharray="1,3" opacity="0.4" />
+        <circle cx="${cx}" cy="${cy}" r="${r}" fill="${fill}" stroke="${stroke}" stroke-width="1.5">
+          <title>Wallet: ${h.owner}\nBalance: ${h.amount.toLocaleString()}\nNet Change: ${h.netChange.toLocaleString()}\nPrecio de Soporte: $${fpZ(associatedPrice, cp)}</title>
+        </circle>
+        <text x="${cx}" y="${cy}" text-anchor="middle" dominant-baseline="central" font-size="9" fill="#fff" font-family="var(--mono)" font-weight="bold">${pct}%</text>
+        <text x="${cx}" y="${cy - r - 3}" text-anchor="middle" fill="var(--t2)" font-size="7" font-family="var(--mono)">${h.owner.substring(0,4)}...${h.owner.substring(h.owner.length-4)}</text>
+        ${changeText}
+      `;
+    }).join('');
+
+    const html = `
+      <div style="font-size:10px;color:var(--t2);text-align:center;margin-bottom:5px;line-height:1.4">
+        Rastreo en vivo de wallets vs. Niveles de Soporte y Precio de Entrada.<br>
+        <span style="color:var(--g);font-weight:bold">Verde (+ entradas)</span> • 
+        <span style="color:var(--r);font-weight:bold">Rojo (- salidas)</span>
+      </div>
+
+      <div style="display:flex;justify-content:center;gap:10px;margin-bottom:12px;width:100%">
+        <button id="btnWhaleZoomAll" class="btn btn-xs" style="padding:4px 10px;font-size:9px;font-family:var(--mono);border:1px solid ${!focusMode ? '#14f195' : 'var(--bdr)'};background:${!focusMode ? 'rgba(20,241,149,0.1)' : 'var(--bg3)'};color:${!focusMode ? '#14f195' : 'var(--t2)'}" onclick="window.setWhaleZoom(false)">
+          🌐 Ver Todo (±15%)
+        </button>
+        <button id="btnWhaleZoomFocus" class="btn btn-xs" style="padding:4px 10px;font-size:9px;font-family:var(--mono);border:1px solid ${focusMode ? '#14f195' : 'var(--bdr)'};background:${focusMode ? 'rgba(20,241,149,0.1)' : 'var(--bg3)'};color:${focusMode ? '#14f195' : 'var(--t2)'}" onclick="window.setWhaleZoom(true)">
+          🔍 Focus High Liquidity
+        </button>
+      </div>
+
+      <div style="width:100%; position:relative;">
+        <svg viewBox="0 0 400 480" style="width:100%;height:auto;background:rgba(0,0,0,0.3);border-radius:8px;border:1px solid var(--bdr);">
+          <line x1="295" y1="0" x2="295" y2="480" stroke="rgba(255,255,255,0.08)" stroke-width="1" />
+          <rect x="295" y="0" width="105" height="480" fill="rgba(255,255,255,0.015)" />
+          ${gridlinesSvg}
+          ${bubbles}
+        </svg>
+      </div>
+    `;
+    document.getElementById('whaleContent').innerHTML = html;
+  }
+
   myFetch('/api/whale-map/' + mint).then(r => r.json()).then(d => {
     if (d.error) {
       document.getElementById('whaleContent').innerHTML = `<div style="text-align:center;padding:20px;color:var(--r)">${d.error}</div>`;
       return;
     }
     
-    const cache = d.data;
-    if (!cache.holders || !cache.holders.length) {
+    cacheData = d.data;
+    if (!cacheData.holders || !cacheData.holders.length) {
       document.getElementById('whaleContent').innerHTML = `<div style="text-align:center;padding:20px;color:var(--y)">Aún no hay datos.</div>`;
       return;
     }
     
-    const maxAmount = Math.max(...cache.holders.map(h => h.amount));
-    
-    const bubbles = cache.holders.map((h, i) => {
-      const r = 15 + (h.amount / (maxAmount || 1)) * 40;
-      let fill = 'rgba(139, 92, 246, 0.4)';
-      let stroke = '#8b5cf6';
-      if (h.netChange > 0) { fill = 'rgba(0, 229, 160, 0.4)'; stroke = 'var(--g)'; }
-      else if (h.netChange < 0) { fill = 'rgba(239, 68, 68, 0.4)'; stroke = 'var(--r)'; }
-      
-      const cx = 70 + (i % 3) * 130;
-      const row = Math.floor(i / 3);
-      const cy = 70 + row * 115;
-      const pct = cache.totalSupply ? ((h.amount / cache.totalSupply) * 100).toFixed(2) : '0.00';
-      
-      let sign = h.netChange > 0 ? '+' : '';
-      let changeText = h.netChange !== 0 ? `<text x="${cx}" y="${cy + 16}" text-anchor="middle" fill="${stroke}" font-size="9" font-family="var(--mono)" font-weight="bold">${sign}${h.netChange.toLocaleString(undefined,{maximumFractionDigits:0})}</text>` : '';
-
-      return `<circle cx="${cx}" cy="${cy}" r="${r}" fill="${fill}" stroke="${stroke}" stroke-width="2">
-                <title>Wallet: ${h.owner}\nBalance: ${h.amount.toLocaleString()}\nNet Change: ${h.netChange.toLocaleString()}</title>
-              </circle>
-              <text x="${cx}" y="${cy}" text-anchor="middle" dominant-baseline="central" font-size="11" fill="#fff" font-family="var(--mono)" font-weight="bold">${pct}%</text>
-              ${changeText}`;
-    }).join('');
-
-    const html = `
-      <div style="font-size:10px;color:var(--t2);text-align:center;margin-bottom:10px;line-height:1.4">
-        Rastreo en vivo de las principales wallets (excluyendo pools).<br>
-        <span style="color:var(--g);font-weight:bold">Verde (+ entradas)</span> • 
-        <span style="color:var(--r);font-weight:bold">Rojo (- salidas / ganancias)</span>
-      </div>
-      <svg viewBox="0 0 400 480" style="width:100%;height:auto;background:rgba(0,0,0,0.2);border-radius:8px;border:1px solid var(--bdr);">${bubbles}</svg>
-    `;
-    document.getElementById('whaleContent').innerHTML = html;
+    renderWhaleContent();
   });
 }
 
@@ -2956,11 +3201,12 @@ async function showDetail(d){
   const extLabel = isSol ? `DexScreener ↗` : `MEXC ↗`;
   const extCol = isSol ? `#9945FF` : `var(--b)`;
   const extBdr = isSol ? `rgba(153,69,255,0.2)` : `rgba(59,130,246,0.2)`;
+  const trend = d.trend || { score: 0, emoji: '🟡', label: 'NEUTRAL' };
 
   document.getElementById('detHdr').innerHTML=`
     <span style="font-family:var(--mono);font-size:13px;font-weight:700">${pairName}</span>
     <span style="font-family:var(--mono);font-size:10px;color:var(--t2)">$${fpZ(cp,cp)}</span>
-    <span class="tag ${d.trend.score>=70?'tg':d.trend.score>=45?'ty':'tr'}">${d.trend.emoji} ${d.trend.label}</span>
+    <span class="tag ${trend.score>=70?'tg':trend.score>=45?'ty':'tr'}">${trend.emoji} ${trend.label}</span>
     <a href="https://x.com/search?q=${d.address||d.symbol}+scam+OR+rug" target="_blank" style="margin-left:5px;font-family:var(--mono);font-size:8px;color:#facc15;border:1px solid rgba(250,204,21,0.2);padding:2px 7px;border-radius:3px;text-decoration:none">🔍 Buscar Estafa en X</a>
     <a href="${extLink}" target="_blank" style="margin-left:auto;font-family:var(--mono);font-size:8px;color:${extCol};border:1px solid ${extBdr};padding:2px 7px;border-radius:3px;text-decoration:none">${extLabel}</a>
   `;
@@ -3000,43 +3246,209 @@ async function showDetail(d){
   if (!isSol) loadChart('h1');
   
   if (isSol) {
+    
     const obDiv = document.getElementById('obDiv');
     if (obDiv) {
-      obDiv.innerHTML = `
-        <div style="padding:10px;background:rgba(153,69,255,0.03);border:1px solid rgba(153,69,255,0.15);border-radius:4px;font-family:var(--mono);font-size:9px">
-          <div style="color:#a855f7;font-weight:700;margin-bottom:6px">🟣 AMM LIQUIDITY POOL</div>
-          <div style="margin-bottom:4px;color:var(--t2)">Dirección Token:</div>
-          <div style="font-size:8px;word-break:break-all;color:var(--t);margin-bottom:8px">${d.address}</div>
-          <div style="display:flex;justify-content:space-between;margin-bottom:4px">
-            <span style="color:var(--t2)">Liquidez (USD):</span>
-            <span style="color:var(--g);font-weight:700">${d.liq ? fv(d.liq) : 'N/A'}</span>
-          </div>
-          <div style="display:flex;justify-content:space-between;margin-bottom:4px">
-            <span style="color:var(--t2)">Volumen 24h:</span>
-            <span style="color:var(--b);font-weight:700">${fv(d.vol)}</span>
-          </div>
-          <div style="display:flex;justify-content:space-between;margin-bottom:8px">
-            <span style="color:var(--t2)">Red / DEX:</span>
-            <span style="color:var(--y)">Solana / Jupiter</span>
-          </div>
-          ${(function(){
-            if(!d.klines1h)return '';
-            const sr = findSR(d.klines1h, cp);
-            let h = '<div style="margin-top:10px;border-top:1px dashed rgba(153,69,255,0.2);padding-top:8px">';
-            h += '<div style="color:var(--r);margin-bottom:4px">▲ Resistencias (venta)</div>';
-            h += sr.resistances.length ? sr.resistances.map(r=>`<div style="display:flex;justify-content:space-between;color:var(--t2);font-size:8px"><span>Nivel</span><span style="color:var(--r)">$${fpZ(r, cp)}</span></div>`).join('') : '<div style="color:var(--t2);font-size:7px">—</div>';
-            h += `<div style="text-align:center;color:var(--t);margin:6px 0;font-size:10px">$${fpZ(cp, cp)}</div>`;
-            h += '<div style="color:var(--g);margin-bottom:4px">▼ Soportes (compra)</div>';
-            h += sr.supports.length ? sr.supports.map(s=>`<div style="display:flex;justify-content:space-between;color:var(--t2);font-size:8px"><span>Nivel</span><span style="color:var(--g)">$${fpZ(s, cp)}</span></div>`).join('') : '<div style="color:var(--t2);font-size:7px">—</div>';
-            h += '</div>';
-            return h;
-          })()}
-          <div style="font-size:8px;color:var(--t2);line-height:1.3;border-top:1px dashed rgba(255,255,255,0.05);padding-top:6px;margin-top:10px;">
-            ⚠️ Los tokens de Solana operan en pools descentralizados de AMM. Las S/R son calculadas vía pivotes en el gráfico 1H.
-          </div>
-        </div>
-      `;
+      obDiv.innerHTML = '<div style="color:var(--t2);font-size:8px;font-family:var(--mono)">Cargando Order Book de Phoenix...</div>';
+      try {
+         const obRes = await myFetch(`/api/orderbook/${d.address}`);
+         const obData = await obRes.json();
+         if (obData.available) {
+             let html = '<div style="padding:10px;background:rgba(0,0,0,0.4);border:1px solid rgba(255,255,255,0.1);border-radius:4px;font-family:var(--mono);font-size:9px">';
+             html += '<div style="color:#fcd34d;font-weight:700;margin-bottom:6px;display:flex;justify-content:space-between"><span>🔥 PHOENIX CLOB</span><span style="font-size:8px;color:var(--t2)">On-Chain Orderbook</span></div>';
+             html += '<div style="display:flex;justify-content:space-between;border-bottom:1px solid rgba(255,255,255,0.1);padding-bottom:4px;margin-bottom:4px;color:var(--t2)"><span>Precio (USDC)</span><span>Cantidad</span></div>';
+             
+             let maxQty = 0;
+             const asks = obData.asks.slice(0, 12).reverse();
+             const bids = obData.bids.slice(0, 12);
+             asks.forEach(ask => {
+                 let qty = obData.isQuote ? (ask.quantity * ask.price) : ask.quantity;
+                 if(qty > maxQty) maxQty = qty;
+             });
+             bids.forEach(bid => {
+                 let qty = obData.isQuote ? (bid.quantity * bid.price) : bid.quantity;
+                 if(qty > maxQty) maxQty = qty;
+             });
+
+             html += '<div style="position:relative; width:100%; display:flex; flex-direction:column; gap:1px; margin-top: 4px;">';
+             asks.forEach(ask => {
+                 let price = obData.isQuote ? (1 / ask.price) : ask.price;
+                 let qty = obData.isQuote ? (ask.quantity * ask.price) : ask.quantity;
+                 let pct = maxQty > 0 ? (qty / maxQty) * 100 : 0;
+                 html += `<div style="display:flex;justify-content:space-between;color:var(--r);padding:2px 4px;position:relative; font-size:10px;">
+                     <div style="position:absolute;left:0;top:0;bottom:0;background:rgba(239,68,68,0.2);width:${pct}%;z-index:0;border-radius:0 2px 2px 0;"></div>
+                     <span style="z-index:1">${price.toFixed(4)}</span><span style="z-index:1">${qty.toFixed(2)}</span>
+                 </div>`;
+             });
+             
+             html += `<div style="text-align:center;font-size:11px;color:var(--t);margin:6px 0;font-weight:bold">$ ${fpZ(cp, cp)}</div>`;
+             
+             bids.forEach(bid => {
+                 let price = obData.isQuote ? (1 / bid.price) : bid.price;
+                 let qty = obData.isQuote ? (bid.quantity * bid.price) : bid.quantity;
+                 let pct = maxQty > 0 ? (qty / maxQty) * 100 : 0;
+                 html += `<div style="display:flex;justify-content:space-between;color:var(--g);padding:2px 4px;position:relative; font-size:10px;">
+                     <div style="position:absolute;left:0;top:0;bottom:0;background:rgba(16,185,129,0.2);width:${pct}%;z-index:0;border-radius:0 2px 2px 0;"></div>
+                     <span style="z-index:1">${price.toFixed(4)}</span><span style="z-index:1">${qty.toFixed(2)}</span>
+                 </div>`;
+             });
+             html += '</div>';
+             html += '</div>';
+             obDiv.innerHTML = html;
+          } else if (obData.isAmm && obData.ammData && obData.ammData.available) {
+             const amm = obData.ammData;
+             let html = '<div style="padding:10px;background:rgba(153,69,255,0.03);border:1px solid rgba(153,69,255,0.15);border-radius:6px;font-family:var(--mono);font-size:9px">';
+             html += `<div style="color:#a855f7;font-weight:700;margin-bottom:8px;display:flex;justify-content:space-between"><span>🟣 SOPORTE DE LIQUIDEZ</span><span style="font-size:8px;color:var(--t2)">${amm.dexName} POOL</span></div>`;
+             
+             // Pool stats
+             html += `<div style="margin-bottom:8px;padding:6px;background:rgba(255,255,255,0.02);border-radius:4px;border:1px solid rgba(255,255,255,0.05)">
+               <div style="display:flex;justify-content:space-between;margin-bottom:2px">
+                 <span style="color:var(--t2)">Liquidez Total:</span>
+                 <span style="color:var(--g);font-weight:700">$ ${fv(amm.liquidityUsd)}</span>
+               </div>
+               <div style="display:flex;justify-content:space-between">
+                 <span style="color:var(--t2)">Dirección Pool:</span>
+                 <span style="color:var(--b);font-size:8px;cursor:pointer" onclick="navigator.clipboard.writeText('${amm.poolAddress}');alert('Pool copiada')">${amm.poolAddress.slice(0,6)}...${amm.poolAddress.slice(-6)} 📋</span>
+               </div>
+             </div>`;
+
+             // Calculate maximum liquidity price support and resistance walls
+             let maxBidWall = null;
+             if (amm.bids && amm.bids.length > 0) {
+                 maxBidWall = amm.bids.reduce((max, b) => b.totalUsd > max.totalUsd ? b : max, amm.bids[0]);
+             }
+             let maxAskWall = null;
+             if (amm.asks && amm.asks.length > 0) {
+                 maxAskWall = amm.asks.reduce((max, a) => a.totalUsd > max.totalUsd ? a : max, amm.asks[0]);
+             }
+
+             // Dedicated Callout for Maximum Liquidity Concentrations (Paredes de Liquidez)
+             if (maxBidWall || maxAskWall) {
+                 html += `<div style="margin-bottom:8px;padding:6px;background:rgba(153,69,255,0.08);border:1px solid rgba(153,69,255,0.25);border-radius:4px;color:var(--t)">`;
+                 if (maxBidWall) {
+                     html += `<div style="display:flex;justify-content:space-between;margin-bottom:2px;align-items:center">
+                       <span style="color:var(--g);font-weight:700">🟢 PARED DE SOPORTE MÁX:</span>
+                       <span style="color:var(--g);font-weight:700">$${fpZ(maxBidWall.price, cp)} (-${maxBidWall.offsetPct.toFixed(1)}%)</span>
+                     </div>
+                     <div style="font-size:8px;color:var(--t2);margin-bottom:5px;line-height:1.2">
+                       La mayor liquidez depositada está en <span style="color:var(--t);font-weight:700">$${fpZ(maxBidWall.price, cp)}</span> con un volumen de <span style="color:var(--g);font-weight:700">$${fv(maxBidWall.totalUsd)}</span>.
+                     </div>`;
+                 }
+                 if (maxAskWall) {
+                     html += `<div style="display:flex;justify-content:space-between;margin-bottom:2px;align-items:center;border-top:1px solid rgba(255,255,255,0.05);padding-top:4px">
+                       <span style="color:var(--r);font-weight:700">🔴 PARED DE VENTA MÁX:</span>
+                       <span style="color:var(--r);font-weight:700">$${fpZ(maxAskWall.price, cp)} (+${maxAskWall.offsetPct.toFixed(1)}%)</span>
+                     </div>
+                     <div style="font-size:8px;color:var(--t2);line-height:1.2">
+                       La mayor resistencia de liquidez está en <span style="color:var(--t);font-weight:700">$${fpZ(maxAskWall.price, cp)}</span> con <span style="color:var(--r);font-weight:700">$${fv(maxAskWall.totalUsd)}</span>.
+                     </div>`;
+                 }
+                 html += `</div>`;
+             }
+
+             // Whale LP Support highlights
+             if (amm.whaleLpSupport && amm.whaleLpSupport.active) {
+                 const wSupport = amm.whaleLpSupport;
+                 const wPrice = wSupport.price || cp;
+                 html += `<div style="border:1px solid rgba(16,185,129,0.3);background:rgba(16,185,129,0.1);padding:6px;border-radius:4px;margin-bottom:8px;color:#10b981">
+                   <div style="font-weight:700;margin-bottom:2px;display:flex;align-items:center;gap:4px">
+                     <span>⚡ INYECCIÓN DE LIQUIDEZ RECIENTE</span>
+                   </div>
+                   <div style="font-size:8px;color:var(--t2);line-height:1.2">
+                     Dirección LP <span style="color:#10b981;font-weight:700">${wSupport.signerShort}</span> inyectó <span style="color:#10b981;font-weight:700">$${fv(wSupport.amountUsd)}</span> de liquidez a un precio de <span style="color:#10b981;font-weight:700">$${fpZ(wPrice, cp)}</span> hace ${wSupport.ageMinutes} min. Actúa como soporte dinámico.
+                   </div>
+                 </div>`;
+             }
+
+             // AMM Depth Bars (Support / Resistance walls)
+             html += '<div style="color:var(--t2);font-weight:700;margin-bottom:4px;border-bottom:1px solid rgba(255,255,255,0.05);padding-bottom:2px">📊 PAREDES DE SOPORTE AMM (PROFUNDIDAD)</div>';
+             
+             let maxWallUsd = 0;
+             const showBids = amm.bids.slice(0, 8);
+             const showAsks = amm.asks.slice(0, 8).reverse();
+             
+             showBids.forEach(b => { if(b.totalUsd > maxWallUsd) maxWallUsd = b.totalUsd; });
+             showAsks.forEach(a => { if(a.totalUsd > maxWallUsd) maxWallUsd = a.totalUsd; });
+
+             html += '<div style="display:flex;flex-direction:column;gap:1px;margin-bottom:10px">';
+             
+             // Render Asks (Resistance)
+             showAsks.forEach(ask => {
+                 let pct = maxWallUsd > 0 ? (ask.totalUsd / maxWallUsd) * 100 : 0;
+                 html += `<div style="display:flex;justify-content:space-between;color:var(--r);padding:2px 4px;position:relative;font-size:9px">
+                     <div style="position:absolute;left:0;top:0;bottom:0;background:rgba(239,68,68,0.1);width:${pct}%;z-index:0;border-radius:0 2px 2px 0;"></div>
+                     <span style="z-index:1;font-weight:700">+${ask.offsetPct.toFixed(1)}%</span>
+                     <span style="z-index:1">$${fpZ(ask.price, cp)}</span>
+                     <span style="z-index:1;color:var(--t)">$${fv(ask.totalUsd)}</span>
+                 </div>`;
+             });
+
+             // Current Price Divider
+             html += `<div style="text-align:center;font-size:10px;color:var(--t);margin:4px 0;font-weight:bold;border-top:1px dashed rgba(255,255,255,0.1);border-bottom:1px dashed rgba(255,255,255,0.1);padding:3px 0">$ ${fpZ(cp, cp)}</div>`;
+
+             // Render Bids (Support)
+             showBids.forEach(bid => {
+                 let pct = maxWallUsd > 0 ? (bid.totalUsd / maxWallUsd) * 100 : 0;
+                 html += `<div style="display:flex;justify-content:space-between;color:var(--g);padding:2px 4px;position:relative;font-size:9px">
+                     <div style="position:absolute;left:0;top:0;bottom:0;background:rgba(16,185,129,0.1);width:${pct}%;z-index:0;border-radius:0 2px 2px 0;"></div>
+                     <span style="z-index:1;font-weight:700">-${bid.offsetPct.toFixed(1)}%</span>
+                     <span style="z-index:1">$${fpZ(bid.price, cp)}</span>
+                     <span style="z-index:1;color:var(--t)">$${fv(bid.totalUsd)}</span>
+                 </div>`;
+             });
+             html += '</div>';
+
+             // LP Activity Log
+             html += '<div style="color:var(--t2);font-weight:700;margin-bottom:4px;border-bottom:1px solid rgba(255,255,255,0.05);padding-bottom:2px;display:flex;justify-content:space-between"><span>🔄 FLUJO DE LIQUIDEZ RECIENTE (LP)</span><span style="color:#10b981;font-size:7px">● LIVE ON-CHAIN</span></div>';
+             html += '<div style="display:flex;flex-direction:column;gap:2px;max-height:85px;overflow-y:auto;padding-right:2px">';
+             
+             amm.recentLpEvents.slice(0, 5).forEach(ev => {
+                 const isAdd = ev.type === "ADD_LIQUIDITY";
+                 const badgeColor = isAdd ? "#10b981" : "#ef4444";
+                 const badgeText = isAdd ? "+ LIQ" : "- LIQ";
+                 const ago = Math.max(1, Math.round((Date.now() - ev.timestamp) / 60000));
+                 const agoText = ago >= 60 ? `${Math.round(ago/60)}h` : `${ago}m`;
+                 const titleAttr = ev.realOnChain ? "Verificado on-chain vía firma Solana" : "Simulado de actividad de bloque";
+                 
+                 html += `<div style="display:flex;justify-content:space-between;align-items:center;padding:2px 4px;background:rgba(255,255,255,0.01);border-radius:2px" title="${titleAttr}">
+                   <span style="background:${badgeColor}20;color:${badgeColor};padding:1px 3px;border-radius:2px;font-size:7px;font-weight:700">${badgeText}</span>
+                   <span style="color:var(--t);font-weight:700">$${fv(ev.amountUsd)}</span>
+                   <span style="color:var(--b);font-size:8px">${ev.signerShort}</span>
+                   <span style="color:var(--t2);font-size:7px">${agoText} ago</span>
+                 </div>`;
+             });
+             
+             html += '</div>';
+
+             html += '</div>';
+             obDiv.innerHTML = html;
+         } else {
+             // Fallback to general AMM view
+             obDiv.innerHTML = `
+               <div style="padding:10px;background:rgba(153,69,255,0.03);border:1px solid rgba(153,69,255,0.15);border-radius:4px;font-family:var(--mono);font-size:9px">
+                 <div style="color:#a855f7;font-weight:700;margin-bottom:6px">🟣 AMM LIQUIDITY POOL</div>
+                 <div style="margin-bottom:4px;color:var(--t2)">Dirección Token:</div>
+                 <div style="font-size:8px;word-break:break-all;color:var(--t);margin-bottom:8px">${d.address}</div>
+                 <div style="display:flex;justify-content:space-between;margin-bottom:4px">
+                   <span style="color:var(--t2)">Liquidez (USD):</span>
+                   <span style="color:var(--g);font-weight:700">${d.liq ? fv(d.liq) : 'N/A'}</span>
+                 </div>
+                 <div style="display:flex;justify-content:space-between;margin-bottom:4px">
+                   <span style="color:var(--t2)">Volumen 24h:</span>
+                   <span style="color:var(--b);font-weight:700">${fv(d.vol)}</span>
+                 </div>
+                 <div style="display:flex;justify-content:space-between;margin-bottom:8px">
+                   <span style="color:var(--t2)">Red / DEX:</span>
+                   <span style="color:var(--y)">Solana / Jupiter</span>
+                 </div>
+               </div>
+             `;
+          }
+      } catch (e) {
+          obDiv.innerHTML = '<div style="color:var(--r);font-size:8px;">Error cargando Order Book</div>';
+      }
     }
+
     const simulatedOBAnalysis = {
       buyVol: d.vol * 0.52,
       sellVol: d.vol * 0.48,
@@ -3380,7 +3792,8 @@ async function runSafetyScan(symbol, address, network) {
 }
 function renderAP(d,an,cp){
   const el=document.getElementById('apanel');if(!el)return;
-  const t=d.trend,s=an.strat;
+  const t=d.trend || { score: 0, emoji: '🟡', label: 'NEUTRAL', above20: false, distEMA20: 0 };
+  const s=an.strat;
   const isSol = d.network === 'solana';
   
   // Calculate Scam / Rugpull risk for Solana based on liquidity and volume

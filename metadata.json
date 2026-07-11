@@ -1,6 +1,6 @@
 {
   "name": "Solana Trading Bot",
-  "description": "A copy trading and swapping bot on Solana with support for Raydium and Jupiter.",
+  "description": "A professional copy trading, swapping, and Auto-Pilot liquidity support wall scanner bot on Solana with Raydium and Jupiter integrations.",
   "requestFramePermissions": [],
   "majorCapabilities": ["MAJOR_CAPABILITY_SERVER_SIDE_GEMINI_API"]
 }
