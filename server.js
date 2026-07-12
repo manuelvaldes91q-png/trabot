@@ -2233,6 +2233,18 @@ function getSolanaWssUrl(rpcUrl) {
   } else if (!wssUrl.startsWith('wss://') && !wssUrl.startsWith('ws://')) {
     wssUrl = 'wss://' + wssUrl;
   }
+
+  try {
+    const parsed = new URL(wssUrl);
+    if (!parsed.hostname || !parsed.hostname.includes('.')) {
+      console.warn(`⚠️ SOLANA_RPC_URL parece inválida ("${rpcUrl}") — usando el RPC público como respaldo. Revisa tu .env, probablemente falta "https://host/?api-key=" antes de la key.`);
+      return 'wss://api.mainnet-beta.solana.com';
+    }
+  } catch (e) {
+    console.warn(`⚠️ SOLANA_RPC_URL no es una URL válida ("${rpcUrl}") — usando el RPC público como respaldo.`);
+    return 'wss://api.mainnet-beta.solana.com';
+  }
+
   return wssUrl;
 }
 
