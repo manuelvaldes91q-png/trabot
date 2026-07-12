@@ -510,7 +510,7 @@ async function initPhoenix() {
       console.log(`Phoenix client initialized with ${phoenixClient.marketStates.size} markets using ${rpc}`);
       return;
     } catch (e) {
-      console.warn(`Phoenix init failed on ${rpc}: ${e.message}`);
+      // console.warn(`Phoenix init failed on ${rpc}: ${e.message}`);
     }
   }
   console.error("Phoenix init failed on all RPCs.");
