@@ -3240,6 +3240,8 @@ async function showDetail(d){
         
         <div style="margin-top:10px;">
           <button class="btn btn-g" style="width:100%;padding:8px;font-size:11px" onclick="quickMarketBuy()">⚡ Comprar a Mercado</button>
+          <button class="btn btn-pu" style="width:100%;padding:8px;font-size:11px;margin-top:5px" onclick="testVolumeProfile()">📊 Test Soporte Volumen</button>
+          <div id="volProfileStatus" style="font-size:10px; margin-top:5px; text-align:center;"></div>
         </div>
       </div>
     </div>`;
@@ -3859,6 +3861,47 @@ function renderLog(){
   if(el)el.innerHTML=filtered.map(l=>`<div class="le"><span class="lt">${l.t}</span><span class="lm ${l.type}">${l.msg}</span></div>`).join('');
 }
 function clearLog(){logs_=[];renderLog();}
+async function testVolumeProfile() {
+  if (!curDet) return alert('Selecciona una moneda');
+  const statusEl = document.getElementById('volProfileStatus');
+  if (statusEl) {
+    statusEl.textContent = 'Calculando...';
+    statusEl.style.color = 'var(--t2)';
+  }
+  
+  try {
+    const res = await myFetch(`/api/support-wall/${curDet.address || curDet.symbol}?price=${curDet.currentPrice || curDet.cp || 0}`);
+    const data = await res.json();
+    
+    if (statusEl) {
+      if (res.ok && data.available) {
+        statusEl.textContent = '✅ Éxito';
+        statusEl.style.color = '#10B981';
+      } else {
+        statusEl.textContent = '❌ Falló';
+        statusEl.style.color = '#EF4444';
+      }
+    }
+  
+    const p = document.createElement('div');
+    p.style.cssText = 'position:fixed;inset:0;background:rgba(0,0,0,0.8);z-index:9000;display:flex;align-items:center;justify-content:center';
+    p.innerHTML = `
+      <div style="background:var(--bg2);width:400px;max-width:95%;border:1px solid var(--bdr);border-radius:8px;padding:20px;font-family:var(--sans)">
+        <div style="font-weight:700;margin-bottom:15px;color:var(--t)">Resultado Test Soporte</div>
+        <div style="font-size:11px;color:var(--t2);margin-bottom:15px;white-space:pre-wrap;word-break:break-all;font-family:var(--mono);max-height:300px;overflow-y:auto">
+          ${JSON.stringify(data, null, 2)}
+        </div>
+        <button class="btn btn-d" style="width:100%" onclick="this.parentElement.parentElement.remove()">Cerrar</button>
+      </div>
+    `;
+    document.body.appendChild(p);
+  } catch (err) {
+     if (statusEl) {
+        statusEl.textContent = '❌ Error';
+        statusEl.style.color = '#EF4444';
+     }
+  }
+}
 function setSt(txt,pct){const e=document.getElementById('stxt');if(e)e.textContent=txt;if(pct!=null&&document.getElementById('pbf'))document.getElementById('pbf').style.width=pct+'%';}
 
 // INIT

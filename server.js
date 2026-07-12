@@ -1602,7 +1602,7 @@ async function preWarmNearbyQuotes() {
       if (getCachedQuote(key)) continue;
 
       const quoteUrl = `https://transaction-v1.raydium.io/compute/swap-base-in?inputMint=${inputMint}&outputMint=${outputMint}&amount=${rawAmount}&slippageBps=${slippageBps}&txVersion=V0`;
-      const qr = await fetchWithRetry(quoteUrl, { timeout: 6000 }, 1, 500);
+      const qr = await fetchWithRetry(quoteUrl, { timeout: 10000 }, 1, 500);
       if (qr && qr.ok) {
         const quoteResponse = await qr.json();
         if (quoteResponse.success) setCachedQuote(key, quoteResponse);
