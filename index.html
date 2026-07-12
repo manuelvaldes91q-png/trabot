@@ -3776,6 +3776,26 @@ async function runSafetyScan(symbol, address, network) {
           </div>
         </div>
 
+        <div style="margin-bottom: 8px;">
+          <div style="display:flex; justify-content:space-between; font-size:7px; font-family:var(--mono); color:var(--t2); margin-bottom:2px;">
+            <span>RugCheck Riesgo (Score)</span>
+            <span style="color:${riskBarColor}">${rcScore}/100</span>
+          </div>
+          <div style="width:100%; height:4px; background:rgba(0,0,0,0.3); border-radius:2px; overflow:hidden;">
+            <div style="width:${Math.min(rcScore, 100)}%; height:100%; background:${riskBarColor}; border-radius:2px; transition: width 0.3s ease;"></div>
+          </div>
+        </div>
+        
+        <div style="margin-bottom: 12px;">
+          <div style="display:flex; justify-content:space-between; font-size:7px; font-family:var(--mono); color:var(--t2); margin-bottom:2px;">
+            <span>Wash Trading (Vol/Liq Ratio)</span>
+            <span style="color:${(res.details?.washTrading?.volLiqRatio || 0) > 50 ? 'var(--r)' : ((res.details?.washTrading?.volLiqRatio || 0) > 20 ? 'var(--y)' : 'var(--g)')}">${res.details?.washTrading?.volLiqRatio || 0}x</span>
+          </div>
+          <div style="width:100%; height:4px; background:rgba(0,0,0,0.3); border-radius:2px; overflow:hidden;">
+            <div style="width:${Math.min(((res.details?.washTrading?.volLiqRatio || 0) / 60) * 100, 100)}%; height:100%; background:${(res.details?.washTrading?.volLiqRatio || 0) > 50 ? 'var(--r)' : ((res.details?.washTrading?.volLiqRatio || 0) > 20 ? 'var(--y)' : 'var(--g)')}; border-radius:2px; transition: width 0.3s ease;"></div>
+          </div>
+        </div>
+
         ${gridHtml}
 
         ${simResult}
@@ -3825,9 +3845,65 @@ function renderAP(d,an,cp){
     ].filter(Boolean).map(([l,v,c])=>`<div style="display:flex;justify-content:space-between;padding:2px 0;border-bottom:1px solid rgba(30,38,56,.3);font-size:8px"><span style="color:var(--t2)">${l}</span><span style="font-family:var(--mono);font-weight:700;color:${c}">${v}</span></div>`).join('')}
     <div style="font-size:7px;color:var(--t2);margin-top:4px;font-family:var(--mono)">⚠️ Solo educativo · No es asesoramiento financiero</div>
   </div>
-  <div id="xScamPanel" style="margin-top:6px"></div>`;
+  <div id="xScamPanel" style="margin-top:6px"></div>
+  <div id="supportWallPanel" style="margin-top:6px"></div>`;
 
   runSafetyScan(d.symbol, d.address || d.pair, d.network);
+  if (isSol) runSupportWallScan(d.symbol, d.address || d.pair, cp);
+}
+
+async function runSupportWallScan(symbol, address, currentPrice) {
+  const panel = document.getElementById('supportWallPanel');
+  if (!panel) return;
+
+  panel.innerHTML = `
+    <div style="background:var(--bg2);border:1px solid var(--bdr);border-radius:5px;padding:8px 10px;text-align:center;">
+      <div style="display:flex;align-items:center;justify-content:center;font-size:8px;color:var(--t2);font-family:var(--mono);">
+        <span style="display:inline-block;margin-right:6px">🧱</span> Buscando nivel de soporte real (Phoenix → Historial de volumen → Estimación AMM)...
+      </div>
+    </div>
+  `;
+
+  try {
+    const fetchRes = await myFetch(`/api/support-wall/${address}?price=${currentPrice || 0}`);
+    if (!fetchRes.ok) throw new Error("Error en servidor al buscar pared de soporte");
+    const res = await fetchRes.json();
+
+    if (!res.available) {
+      panel.innerHTML = `
+        <div style="background:var(--bg2);border:1px solid var(--bdr);border-radius:5px;padding:8px 10px;">
+          <div style="font-size:8px;color:var(--t2);font-family:var(--mono);text-align:center;">🧱 ${res.message || 'No se encontró un nivel de soporte confiable.'}</div>
+        </div>
+      `;
+      return;
+    }
+
+    const sourceLabel = res.source === 'phoenix' ? '📖 Orderbook REAL (Phoenix)'
+      : res.source === 'volume_profile' ? `📊 Historial real (${res.bounces || 0} rebotes detectados)`
+      : '📐 Estimación matemática (pool AMM)';
+    const sourceColor = res.source === 'phoenix' ? 'var(--g)' : res.source === 'volume_profile' ? 'var(--b)' : 'var(--y)';
+
+    const distPct = currentPrice ? (((currentPrice - res.wallPrice) / currentPrice) * 100).toFixed(1) : null;
+
+    panel.innerHTML = `
+      <div style="background:var(--bg2);border:1px solid var(--bdr);border-radius:5px;padding:8px 10px;">
+        <div style="display:flex;justify-content:space-between;align-items:center;margin-bottom:6px;">
+          <span style="font-size:8px;color:var(--t2);font-family:var(--mono);text-transform:uppercase;font-weight:700;">🧱 Nivel de Soporte Detectado</span>
+          <span style="font-size:7px;color:${sourceColor};font-family:var(--mono);font-weight:700;">${sourceLabel}</span>
+        </div>
+        <div style="display:flex;justify-content:space-between;padding:2px 0;font-size:9px">
+          <span style="color:var(--t2)">Precio del soporte</span>
+          <span style="font-family:var(--mono);font-weight:800;color:var(--t)">$${fpZ(res.wallPrice, currentPrice || res.wallPrice)}</span>
+        </div>
+        ${distPct !== null ? `<div style="display:flex;justify-content:space-between;padding:2px 0;font-size:9px"><span style="color:var(--t2)">Distancia del precio actual</span><span style="font-family:var(--mono);font-weight:700;color:var(--y)">-${distPct}%</span></div>` : ''}
+        ${res.volumeUsd ? `<div style="display:flex;justify-content:space-between;padding:2px 0;font-size:9px"><span style="color:var(--t2)">Volumen histórico en esa zona</span><span style="font-family:var(--mono);color:var(--t)">$${fv(res.volumeUsd)}</span></div>` : ''}
+        ${res.wallSizeUsd ? `<div style="display:flex;justify-content:space-between;padding:2px 0;font-size:9px"><span style="color:var(--t2)">Tamaño estimado de la pared</span><span style="font-family:var(--mono);color:var(--t)">$${fv(res.wallSizeUsd)}</span></div>` : ''}
+        ${res.note ? `<div style="font-size:6.5px;color:var(--t2);font-family:var(--mono);margin-top:4px;">ℹ️ ${res.note}</div>` : ''}
+      </div>
+    `;
+  } catch (e) {
+    panel.innerHTML = `<div style="background:var(--bg2);border:1px solid var(--bdr);border-radius:5px;padding:8px 10px;font-size:8px;color:var(--r);font-family:var(--mono);text-align:center;">Error buscando soporte: ${e.message}</div>`;
+  }
 }
 async function refreshOB(){if(curDet)await showDetail(curDet);}
 

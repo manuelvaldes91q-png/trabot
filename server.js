@@ -1151,6 +1151,114 @@ async function detectSnipersAndBundlers(connection, tokenMint, currentHoldersMap
 }
 
 
+async function checkCreatorHistory(tokenMint, knownCreator) {
+  const result = { creatorAddress: null, previousTokensFound: 0, checkedCount: 0, likelyRugged: 0, warning: null };
+  const rpcs = [
+    appConfig.solanaRpcUrl || process.env.SOLANA_RPC_URL,
+    'https://solana.drpc.org',
+    'https://solana-rpc.publicnode.com',
+    'https://rpc.ankr.com/solana',
+    'https://api.mainnet-beta.solana.com'
+  ].filter(Boolean);
+
+  let connection = null;
+  for (const rpc of rpcs) {
+    try {
+      connection = new Connection(rpc, 'confirmed');
+      await connection.getSlot();
+      break;
+    } catch (e) { connection = null; }
+  }
+  if (!connection) return result;
+
+  try {
+    let creator = knownCreator;
+    if (!creator) {
+      const mintPubkey = new PublicKey(tokenMint);
+      let sigs = [];
+      let before = undefined;
+      for (let i = 0; i < 3; i++) {
+        const batch = await connection.getSignaturesForAddress(mintPubkey, { limit: 1000, before }, 'confirmed');
+        if (!batch.length) break;
+        sigs = sigs.concat(batch);
+        if (batch.length < 1000) break;
+        before = batch[batch.length - 1].signature;
+      }
+      if (!sigs.length) return result;
+      const oldest = sigs[sigs.length - 1];
+      const tx = await connection.getParsedTransaction(oldest.signature, { maxSupportedTransactionVersion: 0 });
+      creator = tx?.transaction?.message?.accountKeys?.[0]?.pubkey?.toBase58();
+    }
+    if (!creator) return result;
+    result.creatorAddress = creator;
+
+    const creatorPubkey = new PublicKey(creator);
+    const creatorSigs = await connection.getSignaturesForAddress(creatorPubkey, { limit: 1000 }, 'confirmed');
+    const foundMints = new Set();
+    for (const sig of creatorSigs.slice(0, 200)) {
+      try {
+        const tx = await connection.getParsedTransaction(sig.signature, { maxSupportedTransactionVersion: 0 });
+        if (!tx) continue;
+        const instructions = tx.transaction.message.instructions || [];
+        for (const ix of instructions) {
+          if (ix.parsed && (ix.parsed.type === 'initializeMint' || ix.parsed.type === 'initializeMint2')) {
+            const mintAddr = ix.parsed.info.mint;
+            if (mintAddr && mintAddr !== tokenMint) foundMints.add(mintAddr);
+          }
+        }
+      } catch (e) {}
+    }
+
+    result.previousTokensFound = foundMints.size;
+    if (foundMints.size === 0) return result;
+
+    let checkedCount = 0;
+    let ruggedCount = 0;
+    for (const mint of Array.from(foundMints).slice(0, 5)) {
+      try {
+        const r = await fetchWithRetry(`https://api.dexscreener.com/latest/dex/tokens/${mint}`, { timeout: 5000 }, 1, 500);
+        if (r && r.ok) {
+          const d = await r.json();
+          const pairs = (d.pairs || []).filter(p => p.chainId === 'solana');
+          if (pairs.length > 0) {
+            checkedCount++;
+            const liq = pairs[0].liquidity?.usd || 0;
+            if (liq < 200) ruggedCount++;
+          }
+        }
+      } catch (e) {}
+    }
+
+    result.checkedCount = checkedCount;
+    result.likelyRugged = ruggedCount;
+
+    if (checkedCount >= 2 && (ruggedCount / checkedCount) >= 0.5) {
+      result.warning = `⚠️ El creador ya lanzó ${foundMints.size} token(s) antes; ${ruggedCount}/${checkedCount} de los revisados ya no tienen liquidez (posible patrón de "serial rugger").`;
+    }
+  } catch (e) {
+    console.warn(`[checkCreatorHistory] Error: ${e.message}`);
+  }
+  return result;
+}
+
+function detectWashTrading(volume24h, liquidityUsd, buys24h, sells24h, totalHolders) {
+  const warnings = [];
+  let suspicious = false;
+  const volLiqRatio = liquidityUsd > 0 ? volume24h / liquidityUsd : 0;
+  const totalTxns = (buys24h || 0) + (sells24h || 0);
+
+  if (volLiqRatio > 50) {
+    suspicious = true;
+    warnings.push(`Volumen 24h es ${volLiqRatio.toFixed(0)}x la liquidez del pool — posible volumen inflado artificialmente.`);
+  }
+  if (totalHolders && totalHolders > 0 && totalHolders < 30 && totalTxns > 500) {
+    suspicious = true;
+    warnings.push(`${totalTxns} transacciones en 24h con solo ${totalHolders} holders — patrón típico de wash trading.`);
+  }
+
+  return { suspicious, volLiqRatio: +volLiqRatio.toFixed(2), totalTxns, warnings };
+}
+
 async function checkTokenSafety(tokenMint) {
   const result = { safe: true, warnings: [], details: {} };
   let rcMintAuthority = undefined;
@@ -1419,6 +1527,44 @@ async function checkTokenSafety(tokenMint) {
     }
   } catch (simErr) {
     result.warnings.push(`Simulación de venta omitida: ${simErr.message}`);
+  }
+
+  try {
+    const knownCreator = rc?.creator || rc?.token?.creators?.[0]?.address || null;
+    const creatorHistory = await checkCreatorHistory(tokenMint, knownCreator);
+    result.details.creatorHistory = creatorHistory;
+    if (creatorHistory.warning) {
+      result.safe = false;
+      result.warnings.push(creatorHistory.warning);
+    }
+  } catch (e) {
+    result.warnings.push(`No se pudo revisar historial del creador: ${e.message}`);
+  }
+
+  try {
+    const dsRes = await fetchWithRetry(`https://api.dexscreener.com/latest/dex/tokens/${tokenMint}`, { timeout: 6000 }, 1, 500);
+    if (dsRes && dsRes.ok) {
+      const dsData = await dsRes.json();
+      const pairs = (dsData.pairs || []).filter(p => p.chainId === 'solana');
+      if (pairs.length > 0) {
+        pairs.sort((a, b) => (b.liquidity?.usd || 0) - (a.liquidity?.usd || 0));
+        const mainPair = pairs[0];
+        const wash = detectWashTrading(
+          mainPair.volume?.h24 || 0,
+          mainPair.liquidity?.usd || 0,
+          mainPair.txns?.h24?.buys || 0,
+          mainPair.txns?.h24?.sells || 0,
+          result.details.totalHolders
+        );
+        result.details.washTrading = wash;
+        if (wash.suspicious) {
+          result.safe = false;
+          wash.warnings.forEach(w => result.warnings.push(`⚠️ Volumen sospechoso: ${w}`));
+        }
+      }
+    }
+  } catch (e) {
+    result.warnings.push(`No se pudo revisar volumen sospechoso: ${e.message}`);
   }
 
   return result;
@@ -4631,11 +4777,12 @@ if (isProd) {
     });
 }
 
-// Para evitar conflictos con variables de entorno, forzamos el puerto 5000.
-// Sin embargo, si la app detecta que está corriendo dentro del entorno de desarrollo de AI Studio (Cloud Run), usa el 3000 por requerimiento interno.
-const ACTUAL_PORT = process.env.K_SERVICE ? 3000 : 5000;
+// Para evitar conflictos con variables de entorno, forzamos el puerto 5000 en el VPS.
+// En el entorno de AI Studio (Cloud Run), usa el 3000 por requerimiento interno.
+const IS_AI_STUDIO = process.env.K_SERVICE || process.env.DISABLE_HMR;
+const ACTUAL_PORT = IS_AI_STUDIO ? 3000 : 5000;
 
 app.listen(ACTUAL_PORT, '0.0.0.0', () => {
     console.log(`🚀 SERVIDOR VPS INICIADO 24/7 en puerto ${ACTUAL_PORT}`);
-    console.log(`📁 Panel de control accesible vía IP pública:${ACTUAL_PORT} o enlace generado.`);
+    console.log(`📁 Panel de control accesible vía IP pública:${ACTUAL_PORT}`);
 });
