@@ -160,7 +160,7 @@ let appConfig = {
   tgBotToken: process.env.TELEGRAM_BOT_TOKEN || '',
   tgChatId: process.env.TELEGRAM_CHAT_ID || '',
   solanaPrivateKey: process.env.SOLANA_PRIVATE_KEY || '',
-  solanaRpcUrl: process.env.SOLANA_RPC_URL || 'https://api.mainnet-beta.solana.com',
+  solanaRpcUrl: process.env.SOLANA_RPC_URL || 'https://solana-rpc.publicnode.com',
   solanaBaseToken: process.env.SOLANA_BASE_TOKEN || 'SOL',
   solanaSlippage: process.env.SOLANA_SLIPPAGE ? parseFloat(process.env.SOLANA_SLIPPAGE) : 2.5,
   solanaPriorityFee: process.env.SOLANA_PRIORITY_FEE || 'auto',
@@ -496,13 +496,24 @@ loadState();
 
 let phoenixClient = null;
 async function initPhoenix() {
-  try {
-     const connection = new Connection(appConfig.solanaRpcUrl || process.env.SOLANA_RPC_URL || 'https://api.mainnet-beta.solana.com');
-     phoenixClient = await phoenix.Client.create(connection);
-     console.log(`Phoenix client initialized with ${phoenixClient.marketStates.size} markets.`);
-  } catch (e) {
-     console.error("Phoenix init error:", e);
+  const rpcs = [
+    appConfig.solanaRpcUrl,
+    process.env.SOLANA_RPC_URL,
+    'https://api.mainnet-beta.solana.com',
+    'https://solana-mainnet.rpc.extrnode.com'
+  ].filter(Boolean);
+  
+  for (const rpc of rpcs) {
+    try {
+      const connection = new Connection(rpc);
+      phoenixClient = await phoenix.Client.create(connection);
+      console.log(`Phoenix client initialized with ${phoenixClient.marketStates.size} markets using ${rpc}`);
+      return;
+    } catch (e) {
+      console.warn(`Phoenix init failed on ${rpc}: ${e.message}`);
+    }
   }
+  console.error("Phoenix init failed on all RPCs.");
 }
 setTimeout(initPhoenix, 2000);
 
@@ -900,7 +911,7 @@ async function updateSolanaWalletInfo() {
         return;
     }
     
-    const rpcUrl = appConfig.solanaRpcUrl || process.env.SOLANA_RPC_URL || 'https://api.mainnet-beta.solana.com';
+    const rpcUrl = appConfig.solanaRpcUrl || process.env.SOLANA_RPC_URL || 'https://solana-rpc.publicnode.com';
     const connection = new Connection(rpcUrl, 'confirmed');
     
     const solLamports = await connection.getBalance(keypair.publicKey);
@@ -961,7 +972,7 @@ async function executeSolanaTrade(w, side, amountUSDT, price) {
 
 async function transferAdminCommission(inv, amountUSDC) {
   if (amountUSDC <= 0) return;
-  const rpcUrl = appConfig.solanaRpcUrl || process.env.SOLANA_RPC_URL || 'https://api.mainnet-beta.solana.com';
+  const rpcUrl = appConfig.solanaRpcUrl || process.env.SOLANA_RPC_URL || 'https://solana-rpc.publicnode.com';
   const connection = new Connection(rpcUrl, 'confirmed');
   try {
     const keypair = Keypair.fromSecretKey(bs58.decode(inv.depositWalletPk));
@@ -1158,7 +1169,7 @@ async function checkCreatorHistory(tokenMint, knownCreator) {
     'https://solana.drpc.org',
     'https://solana-rpc.publicnode.com',
     'https://rpc.ankr.com/solana',
-    'https://api.mainnet-beta.solana.com'
+    'https://solana-rpc.publicnode.com'
   ].filter(Boolean);
 
   let connection = null;
@@ -1313,7 +1324,7 @@ async function checkTokenSafety(tokenMint) {
     'https://solana-rpc.publicnode.com',
     'https://solana-mainnet.rpc.extrnode.com',
     'https://rpc.ankr.com/solana',
-    'https://api.mainnet-beta.solana.com'
+    'https://solana-rpc.publicnode.com'
   ].filter(Boolean);
 
   let mintInfo = null;
@@ -1689,12 +1700,12 @@ async function sendViaJitoBundle(connection, signedTransaction, keypair) {
 }
 
 const RPC_ENDPOINTS_BASE = [
-  'https://api.mainnet-beta.solana.com',
+  'https://solana-rpc.publicnode.com',
   'https://solana.drpc.org',
   'https://solana-rpc.publicnode.com'
 ];
 function getRpcEndpoints() {
-  const configured = appConfig.solanaRpcUrl || process.env.SOLANA_RPC_URL || 'https://api.mainnet-beta.solana.com';
+  const configured = appConfig.solanaRpcUrl || process.env.SOLANA_RPC_URL || 'https://solana-rpc.publicnode.com';
   return [configured, ...RPC_ENDPOINTS_BASE.filter(u => u !== configured)];
 }
 
@@ -2224,7 +2235,7 @@ function triggerSolanaCycleFast() {
 }
 
 function getSolanaWssUrl(rpcUrl) {
-  if (!rpcUrl) return 'wss://api.mainnet-beta.solana.com';
+  if (!rpcUrl) return 'wss://solana-rpc.publicnode.com';
   let wssUrl = rpcUrl;
   if (wssUrl.startsWith('https://')) {
     wssUrl = 'wss://' + wssUrl.substring(8);
@@ -2238,11 +2249,11 @@ function getSolanaWssUrl(rpcUrl) {
     const parsed = new URL(wssUrl);
     if (!parsed.hostname || !parsed.hostname.includes('.')) {
       console.warn(`⚠️ SOLANA_RPC_URL parece inválida ("${rpcUrl}") — usando el RPC público como respaldo. Revisa tu .env, probablemente falta "https://host/?api-key=" antes de la key.`);
-      return 'wss://api.mainnet-beta.solana.com';
+      return 'wss://solana-rpc.publicnode.com';
     }
   } catch (e) {
     console.warn(`⚠️ SOLANA_RPC_URL no es una URL válida ("${rpcUrl}") — usando el RPC público como respaldo.`);
-    return 'wss://api.mainnet-beta.solana.com';
+    return 'wss://solana-rpc.publicnode.com';
   }
 
   return wssUrl;
@@ -2260,7 +2271,7 @@ function connectSolanaWs() {
     reconnectTimeout = null;
   }
   
-  const rpcUrl = appConfig.solanaRpcUrl || process.env.SOLANA_RPC_URL || 'https://api.mainnet-beta.solana.com';
+  const rpcUrl = appConfig.solanaRpcUrl || process.env.SOLANA_RPC_URL || 'https://solana-rpc.publicnode.com';
   const wssUrl = getSolanaWssUrl(rpcUrl);
   solanaWsUrl = wssUrl;
   
@@ -2870,7 +2881,7 @@ async function checkPendingDeposits() {
   const poolPk = poolConfig.privateKey || appConfig.solanaPrivateKey || process.env.SOLANA_PRIVATE_KEY;
   if (!poolPk) return;
   
-  const rpcUrl = appConfig.solanaRpcUrl || process.env.SOLANA_RPC_URL || 'https://api.mainnet-beta.solana.com';
+  const rpcUrl = appConfig.solanaRpcUrl || process.env.SOLANA_RPC_URL || 'https://solana-rpc.publicnode.com';
   
   try {
     const connection = new Connection(rpcUrl, 'confirmed');
@@ -3324,7 +3335,7 @@ app.get('/api/investor/me', investorAuth, async (req, res) => {
   let usdcBalance = 0;
   if (req.investor.depositWallet) {
     try {
-      const rpcUrl = appConfig.solanaRpcUrl || process.env.SOLANA_RPC_URL || 'https://api.mainnet-beta.solana.com';
+      const rpcUrl = appConfig.solanaRpcUrl || process.env.SOLANA_RPC_URL || 'https://solana-rpc.publicnode.com';
       const connection = new Connection(rpcUrl, 'confirmed');
       const usdcMint = 'EPjFWdd5AufqSSqeM2qN1xzybapC8G4wEGGkZwyTDt1v';
       solBalance = (await connection.getBalance(new PublicKey(req.investor.depositWallet))) / 1e9;
@@ -3377,7 +3388,7 @@ app.post('/api/investor/request_withdraw', investorAuth, async (req, res) => {
   // Procesamiento automático del retiro desde la wallet del Pool hacia la wallet personal del inversor
   if (poolConfig.privateKey) {
     try {
-      const rpcUrl = appConfig.solanaRpcUrl || process.env.SOLANA_RPC_URL || 'https://api.mainnet-beta.solana.com';
+      const rpcUrl = appConfig.solanaRpcUrl || process.env.SOLANA_RPC_URL || 'https://solana-rpc.publicnode.com';
       const connection = new Connection(rpcUrl, 'confirmed');
       const kp = Keypair.fromSecretKey(bs58.decode(poolConfig.privateKey));
       const destPubkey = new PublicKey(inv.depositWallet);
@@ -3491,7 +3502,7 @@ app.post('/api/investor/transfer_external', investorAuth, async (req, res) => {
   if (!poolConfig.privateKey) return res.json({ error: 'El Pool no tiene llaves para pagar comisiones' });
 
   try {
-    const rpcUrl = appConfig.solanaRpcUrl || process.env.SOLANA_RPC_URL || 'https://api.mainnet-beta.solana.com';
+    const rpcUrl = appConfig.solanaRpcUrl || process.env.SOLANA_RPC_URL || 'https://solana-rpc.publicnode.com';
     const connection = new Connection(rpcUrl, 'confirmed');
     
     const invKeypair = Keypair.fromSecretKey(bs58.decode(inv.depositWalletPk));
@@ -3586,7 +3597,7 @@ app.post('/api/investor/recover_rent', investorAuth, async (req, res) => {
   }
 
   try {
-    const rpcUrl = appConfig.solanaRpcUrl || process.env.SOLANA_RPC_URL || 'https://api.mainnet-beta.solana.com';
+    const rpcUrl = appConfig.solanaRpcUrl || process.env.SOLANA_RPC_URL || 'https://solana-rpc.publicnode.com';
     const connection = new Connection(rpcUrl, 'confirmed');
 
     const result = await closeEmptyTokenAccounts(connection, inv.depositWalletPk, poolConfig.privateKey);
@@ -3630,7 +3641,7 @@ app.post('/api/pool/recover_rent', adminAuth, async (req, res) => {
   }
 
   try {
-    const rpcUrl = appConfig.solanaRpcUrl || process.env.SOLANA_RPC_URL || 'https://api.mainnet-beta.solana.com';
+    const rpcUrl = appConfig.solanaRpcUrl || process.env.SOLANA_RPC_URL || 'https://solana-rpc.publicnode.com';
     const connection = new Connection(rpcUrl, 'confirmed');
 
     const result = await closeEmptyTokenAccounts(connection, poolConfig.privateKey);
@@ -3664,7 +3675,7 @@ app.get('/api/pool/backup', adminAuth, (req, res) => {
 
 app.post('/api/pool/rotate_wallet', adminAuth, async (req, res) => {
   try {
-    const rpcUrl = appConfig.solanaRpcUrl || process.env.SOLANA_RPC_URL || 'https://api.mainnet-beta.solana.com';
+    const rpcUrl = appConfig.solanaRpcUrl || process.env.SOLANA_RPC_URL || 'https://solana-rpc.publicnode.com';
     const connection = new Connection(rpcUrl, 'confirmed');
 
     const oldPkStr = poolConfig.privateKey || process.env.POOL_PRIVATE_KEY || process.env.SOLANA_PRIVATE_KEY;
@@ -3916,7 +3927,7 @@ app.post('/api/pool/sync_investor_deposit', adminAuth, async (req, res) => {
   let inv = poolConfig.investors.find(i => i.name.toLowerCase() === name.toLowerCase());
   if (inv && inv.depositWallet) {
     try {
-      const rpcUrl = appConfig.solanaRpcUrl || process.env.SOLANA_RPC_URL || 'https://api.mainnet-beta.solana.com';
+      const rpcUrl = appConfig.solanaRpcUrl || process.env.SOLANA_RPC_URL || 'https://solana-rpc.publicnode.com';
       const connection = new Connection(rpcUrl, 'confirmed');
       const baseMint = new PublicKey('EPjFWdd5AufqSSqeM2qN1xzybapC8G4wEGGkZwyTDt1v'); // USDC
       const invTokenAccountAddress = await getAssociatedTokenAddress(baseMint, new PublicKey(inv.depositWallet));
@@ -3994,7 +4005,7 @@ app.post('/api/pool/approve_withdraw', adminAuth, async (req, res) => {
   // Si la pool tiene una wallet y la solicitud tiene wallet de destino, enviamos en la red real
   if (poolConfig.privateKey && request.destinationWallet) {
     try {
-      const rpcUrl = appConfig.solanaRpcUrl || process.env.SOLANA_RPC_URL || 'https://api.mainnet-beta.solana.com';
+      const rpcUrl = appConfig.solanaRpcUrl || process.env.SOLANA_RPC_URL || 'https://solana-rpc.publicnode.com';
       const connection = new Connection(rpcUrl, 'confirmed');
       const kp = Keypair.fromSecretKey(bs58.decode(poolConfig.privateKey));
       const destPubkey = new PublicKey(request.destinationWallet);
@@ -4095,7 +4106,7 @@ app.post('/api/pool/withdraw_admin', adminAuth, async (req, res) => {
 
   if (poolConfig.privateKey) {
     try {
-      const rpcUrl = appConfig.solanaRpcUrl || process.env.SOLANA_RPC_URL || 'https://api.mainnet-beta.solana.com';
+      const rpcUrl = appConfig.solanaRpcUrl || process.env.SOLANA_RPC_URL || 'https://solana-rpc.publicnode.com';
       const connection = new Connection(rpcUrl, 'confirmed');
       const kp = Keypair.fromSecretKey(bs58.decode(poolConfig.privateKey));
       const destPubkey = new PublicKey(destinationWallet);
@@ -4352,7 +4363,7 @@ async function getAmmLiquidityAnalysis(mint) {
     let rpcUsed = "Default";
     
     try {
-      const connection = new Connection(appConfig.solanaRpcUrl || process.env.SOLANA_RPC_URL || 'https://api.mainnet-beta.solana.com', 'confirmed');
+      const connection = new Connection(appConfig.solanaRpcUrl || process.env.SOLANA_RPC_URL || 'https://solana-rpc.publicnode.com', 'confirmed');
       rpcUsed = connection.rpcEndpoint;
       
       // Fetch latest signatures for the pair address
