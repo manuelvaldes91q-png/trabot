@@ -457,7 +457,7 @@ function loadState() {
       if (data.SIM) SIM = data.SIM;
       if (data.watchItems) watchItems = data.watchItems;
       if (data.autopilotTradedMints) autopilotTradedMints = data.autopilotTradedMints;
-  if (data.autopilotRejectedMints) autopilotRejectedMints = data.autopilotRejectedMints;
+      if (data.autopilotRejectedMints) autopilotRejectedMints = data.autopilotRejectedMints;
       if (data.logs) logs = data.logs;
       if (data.monitorOn !== undefined) monitorOn = data.monitorOn;
       if (data.monitorInterval) monitorInterval = data.monitorInterval;
@@ -2637,7 +2637,9 @@ async function executeAutoTraderCycle() {
       const wallPrice = wall.wallPrice;
       const buyPrice = wallPrice * 1.002;
       const currentPrice = wall.currentPrice || p.priceUsd;
-      const wallSourceLabel = wall.isRealOrderbook ? '📖 Orderbook real (Phoenix)' : '📐 Estimación matemática (pool AMM)';
+      const wallSourceLabel = wall.source === 'phoenix' ? '📖 Orderbook real (Phoenix)'
+  : wall.source === 'volume_profile' ? `📊 Soporte por historial real (${wall.bounces || 0} rebotes detectados)`
+  : '📐 Estimación matemática (pool AMM)';
       
       if (buyPrice >= currentPrice * 1.02) {
         continue; // Don't place support order if wall is too high or above current
@@ -4311,6 +4313,74 @@ async function getAmmLiquidityAnalysis(mint) {
 }
 
 
+async function getVolumeProfileSupport(tokenMint, currentPrice) {
+  try {
+    const poolAddress = await getPoolAddress(tokenMint);
+    if (!poolAddress) return null;
+
+    const url = `https://api.geckoterminal.com/api/v2/networks/solana/pools/${poolAddress}/ohlcv/hour?aggregate=1&limit=72&currency=usd`;
+    const res = await fetchWithRetry(url, { timeout: 8000 }, 1, 500);
+    if (!res || !res.ok) return null;
+    const data = await res.json();
+    const candles = data?.data?.attributes?.ohlcv_list;
+    if (!candles || candles.length < 10) return null;
+
+    const minPrice = Math.min(...candles.map(c => c[3]));
+    const maxPrice = Math.max(...candles.map(c => c[2]));
+    if (!isFinite(minPrice) || !isFinite(maxPrice) || minPrice <= 0 || maxPrice <= minPrice) return null;
+
+    const NUM_BUCKETS = 20;
+    const bucketSize = (maxPrice - minPrice) / NUM_BUCKETS;
+    const buckets = Array.from({ length: NUM_BUCKETS }, (_, i) => ({
+      priceLow: minPrice + i * bucketSize,
+      priceHigh: minPrice + (i + 1) * bucketSize,
+      volume: 0,
+      bounces: 0
+    }));
+
+    const bucketIndexForPrice = (p) => {
+      const idx = Math.floor((p - minPrice) / bucketSize);
+      return Math.max(0, Math.min(NUM_BUCKETS - 1, idx));
+    };
+
+    for (const c of candles) {
+      const idx = bucketIndexForPrice(c[4]);
+      buckets[idx].volume += c[5] || 0;
+    }
+
+    for (let i = 0; i < candles.length - 1; i++) {
+      const low = candles[i][3];
+      const nextClose = candles[i + 1][4];
+      const thisClose = candles[i][4];
+      if (nextClose > thisClose) {
+        const idx = bucketIndexForPrice(low);
+        buckets[idx].bounces++;
+      }
+    }
+
+    const candidates = buckets
+      .filter(b => b.priceHigh < currentPrice && b.volume > 0)
+      .map(b => ({ ...b, midPrice: (b.priceLow + b.priceHigh) / 2, score: b.volume * (1 + b.bounces * 0.5) }))
+      .sort((a, b) => b.score - a.score);
+
+    if (candidates.length === 0) return null;
+    const best = candidates[0];
+
+    return {
+      source: 'volume_profile',
+      isRealOrderbook: false,
+      wallPrice: best.midPrice,
+      volumeUsd: best.volume,
+      bounces: best.bounces,
+      currentPrice,
+      note: `Nivel de soporte basado en ${candles.length}h de historial real de precio/volumen (no es una pared literal, es donde más se compró/rebotó antes).`
+    };
+  } catch (e) {
+    console.warn(`[getVolumeProfileSupport] Error: ${e.message}`);
+    return null;
+  }
+}
+
 async function findBestSupportWall(tokenMint, currentPriceHint) {
   if (phoenixClient) {
     let targetMarketKey = null;
@@ -4345,6 +4415,8 @@ async function findBestSupportWall(tokenMint, currentPriceHint) {
       }
     }
   }
+  const volProfile = await getVolumeProfileSupport(tokenMint, currentPriceHint);
+  if (volProfile) return volProfile;
   const obAnalysis = await getAmmLiquidityAnalysis(tokenMint);
   if (!obAnalysis || !obAnalysis.available || !obAnalysis.bids || obAnalysis.bids.length === 0) return null;
   const reasonableBids = obAnalysis.bids.filter(b => b.offsetPct >= 5 && b.offsetPct <= 25);
@@ -4392,6 +4464,20 @@ app.get('/api/orderbook/:tokenMint', adminAuth, async (req, res) => {
    } catch(e) {
        res.status(500).json({ error: e.message });
    }
+});
+
+app.get('/api/support-wall/:tokenMint', adminAuth, async (req, res) => {
+  try {
+    const mint = req.params.tokenMint;
+    const priceHint = parseFloat(req.query.price) || 0;
+    const wall = await findBestSupportWall(mint, priceHint);
+    if (!wall) {
+      return res.json({ available: false, message: 'No se encontró ningún nivel de soporte confiable (ni Phoenix, ni historial de volumen, ni estimación AMM).' });
+    }
+    res.json({ available: true, ...wall });
+  } catch (err) {
+    res.status(500).json({ error: String(err) });
+  }
 });
 
 app.get('/api/config', adminAuth, (req, res) => {
