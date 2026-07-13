@@ -4508,7 +4508,7 @@ async function getVolumeProfileSupport(tokenMint, currentPrice) {
     }));
 
     const bucketIndexForPrice = (p) => {
-      const idx = Math.floor((p - minPrice) / bucketSize);
+      const idx = Math.floor(((p - minPrice) / bucketSize) + 1e-9);
       return Math.max(0, Math.min(NUM_BUCKETS - 1, idx));
     };
 
