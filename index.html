@@ -1233,10 +1233,16 @@ async function loadConfigData() {
       setVal('cfgMexcKey', currentConfig.mexcApiKey);
       setVal('cfgMexcSecret', currentConfig.mexcApiSecret);
       setVal('cfgSolKey', currentConfig.solanaPrivateKey);
+      setVal('cfgSolRpc', currentConfig.solanaRpcUrl);
+      setVal('cfgSolBase', currentConfig.solanaBaseToken || 'SOL');
       setVal('cfgSolSlippage', currentConfig.solanaSlippage || '2.5');
       setVal('cfgSolPriority', currentConfig.solanaPriorityFee || 'auto');
       setCheck('cfgSafetyCheckEnabled', currentConfig.safetyCheckEnabled);
       setCheck('cfgUseJitoBundle', currentConfig.useJitoBundle);
+      setVal('cfgTgToken', currentConfig.tgBotToken);
+      setVal('cfgTgChat', currentConfig.tgChatId);
+      setVal('cfgDextoolsKey', currentConfig.dextoolsApiKey);
+      setVal('cfgTwitterKey', currentConfig.twitterBearerToken);
       
       setCheck('cfgAutoTraderEnabled', currentConfig.autoTraderEnabled);
       setVal('cfgAutoTraderAmount', currentConfig.autoTraderAmount);
@@ -4027,6 +4033,18 @@ addLog('DIP HUNTER v6 listo — Escáner + Monitor 10s + Auto-Ejecución + Edito
         <div style="margin-bottom:10px">
           <div style="font-size:10px;color:var(--t2);margin-bottom:4px">Solana Private Key (Phantom/Base58)</div>
           <input type="password" id="cfgSolKey" class="inp" placeholder="5K..." style="width:100%">
+          <div id="cfgSolKeyErr" style="display:none;color:var(--r);font-size:10px;margin-top:4px;font-family:var(--mono);line-height:1.2;font-weight:600"></div>
+        </div>
+        <div style="margin-bottom:10px">
+          <div style="font-size:10px;color:var(--t2);margin-bottom:4px">Solana RPC URL</div>
+          <input type="text" id="cfgSolRpc" class="inp" placeholder="https://api.mainnet-beta.solana.com" style="width:100%">
+        </div>
+        <div style="margin-bottom:10px">
+          <div style="font-size:10px;color:var(--t2);margin-bottom:4px">Moneda Base de Operación</div>
+          <select id="cfgSolBase" class="inp" style="width:100%">
+            <option value="SOL">SOL (Wrapped SOL)</option>
+            <option value="USDC">USDC (Stablecoin)</option>
+          </select>
         </div>
         <div style="margin-bottom:10px;display:flex;gap:10px">
           <div style="flex:1">
@@ -4057,6 +4075,46 @@ addLog('DIP HUNTER v6 listo — Escáner + Monitor 10s + Auto-Ejecución + Edito
           <label for="cfgUseJitoBundle" style="font-size:11px;color:var(--t1);cursor:pointer;">Habilitar Jito Bundles (Protección Anti-Sandwich)</label>
         </div>
         <div style="font-size:9px;color:var(--t2);">Evita compras de tokens marcados como Danger en RugCheck o con Autoridad de Mint/Freeze activa on-chain.</div>
+      </div>
+
+      <!-- SECCIÓN TELEGRAM ALERTS -->
+      <div style="border-top:1px solid var(--bdr);margin-top:15px;padding-top:15px;margin-bottom:15px">
+        <div style="font-weight:600;color:var(--b);font-size:11px;margin-bottom:10px;text-transform:uppercase;letter-spacing:0.05em">💬 Telegram Alerts</div>
+        <div style="margin-bottom:10px">
+          <div style="font-size:10px;color:var(--t2);margin-bottom:4px">Telegram Bot Token</div>
+          <input type="text" id="cfgTgToken" class="inp" placeholder="Ej: 123456789:ABCDefgh..." style="width:100%">
+        </div>
+        <div style="margin-bottom:10px">
+          <div style="font-size:10px;color:var(--t2);margin-bottom:4px">Telegram Chat ID</div>
+          <input type="text" id="cfgTgChat" class="inp" placeholder="-100xxxxxxx" style="width:100%">
+        </div>
+        <div style="margin-bottom:10px">
+          <button id="btnTestTg" class="btn btn-b" style="width:100%;font-size:10px;padding:6px 12px;margin-top:5px" onclick="testTelegramConnection(this)">🔌 Probar Mensaje de Telegram</button>
+        </div>
+      </div>
+
+      <!-- SECCIÓN DEXTOOLS -->
+      <div style="border-top:1px solid var(--bdr);margin-top:15px;padding-top:15px;margin-bottom:15px">
+        <div style="font-weight:600;color:#38bdf8;font-size:11px;margin-bottom:10px;text-transform:uppercase;letter-spacing:0.05em">📊 DEXTools API (Opcional)</div>
+        <div style="margin-bottom:10px">
+          <div style="font-size:10px;color:var(--t2);margin-bottom:4px">DEXTools API Key (Para Sincronización oficial)</div>
+          <input type="password" id="cfgDextoolsKey" class="inp" placeholder="Dejar vacío para usar GeckoTerminal gratis" style="width:100%">
+        </div>
+      </div>
+      
+      <!-- SECCIÓN TWITTER -->
+      <div style="border-top:1px solid var(--bdr);margin-top:15px;padding-top:15px;margin-bottom:15px">
+        <div style="font-weight:600;color:#1da1f2;font-size:11px;margin-bottom:10px;text-transform:uppercase;letter-spacing:0.05em">🐦 Twitter (X) API</div>
+        <div style="margin-bottom:10px">
+          <div style="font-size:10px;color:var(--t2);margin-bottom:4px">Twitter Bearer Token (Para análisis de Scam/Bullish)</div>
+          <input type="password" id="cfgTwitterKey" class="inp" placeholder="AAAAAAAAAAAAAAAAAAAAA..." style="width:100%">
+        </div>
+      </div>
+      
+      <!-- PANEL WEB PASSWORD -->
+      <div style="border-top:1px solid var(--bdr);margin-top:15px;padding-top:15px;margin-bottom:15px">
+        <div style="font-size:10px;color:var(--t2);margin-bottom:4px">Contraseña del Panel Web</div>
+        <input type="password" id="cfgAppPwd" class="inp" placeholder="Dejar en blanco para mantener la actual" style="width:100%">
       </div>
       
       <div style="display:flex;gap:10px;margin-bottom:20px">
