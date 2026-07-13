@@ -32,8 +32,8 @@ function renderHistoryTab() {
 }
 *{box-sizing:border-box;margin:0;padding:0}
 body{background:var(--bg);color:var(--t);font-family:var(--sans);min-height:100vh;font-size:13px}
-.app{display:grid;grid-template-rows:auto auto 1fr;height:100vh;overflow:hidden}
-.tab-panel{height:100%;min-height:0;overflow:hidden;display:none;}
+.app{display:flex;flex-direction:column;height:100vh;overflow:hidden}
+.tab-panel{flex:1;min-height:0;overflow:hidden;display:none;}
 .tab-panel:not(#tab-dashboard){overflow-y:auto;padding:20px;}
 
 /* HEADER */
@@ -3876,11 +3876,10 @@ initServerState().then(() => {
 if('Notification'in window&&Notification.permission==='granted'){notifOn=true;document.getElementById('btnNotif').textContent='🔔 Notif. ON';document.getElementById('btnNotif').className='btn btn-g btn-sm';}
 addLog('DIP HUNTER v6 listo — Escáner + Monitor 10s + Auto-Ejecución + Editor de órdenes (Guarda en Cloud/VPS)','info');
 </script>
-</div>
 
-<div class="tab-panel" id="tab-pool" style="display:none; padding:20px;">
+<div class="tab-panel" id="tab-pool" style="display:none; padding:20px; height:100%; overflow-y:auto;">
   
-    <div style="background:var(--bg2);width:100%;max-width:800px;margin:0 auto;border:1px solid var(--bdr);border-radius:8px;padding:25px;font-family:var(--sans);max-height:90vh;overflow-y:auto">
+    <div style="background:var(--bg2);width:100%;max-width:800px;margin:30px auto;border:1px solid var(--bdr);border-radius:8px;padding:25px;font-family:var(--sans);max-height:90vh;overflow-y:auto">
       <div style="font-weight:700;margin-bottom:15px;color:var(--t);font-size:16px;">🏦 Gestión del Pool de Inversores</div>
       <div style="margin-bottom:15px;font-size:11px;color:var(--t2)">
         Configura la wallet central y la comisión del sistema. Los inversores verán esto en su panel (/investor). La billetera es generada automáticamente por el sistema.<br/><br/>
@@ -3941,8 +3940,8 @@ addLog('DIP HUNTER v6 listo — Escáner + Monitor 10s + Auto-Ejecución + Edito
     </div>
   
 </div>
-<div class="tab-panel" id="tab-copilot" style="display:none; padding:20px;">
-  <div style="background:var(--bg2);width:100%;max-width:800px;margin:0 auto;border:1px solid var(--bdr);border-radius:8px;padding:25px;font-family:var(--sans);">
+<div class="tab-panel" id="tab-copilot" style="display:none; padding:20px; height:100%; overflow-y:auto;">
+  <div style="background:var(--bg2);width:100%;max-width:800px;margin:30px auto;border:1px solid var(--bdr);border-radius:8px;padding:25px;font-family:var(--sans);">
 
       <!-- SECCIÓN COPILOTO AUTO-TRADING -->
       <div style="border-top:1px solid var(--bdr);margin-top:15px;padding-top:15px;margin-bottom:15px">
@@ -4010,122 +4009,135 @@ addLog('DIP HUNTER v6 listo — Escáner + Monitor 10s + Auto-Ejecución + Edito
 
   </div>
 </div>
-<div class="tab-panel" id="tab-config" style="display:none; padding:20px;">
-  <div style="background:var(--bg2);width:100%;max-width:800px;margin:0 auto;border:1px solid var(--bdr);border-radius:8px;padding:25px;font-family:var(--sans);">
+<div class="tab-panel" id="tab-config" style="display:none; padding:15px; height:100%; overflow-y:auto;">
+  <div style="background:var(--bg2);width:100%;max-width:900px;margin:20px auto;border:1px solid var(--bdr);border-radius:8px;padding:20px;font-family:var(--sans);">
 
-      <div style="font-weight:700;margin-bottom:15px;color:var(--t);font-size:16px;">⚙️ Configuración del Servidor VPS</div>
+      <div style="font-weight:700;margin-bottom:8px;color:var(--t);font-size:15px;">⚙️ Configuración del Servidor VPS</div>
       <div style="margin-bottom:15px;font-size:11px;color:var(--t2)">
         Estos datos se guardarán cifrados en el servidor. Son necesarios sí deseas operar automáticamente en tu cuenta principal o recibir alertas en tu grupo de Telegram.
       </div>
       
-      <div style="margin-bottom:10px">
-        <div style="font-size:10px;color:var(--t2);margin-bottom:4px">MEXC API Key (Lectura/Trading)</div>
-        <input type="text" id="cfgMexcKey" class="inp" placeholder="mx0vvlv..." style="width:100%">
-      </div>
-      <div style="margin-bottom:15px">
-        <div style="font-size:10px;color:var(--t2);margin-bottom:4px">MEXC API Secret</div>
-        <input type="password" id="cfgMexcSecret" class="inp" placeholder="********" style="width:100%">
-      </div>
-
-      <!-- SECCIÓN SOLANA -->
-      <div style="border-top:1px solid var(--bdr);margin-top:15px;padding-top:15px;margin-bottom:15px">
-        <div style="font-weight:600;color:var(--pu);font-size:11px;margin-bottom:10px;text-transform:uppercase;letter-spacing:0.05em">🔑 Configuración de Solana (DEX Swaps)</div>
-        <div style="margin-bottom:10px">
-          <div style="font-size:10px;color:var(--t2);margin-bottom:4px">Solana Private Key (Phantom/Base58)</div>
-          <input type="password" id="cfgSolKey" class="inp" placeholder="5K..." style="width:100%">
-          <div id="cfgSolKeyErr" style="display:none;color:var(--r);font-size:10px;margin-top:4px;font-family:var(--mono);line-height:1.2;font-weight:600"></div>
-        </div>
-        <div style="margin-bottom:10px">
-          <div style="font-size:10px;color:var(--t2);margin-bottom:4px">Solana RPC URL</div>
-          <input type="text" id="cfgSolRpc" class="inp" placeholder="https://api.mainnet-beta.solana.com" style="width:100%">
-        </div>
-        <div style="margin-bottom:10px">
-          <div style="font-size:10px;color:var(--t2);margin-bottom:4px">Moneda Base de Operación</div>
-          <select id="cfgSolBase" class="inp" style="width:100%">
-            <option value="SOL">SOL (Wrapped SOL)</option>
-            <option value="USDC">USDC (Stablecoin)</option>
-          </select>
-        </div>
-        <div style="margin-bottom:10px;display:flex;gap:10px">
-          <div style="flex:1">
-            <div style="font-size:10px;color:var(--t2);margin-bottom:4px">Deslizamiento Máx (%)</div>
-            <input type="number" step="0.1" id="cfgSolSlippage" class="inp" placeholder="Ej: 2.5" style="width:100%">
+      <!-- GRID CONTAINER -->
+      <div style="display:grid; grid-template-columns:repeat(auto-fit, minmax(340px, 1fr)); gap:20px; margin-bottom:20px;">
+        
+        <!-- COLUMNA 1: CRENDENCIALES Y SOLANA -->
+        <div style="display:flex; flex-direction:column; gap:12px; background:rgba(255,255,255,0.015); border:1px solid var(--bdr); border-radius:6px; padding:15px;">
+          
+          <div>
+            <div style="font-weight:600;color:var(--g);font-size:11px;margin-bottom:10px;text-transform:uppercase;letter-spacing:0.05em">📈 Cuenta MEXC</div>
+            <div style="margin-bottom:8px">
+              <div style="font-size:10px;color:var(--t2);margin-bottom:4px">MEXC API Key (Lectura/Trading)</div>
+              <input type="text" id="cfgMexcKey" class="inp" placeholder="mx0vvlv..." style="width:100%">
+            </div>
+            <div>
+              <div style="font-size:10px;color:var(--t2);margin-bottom:4px">MEXC API Secret</div>
+              <input type="password" id="cfgMexcSecret" class="inp" placeholder="********" style="width:100%">
+            </div>
           </div>
-          <div style="flex:1">
-            <div style="font-size:10px;color:var(--t2);margin-bottom:4px">Tarifa Prioridad (Lamports)</div>
-            <select id="cfgSolPriority" class="inp" style="width:100%">
-              <option value="auto">Automático (auto)</option>
-              <option value="100000">Estándar (100k lamports)</option>
-              <option value="500000">Alta prioridad (500k lamports)</option>
-              <option value="1500000">Turbo Ultra (1.5M lamports)</option>
-            </select>
+
+          <!-- SECCIÓN SOLANA -->
+          <div style="border-top:1px solid var(--bdr);padding-top:12px;">
+            <div style="font-weight:600;color:var(--pu);font-size:11px;margin-bottom:10px;text-transform:uppercase;letter-spacing:0.05em">🔑 Solana (DEX Swaps)</div>
+            <div style="margin-bottom:8px">
+              <div style="font-size:10px;color:var(--t2);margin-bottom:4px">Solana Private Key (Phantom/Base58)</div>
+              <input type="password" id="cfgSolKey" class="inp" placeholder="5K..." style="width:100%">
+              <div id="cfgSolKeyErr" style="display:none;color:var(--r);font-size:10px;margin-top:4px;font-family:var(--mono);line-height:1.2;font-weight:600"></div>
+            </div>
+            <div style="margin-bottom:8px">
+              <div style="font-size:10px;color:var(--t2);margin-bottom:4px">Solana RPC URL</div>
+              <input type="text" id="cfgSolRpc" class="inp" placeholder="https://api.mainnet-beta.solana.com" style="width:100%">
+            </div>
+            <div style="margin-bottom:8px">
+              <div style="font-size:10px;color:var(--t2);margin-bottom:4px">Moneda Base de Operación</div>
+              <select id="cfgSolBase" class="inp" style="width:100%">
+                <option value="SOL">SOL (Wrapped SOL)</option>
+                <option value="USDC">USDC (Stablecoin)</option>
+              </select>
+            </div>
+            <div style="display:flex;gap:10px">
+              <div style="flex:1">
+                <div style="font-size:10px;color:var(--t2);margin-bottom:4px">Deslizamiento Máx (%)</div>
+                <input type="number" step="0.1" id="cfgSolSlippage" class="inp" placeholder="Ej: 2.5" style="width:100%">
+              </div>
+              <div style="flex:1">
+                <div style="font-size:10px;color:var(--t2);margin-bottom:4px">Tarifa Prioridad</div>
+                <select id="cfgSolPriority" class="inp" style="width:100%">
+                  <option value="auto">Automático (auto)</option>
+                  <option value="100000">Estándar (100k)</option>
+                  <option value="500000">Alta (500k)</option>
+                  <option value="1500000">Turbo (1.5M)</option>
+                </select>
+              </div>
+            </div>
           </div>
         </div>
-      </div>
 
-      <!-- SECCIÓN RUGCHECK (SAFETY) -->
-      <div style="border-top:1px solid var(--bdr);margin-top:15px;padding-top:15px;margin-bottom:15px">
-        <div style="font-weight:600;color:var(--y);font-size:11px;margin-bottom:10px;text-transform:uppercase;letter-spacing:0.05em">🛡️ Seguridad Anti-Rug (RugCheck)</div>
-        <div style="margin-bottom:10px;display:flex;align-items:center;gap:10px;">
-          <input type="checkbox" id="cfgSafetyCheckEnabled" style="cursor:pointer">
-          <label for="cfgSafetyCheckEnabled" style="font-size:11px;color:var(--t1);cursor:pointer;">Habilitar Chequeo de Seguridad en Compras</label>
-        </div>
-        <div style="margin-bottom:10px;display:flex;align-items:center;gap:10px;">
-          <input type="checkbox" id="cfgUseJitoBundle" style="cursor:pointer">
-          <label for="cfgUseJitoBundle" style="font-size:11px;color:var(--t1);cursor:pointer;">Habilitar Jito Bundles (Protección Anti-Sandwich)</label>
-        </div>
-        <div style="font-size:9px;color:var(--t2);">Evita compras de tokens marcados como Danger en RugCheck o con Autoridad de Mint/Freeze activa on-chain.</div>
-      </div>
+        <!-- COLUMNA 2: SEGURIDAD, ALERTAS Y EXTRA APIS -->
+        <div style="display:flex; flex-direction:column; gap:12px; background:rgba(255,255,255,0.015); border:1px solid var(--bdr); border-radius:6px; padding:15px;">
+          
+          <!-- SECCIÓN RUGCHECK (SAFETY) -->
+          <div>
+            <div style="font-weight:600;color:var(--y);font-size:11px;margin-bottom:10px;text-transform:uppercase;letter-spacing:0.05em">🛡️ Seguridad Anti-Rug (RugCheck)</div>
+            <div style="margin-bottom:6px;display:flex;align-items:center;gap:8px;">
+              <input type="checkbox" id="cfgSafetyCheckEnabled" style="cursor:pointer">
+              <label for="cfgSafetyCheckEnabled" style="font-size:11px;color:var(--t1);cursor:pointer;user-select:none;">Habilitar Chequeo de Seguridad en Compras</label>
+            </div>
+            <div style="margin-bottom:6px;display:flex;align-items:center;gap:8px;">
+              <input type="checkbox" id="cfgUseJitoBundle" style="cursor:pointer">
+              <label for="cfgUseJitoBundle" style="font-size:11px;color:var(--t1);cursor:pointer;user-select:none;">Habilitar Jito Bundles (Protección Anti-Sandwich)</label>
+            </div>
+            <div style="font-size:9.5px;color:var(--t2);line-height:1.2;">Evita compras de tokens marcados como Danger en RugCheck o con Autoridad de Mint/Freeze activa on-chain.</div>
+          </div>
 
-      <!-- SECCIÓN TELEGRAM ALERTS -->
-      <div style="border-top:1px solid var(--bdr);margin-top:15px;padding-top:15px;margin-bottom:15px">
-        <div style="font-weight:600;color:var(--b);font-size:11px;margin-bottom:10px;text-transform:uppercase;letter-spacing:0.05em">💬 Telegram Alerts</div>
-        <div style="margin-bottom:10px">
-          <div style="font-size:10px;color:var(--t2);margin-bottom:4px">Telegram Bot Token</div>
-          <input type="text" id="cfgTgToken" class="inp" placeholder="Ej: 123456789:ABCDefgh..." style="width:100%">
-        </div>
-        <div style="margin-bottom:10px">
-          <div style="font-size:10px;color:var(--t2);margin-bottom:4px">Telegram Chat ID</div>
-          <input type="text" id="cfgTgChat" class="inp" placeholder="-100xxxxxxx" style="width:100%">
-        </div>
-        <div style="margin-bottom:10px">
-          <button id="btnTestTg" class="btn btn-b" style="width:100%;font-size:10px;padding:6px 12px;margin-top:5px" onclick="testTelegramConnection(this)">🔌 Probar Mensaje de Telegram</button>
-        </div>
-      </div>
+          <!-- SECCIÓN TELEGRAM ALERTS -->
+          <div style="border-top:1px solid var(--bdr);padding-top:12px;">
+            <div style="font-weight:600;color:var(--b);font-size:11px;margin-bottom:10px;text-transform:uppercase;letter-spacing:0.05em">💬 Telegram Alerts</div>
+            <div style="margin-bottom:8px">
+              <div style="font-size:10px;color:var(--t2);margin-bottom:4px">Telegram Bot Token</div>
+              <input type="text" id="cfgTgToken" class="inp" placeholder="Ej: 123456789:ABCDefgh..." style="width:100%">
+            </div>
+            <div style="margin-bottom:8px">
+              <div style="font-size:10px;color:var(--t2);margin-bottom:4px">Telegram Chat ID</div>
+              <input type="text" id="cfgTgChat" class="inp" placeholder="-100xxxxxxx" style="width:100%">
+            </div>
+            <button id="btnTestTg" class="btn btn-b" style="width:100%;font-size:10px;padding:5px 10px;margin-top:2px" onclick="testTelegramConnection(this)">🔌 Probar Mensaje de Telegram</button>
+          </div>
 
-      <!-- SECCIÓN DEXTOOLS -->
-      <div style="border-top:1px solid var(--bdr);margin-top:15px;padding-top:15px;margin-bottom:15px">
-        <div style="font-weight:600;color:#38bdf8;font-size:11px;margin-bottom:10px;text-transform:uppercase;letter-spacing:0.05em">📊 DEXTools API (Opcional)</div>
-        <div style="margin-bottom:10px">
-          <div style="font-size:10px;color:var(--t2);margin-bottom:4px">DEXTools API Key (Para Sincronización oficial)</div>
-          <input type="password" id="cfgDextoolsKey" class="inp" placeholder="Dejar vacío para usar GeckoTerminal gratis" style="width:100%">
+          <!-- SECCIÓN DEXTOOLS & TWITTER -->
+          <div style="border-top:1px solid var(--bdr);padding-top:12px;">
+            <div style="font-weight:600;color:#38bdf8;font-size:11px;margin-bottom:8px;text-transform:uppercase;letter-spacing:0.05em">🔌 APIs Auxiliares</div>
+            <div style="margin-bottom:8px">
+              <div style="font-size:10px;color:var(--t2);margin-bottom:4px">DEXTools API Key (Opcional)</div>
+              <input type="password" id="cfgDextoolsKey" class="inp" placeholder="Dejar vacío para GeckoTerminal gratis" style="width:100%">
+            </div>
+            <div>
+              <div style="font-size:10px;color:var(--t2);margin-bottom:4px">Twitter (X) Bearer Token</div>
+              <input type="password" id="cfgTwitterKey" class="inp" placeholder="AAAAAAAAAAAAAAAAAAAAA..." style="width:100%">
+            </div>
+          </div>
+          
+          <!-- PANEL WEB PASSWORD -->
+          <div style="border-top:1px solid var(--bdr);padding-top:12px;">
+            <div style="font-weight:600;color:var(--t2);font-size:11px;margin-bottom:6px;text-transform:uppercase;letter-spacing:0.05em">🔒 Seguridad del Panel</div>
+            <div>
+              <div style="font-size:10px;color:var(--t2);margin-bottom:4px">Contraseña de Administrador</div>
+              <input type="password" id="cfgAppPwd" class="inp" placeholder="Dejar en blanco para mantener la actual" style="width:100%">
+            </div>
+          </div>
+
         </div>
       </div>
       
-      <!-- SECCIÓN TWITTER -->
-      <div style="border-top:1px solid var(--bdr);margin-top:15px;padding-top:15px;margin-bottom:15px">
-        <div style="font-weight:600;color:#1da1f2;font-size:11px;margin-bottom:10px;text-transform:uppercase;letter-spacing:0.05em">🐦 Twitter (X) API</div>
-        <div style="margin-bottom:10px">
-          <div style="font-size:10px;color:var(--t2);margin-bottom:4px">Twitter Bearer Token (Para análisis de Scam/Bullish)</div>
-          <input type="password" id="cfgTwitterKey" class="inp" placeholder="AAAAAAAAAAAAAAAAAAAAA..." style="width:100%">
-        </div>
-      </div>
-      
-      <!-- PANEL WEB PASSWORD -->
-      <div style="border-top:1px solid var(--bdr);margin-top:15px;padding-top:15px;margin-bottom:15px">
-        <div style="font-size:10px;color:var(--t2);margin-bottom:4px">Contraseña del Panel Web</div>
-        <input type="password" id="cfgAppPwd" class="inp" placeholder="Dejar en blanco para mantener la actual" style="width:100%">
-      </div>
-      
-      <div style="display:flex;gap:10px;margin-bottom:20px">
+      <!-- BUTTONS -->
+      <div style="display:flex;gap:10px;margin-top:10px">
         <button class="btn btn-g" style="flex:1" onclick="saveConfig()">💾 Guardar Configuración</button>
         <button class="btn btn-d" style="flex:1" onclick="switchTab('dashboard')">❌ Cerrar</button>
       </div>
 
   </div>
 </div>
-<div class="tab-panel" id="tab-history" style="display:none; padding:20px;">
-  <div style="background:var(--bg2);width:100%;max-width:800px;margin:0 auto;border:1px solid var(--bdr);border-radius:8px;padding:25px;font-family:var(--sans);">
+<div class="tab-panel" id="tab-history" style="display:none; padding:20px; height:100%; overflow-y:auto;">
+  <div style="background:var(--bg2);width:100%;max-width:800px;margin:30px auto;border:1px solid var(--bdr);border-radius:8px;padding:25px;font-family:var(--sans);">
     <div style="font-weight:700;margin-bottom:15px;color:var(--t);font-size:16px;">📜 Historial de Trades</div>
     <div id="historyContent"></div>
     <div style="margin-top:30px;border-top:1px solid var(--bdr);padding-top:15px">
@@ -4137,6 +4149,8 @@ addLog('DIP HUNTER v6 listo — Escáner + Monitor 10s + Auto-Ejecución + Edito
       </div>
     </div>
   </div>
+</div>
+
 </div>
 
 </body>
