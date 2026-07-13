@@ -3117,6 +3117,7 @@ async function showDetail(d){ switchMainTab("detail");
           }
         </div>
         <div id="apanel"></div>
+        <div id="auditPanel"></div>
       </div>
       <div class="det-right">
         <div style="font-family:var(--mono);font-size:8px;font-weight:700;color:var(--t2);text-transform:uppercase;letter-spacing:.08em;margin-bottom:5px;display:flex;justify-content:space-between">
@@ -3135,6 +3136,7 @@ async function showDetail(d){ switchMainTab("detail");
       </div>
     </div>`;
   if (!isSol) loadChart('h1');
+  if (isSol) loadAuditData(d.address);
   
   if (isSol) {
     
@@ -3705,6 +3707,94 @@ async function runSafetyScan(symbol, address, network) {
     `;
   }
 }
+
+async function loadAuditData(mint) {
+  const el = document.getElementById('auditPanel');
+  if (!el) return;
+  el.innerHTML = '<div style="color:var(--t2);font-size:10px;margin-top:10px;">Obteniendo información del contrato (Auditoría)...</div>';
+  
+  try {
+    
+    const res = await myFetch('/api/token/audit/' + mint, {
+      
+    });
+    const data = await res.json();
+    if (!data.available) {
+      el.innerHTML = '<div style="color:var(--r);font-size:10px;margin-top:10px;">⚠️ Error de auditoría: ' + (data.error || 'No disponible') + '</div>';
+      return;
+    }
+    
+    // UI GMGN-style
+    const makeVal = (val, ok) => {
+      let color = "var(--t)";
+      if (ok === true) color = "var(--g)";
+      if (ok === false) color = "var(--r)";
+      return `<span style="color:${color};font-weight:700;">${val}</span>`;
+    };
+    
+    const rugOk = parseFloat(data.rugProb) < 20;
+    const isQuemado = data.lpBurned > 80;
+    
+    el.innerHTML = `
+      <div style="background:#111; border:1px solid #333; border-radius:6px; padding:12px; margin-top:10px; font-family:var(--sans);">
+        <div style="font-weight:600; color:#eee; font-size:12px; margin-bottom:10px; display:flex; align-items:center; gap:5px;">
+          🛡️ Auditoría del Contrato (RugCheck)
+        </div>
+        <div style="display:grid; grid-template-columns:repeat(4, 1fr); gap:10px; font-size:10px;">
+          <div>
+            <div style="color:var(--t2);margin-bottom:2px">Top 10</div>
+            <div>${makeVal(data.top10.toFixed(2) + '%', data.top10 < 30)}</div>
+          </div>
+          <div>
+            <div style="color:var(--t2);margin-bottom:2px">DEV</div>
+            <div>${makeVal(data.dev.toFixed(2) + '%', data.dev < 10)}</div>
+          </div>
+          <div>
+            <div style="color:var(--t2);margin-bottom:2px">Holders</div>
+            <div style="font-weight:700;color:var(--t)">${data.holders}</div>
+          </div>
+          <div>
+            <div style="color:var(--t2);margin-bottom:2px">Insiders</div>
+            <div>${makeVal(data.insiders, data.insiders === '0%')}</div>
+          </div>
+          
+          <div>
+            <div style="color:var(--t2);margin-bottom:2px">Phishing</div>
+            <div>${makeVal(data.phishing, data.phishing === '0%')}</div>
+          </div>
+          <div>
+            <div style="color:var(--t2);margin-bottom:2px">Bundler</div>
+            <div>${makeVal(data.bundler, data.bundler === '0%')}</div>
+          </div>
+          <div>
+            <div style="color:var(--t2);margin-bottom:2px">Dex Paid</div>
+            <div style="font-weight:700;color:var(--t)">${data.dexPaid}</div>
+          </div>
+          <div>
+            <div style="color:var(--t2);margin-bottom:2px">No Mint</div>
+            <div>${makeVal(data.noMint ? '✅ Sí' : '❌ No', data.noMint)}</div>
+          </div>
+          
+          <div>
+            <div style="color:var(--t2);margin-bottom:2px">No Blacklist</div>
+            <div>${makeVal(data.noBlacklist ? '✅ Sí' : '❌ No', data.noBlacklist)}</div>
+          </div>
+          <div>
+            <div style="color:var(--t2);margin-bottom:2px">Quemado</div>
+            <div>${makeVal(data.lpBurned.toFixed(0) + '% 🔥', isQuemado)}</div>
+          </div>
+          <div style="grid-column: span 2;">
+            <div style="color:var(--t2);margin-bottom:2px">Probabilidad de Rug</div>
+            <div>${makeVal(data.rugProb, rugOk)}</div>
+          </div>
+        </div>
+      </div>
+    `;
+  } catch (e) {
+    el.innerHTML = '<div style="color:var(--r);font-size:10px;margin-top:10px;">⚠️ Error: ' + e.message + '</div>';
+  }
+}
+
 function renderAP(d,an,cp){
   const el=document.getElementById('apanel');if(!el)return;
   const t=d.trend || { score: 0, emoji: '🟡', label: 'NEUTRAL', above20: false, distEMA20: 0 };
@@ -3867,6 +3957,51 @@ async function testVolumeProfile() {
      }
   }
 }
+async function analyzeTwitterAI() {
+  const inputEl = document.getElementById('manualScamSearch');
+  if (!inputEl) return;
+  const mint = inputEl.value.trim();
+  if (!mint) {
+    alert('Ingresa el contrato del token primero.');
+    return;
+  }
+  
+  const resultDiv = document.getElementById('twitterAiResult');
+  resultDiv.style.display = 'block';
+  resultDiv.innerHTML = '<span style="color:var(--y)">Analizando con IA... ⏳</span>';
+  
+  try {
+    
+    const res = await myFetch('/api/ai/twitter-analysis', {
+      method: 'POST',
+      
+      body: JSON.stringify({ mint })
+    });
+    
+    if (!res.ok) {
+      if (res.status === 401) throw new Error("No autorizado");
+      throw new Error(`Error: ${res.status}`);
+    }
+    
+    const data = await res.json();
+    if (!data.available) {
+      resultDiv.innerHTML = `<span style="color:var(--r)">❌ Error: ${data.error}</span>`;
+      return;
+    }
+    
+    let color = "var(--t)";
+    if (data.analysis.toLowerCase().includes('scam')) color = "var(--r)";
+    else if (data.analysis.toLowerCase().includes('bullish')) color = "var(--g)";
+    
+    resultDiv.innerHTML = `<div style="padding:10px; border-left:3px solid ${color}; background:rgba(255,255,255,0.05); font-size:11px; margin-top:10px; border-radius:0 4px 4px 0;">
+      <div style="font-weight:bold; margin-bottom:5px; color:${color}">Análisis IA (basado en ${data.tweetsCount} tweets recientes):</div>
+      <div style="white-space:pre-wrap; line-height:1.4">${data.analysis}</div>
+    </div>`;
+  } catch (e) {
+    resultDiv.innerHTML = `<span style="color:var(--r)">❌ Error: ${e.message}</span>`;
+  }
+}
+
 function setSt(txt,pct){const e=document.getElementById('stxt');if(e)e.textContent=txt;if(pct!=null&&document.getElementById('pbf'))document.getElementById('pbf').style.width=pct+'%';}
 
 // INIT
@@ -4141,12 +4276,14 @@ addLog('DIP HUNTER v6 listo — Escáner + Monitor 10s + Auto-Ejecución + Edito
     <div style="font-weight:700;margin-bottom:15px;color:var(--t);font-size:16px;">📜 Historial de Trades</div>
     <div id="historyContent"></div>
     <div style="margin-top:30px;border-top:1px solid var(--bdr);padding-top:15px">
-      <div style="font-weight:700;margin-bottom:15px;color:var(--t);font-size:16px;">🔍 Escáner Buscar Estafa</div>
-      <div style="font-size:11px;color:var(--t2);margin-bottom:15px;">Busca en X (Twitter) posibles alertas de rug pull para un token.</div>
+      <div style="font-weight:700;margin-bottom:15px;color:var(--t);font-size:16px;">🔍 Escáner Buscar Estafa (Twitter + IA)</div>
+      <div style="font-size:11px;color:var(--t2);margin-bottom:15px;">Busca en X (Twitter) posibles alertas de rug pull para un token. Utiliza tu Token Bearer de X y Gemini API para analizar los resultados (configúralos en Ajustes).</div>
       <div style="display:flex;gap:10px;">
         <input type="text" id="manualScamSearch" class="inp" placeholder="Ej: Dirección del contrato o símbolo" style="flex:1">
         <button class="btn btn-y" onclick="if(document.getElementById('manualScamSearch').value) window.open('https://x.com/search?q=' + encodeURIComponent(document.getElementById('manualScamSearch').value + ' scam OR rug'), '_blank')">Buscar en X</button>
+        <button class="btn btn-g" onclick="analyzeTwitterAI()">Analizar con IA (Twitter)</button>
       </div>
+      <div id="twitterAiResult" style="display:none; margin-top:15px; font-size:12px; color:var(--t2);"></div>
     </div>
   </div>
 </div>
