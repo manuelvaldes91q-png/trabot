@@ -1,310 +1,3 @@
-<!DOCTYPE html>
-<html lang="es">
-<head>
-<meta charset="UTF-8">
-<meta name="viewport" content="width=device-width, initial-scale=1.0">
-<title>DIP HUNTER v6 — Escáner + Monitor 10s + Auto-Ejecución</title>
-<script src="https://cdnjs.cloudflare.com/ajax/libs/Chart.js/4.4.1/chart.umd.js">
-function renderHistoryTab() {
-  const c = document.getElementById('historyContent');
-  if(!c) return;
-  if(!SIM.trades.length) {
-    c.innerHTML = '<div style="padding:20px;color:var(--t2)">Sin operaciones en el historial.</div>';
-    return;
-  }
-  let h = '<div style="padding:20px;font-family:var(--mono);font-size:12px;">';
-  SIM.trades.forEach((t, i) => {
-    h += `<div>#${i+1} ${t.symbol}: ${t.pnl>=0?'+':''}$(${(+t.pnl).toFixed(2)}) (${t.pnlPct}%) · ${t.at?new Date(t.at).toLocaleString('es'):''}</div>`;
-  });
-  h += '</div>';
-  c.innerHTML = h;
-}
-
-</script>
-<style>
-@import url('https://fonts.googleapis.com/css2?family=JetBrains+Mono:wght@400;700&family=Inter:wght@400;500;600&display=swap');
-:root{
-  --bg:#060810;--bg2:#0b0e18;--bg3:#111520;--bg4:#16192a;
-  --bdr:#1e2638;--bdr2:#2a3550;
-  --g:#00e5a0;--b:#3b82f6;--r:#ef4444;--y:#f59e0b;--pu:#8b5cf6;
-  --t:#ddeeff;--t2:#64748b;--t3:#1e2d42;
-  --mono:'JetBrains Mono',monospace;--sans:'Inter',sans-serif;
-}
-*{box-sizing:border-box;margin:0;padding:0}
-body{background:var(--bg);color:var(--t);font-family:var(--sans);min-height:100vh;font-size:13px}
-.app{display:grid;grid-template-rows:auto auto 1fr;height:100vh;overflow:hidden}
-.tab-panel{height:100%;min-height:0;overflow:hidden;display:none;}
-.tab-panel:not(#tab-dashboard){overflow-y:auto;padding:20px;}
-
-/* HEADER */
-.hdr{padding:8px 14px;border-bottom:1px solid var(--bdr);display:flex;align-items:center;gap:8px;background:var(--bg2);flex-wrap:wrap}
-.logo{font-family:var(--mono);font-weight:700;font-size:14px;color:var(--g)}
-.logo span{color:var(--t2)}
-.hbadge{font-size:7px;font-family:var(--mono);padding:2px 6px;border-radius:3px;background:rgba(0,229,160,.1);border:1px solid rgba(0,229,160,.2);color:var(--g)}
-.hdot{width:8px;height:8px;border-radius:50%;background:var(--r)}
-.hdot.on{background:var(--g);animation:blink 1s infinite}
-@keyframes blink{0%,100%{opacity:1}50%{opacity:.2}}
-.htime{font-family:var(--mono);font-size:11px;font-weight:700;color:var(--g)}
-.hctrls{margin-left:auto;display:flex;gap:5px;flex-wrap:wrap;align-items:center}
-
-/* BODY — 3 columnas */
-.body{display:grid;grid-template-columns:300px 1fr;overflow:hidden;height:100%}
-.col{border-right:1px solid var(--bdr);display:flex;flex-direction:column;overflow:hidden;background:var(--bg2)}
-.col:last-child{border:none;background:var(--bg)}
-.col-right{overflow-y:auto;padding:10px}
-
-/* BUTTONS */
-.btn{font-family:var(--mono);font-size:10px;font-weight:700;border-radius:5px;padding:6px 12px;cursor:pointer;border:none;transition:opacity .15s}
-.btn:hover{opacity:.85}.btn:disabled{opacity:.25;cursor:default}
-.btn-g{background:var(--g);color:#000}
-.btn-r{background:rgba(239,68,68,.12);color:var(--r);border:1px solid rgba(239,68,68,.28)}
-.btn-d{background:var(--bg3);color:var(--t2);border:1px solid var(--bdr)}
-.btn-y{background:rgba(245,158,11,.1);color:var(--y);border:1px solid rgba(245,158,11,.25)}
-.btn-b{background:rgba(59,130,246,.1);color:var(--b);border:1px solid rgba(59,130,246,.22)}
-.btn-pu{background:rgba(139,92,246,.1);color:var(--pu);border:1px solid rgba(139,92,246,.22)}
-.btn-sm{padding:4px 9px;font-size:9px}
-.btn-xs{padding:2px 6px;font-size:8px}
-.net-tab{background:var(--bg3);color:var(--t2);border:1px solid var(--bdr);font-family:var(--mono);font-size:8px;font-weight:700;padding:2px 6px;border-radius:3px;cursor:pointer;transition:all .15s}
-.net-tab:hover{opacity:.85}
-.net-tab.active{background:rgba(0,229,160,0.1);color:var(--g);border-color:rgba(0,229,160,0.35)}
-.net-tab.sol-active{background:rgba(153,69,255,0.15);color:#a855f7;border-color:rgba(153,69,255,0.35)}
-
-/* SECTION HEADERS */
-.sec-hdr{padding:7px 10px;border-bottom:1px solid var(--bdr);font-family:var(--mono);font-size:8px;font-weight:700;color:var(--t2);text-transform:uppercase;letter-spacing:.09em;display:flex;justify-content:space-between;align-items:center;flex-shrink:0}
-
-/* INPUTS */
-.inp{background:var(--bg3);border:1px solid var(--bdr);border-radius:4px;color:var(--t);padding:4px 7px;font-family:var(--mono);font-size:11px;outline:none;width:100%}
-.inp:focus{border-color:var(--g)}
-select.inp{cursor:pointer}
-.lbl{font-size:7px;color:var(--t2);text-transform:uppercase;letter-spacing:.06em;margin-bottom:2px}
-
-/* SCAN CONFIG */
-.scfg{padding:8px 10px;border-bottom:1px solid var(--bdr);flex-shrink:0}
-.scfg-grid{display:grid;grid-template-columns:1fr 1fr;gap:4px}
-.sf{display:flex;flex-direction:column;gap:2px}
-
-/* SCAN RESULTS LIST */
-.rlist{flex:1;overflow-y:auto;padding:4px}
-.rcard{border-radius:6px;padding:7px 9px;border:1px solid var(--bdr);margin-bottom:3px;cursor:pointer;transition:border-color .12s}
-.rcard:hover{border-color:var(--bdr2)}
-.rcard.sel{border-color:var(--g);background:rgba(0,229,160,.04)}
-.rcard.bull{border-left:3px solid var(--g)}
-.rcard.neut{border-left:3px solid var(--y)}
-.rcard.bear{border-left:3px solid var(--r)}
-.rc-top{display:flex;justify-content:space-between;margin-bottom:2px}
-.rc-sym{font-family:var(--mono);font-size:12px;font-weight:700}
-.rc-tags{display:flex;gap:2px;flex-wrap:wrap;margin-top:2px}
-
-/* WATCHLIST */
-.wlist{flex:1;overflow-y:auto;padding:4px}
-
-/* WATCH CARD */
-.wcard{border-radius:7px;border:1px solid;margin-bottom:5px;overflow:hidden;transition:border-color .2s}
-.wcard.hot{border-color:rgba(0,229,160,.7);background:rgba(0,229,160,.05);animation:glow 1s infinite}
-.wcard.near{border-color:rgba(245,158,11,.55);background:rgba(245,158,11,.03);animation:glowy 2s infinite}
-.wcard.watch{border-color:var(--bdr)}
-.wcard.filled{border-color:rgba(0,229,160,.4);background:rgba(0,229,160,.03)}
-.wcard.tp1{border-color:rgba(0,229,160,.7);background:rgba(0,229,160,.07);animation:glow 1.5s infinite}
-.wcard.sl-hit{border-color:rgba(239,68,68,.55);background:rgba(239,68,68,.05)}
-@keyframes glow{0%,100%{box-shadow:none}50%{box-shadow:0 0 16px rgba(0,229,160,.4)}}
-@keyframes glowy{0%,100%{box-shadow:none}50%{box-shadow:0 0 10px rgba(245,158,11,.3)}}
-
-/* WATCH CARD BODY */
-.wc-hdr{display:flex;align-items:center;justify-content:space-between;padding:8px 10px;border-bottom:1px solid var(--bdr)}
-.wc-sym{font-family:var(--mono);font-size:13px;font-weight:700}
-.wc-body{padding:7px 10px}
-.wc-price-row{display:flex;justify-content:space-between;align-items:center;margin-bottom:4px}
-.wc-price{font-family:var(--mono);font-size:13px;font-weight:700}
-.wc-pnl{font-family:var(--mono);font-size:12px;font-weight:700}
-.wc-info{font-size:8px;color:var(--t2);font-family:var(--mono);margin-bottom:5px}
-.wc-bar{height:3px;background:var(--bg4);border-radius:99px;overflow:hidden;margin-bottom:5px}
-.wc-fill{height:100%;border-radius:99px;transition:width .4s}
-
-/* ORDER LIST */
-.order-list{margin-bottom:5px}
-.order-item{display:flex;align-items:center;gap:4px;padding:3px 6px;border-radius:4px;margin-bottom:2px;border:1px solid;font-family:var(--mono);font-size:8px;cursor:pointer;transition:background .12s}
-.order-item:hover{opacity:.85}
-.oi-pending{border-color:var(--bdr);color:var(--t2);background:rgba(255,255,255,.01)}
-.oi-next{border-color:rgba(245,158,11,.4);color:var(--y);background:rgba(245,158,11,.06)}
-.oi-active{border-color:rgba(0,229,160,.5);color:var(--g);background:rgba(0,229,160,.07);animation:glow .8s infinite}
-.oi-filled{border-color:rgba(0,229,160,.3);color:var(--g);background:rgba(0,229,160,.04)}
-.oi-cancelled{border-color:rgba(239,68,68,.2);color:var(--r);background:rgba(239,68,68,.03)}
-.oi-badge{font-size:7px;padding:1px 4px;border-radius:2px;font-weight:700;flex-shrink:0}
-.oi-info{flex:1}
-.oi-actions{display:flex;gap:2px}
-
-/* ORDER EDIT PANEL */
-.edit-panel{border-top:1px solid var(--bdr);padding:7px 10px;background:rgba(0,229,160,.02)}
-.edit-ttl{font-family:var(--mono);font-size:8px;font-weight:700;color:var(--g);margin-bottom:5px;display:flex;justify-content:space-between}
-.edit-grid{display:grid;grid-template-columns:1fr 1fr;gap:4px;margin-bottom:5px}
-.ef{display:flex;flex-direction:column;gap:2px}
-
-/* MONITOR BAR */
-.mon-bar{padding:7px 10px;border-bottom:1px solid var(--bdr);background:rgba(0,229,160,.025);flex-shrink:0}
-.mb-row{display:flex;align-items:center;gap:8px}
-.countdown{font-family:var(--mono);font-size:18px;font-weight:700;color:var(--g);min-width:26px}
-.countdown.urgent{color:var(--y);animation:blink .4s infinite}
-.mb-stat{font-size:8px;font-family:var(--mono);color:var(--t2)}
-.mb-val{font-weight:700;color:var(--t)}
-
-/* RIGHT — DASH */
-.dash{display:grid;grid-template-columns:repeat(5,1fr);gap:5px;margin-bottom:9px}
-.dc{background:var(--bg2);border:1px solid var(--bdr);border-radius:6px;padding:7px 9px}
-.dc.hi{border-color:rgba(0,229,160,.3);background:rgba(0,229,160,.04)}
-.dc.lo{border-color:rgba(239,68,68,.25);background:rgba(239,68,68,.04)}
-.dc-l{font-size:7px;color:var(--t2);text-transform:uppercase;letter-spacing:.07em;font-weight:600;margin-bottom:2px}
-.dc-v{font-family:var(--mono);font-size:14px;font-weight:700}
-.dc-s{font-size:7px;color:var(--t2);margin-top:1px}
-
-/* ALERT BANNERS */
-.alert-area{margin-bottom:8px}
-.abanner{border-radius:7px;padding:9px 13px;margin-bottom:5px;display:flex;align-items:flex-start;gap:10px;animation:fadein .3s}
-@keyframes fadein{from{opacity:0;transform:translateY(-4px)}to{opacity:1;transform:none}}
-.abanner.buy{background:rgba(0,229,160,.07);border:1px solid rgba(0,229,160,.35)}
-.abanner.sell{background:rgba(239,68,68,.06);border:1px solid rgba(239,68,68,.28)}
-.abanner.tp{background:rgba(0,229,160,.1);border:2px solid rgba(0,229,160,.5)}
-.abanner.warn{background:rgba(245,158,11,.06);border:1px solid rgba(245,158,11,.25)}
-.ab-ico{font-size:20px;flex-shrink:0}
-.ab-ttl{font-family:var(--mono);font-size:11px;font-weight:700}
-.ab-sub{font-size:8px;color:var(--t2);margin-top:2px;line-height:1.5}
-
-/* LOG */
-.logbox{background:var(--bg2);border:1px solid var(--bdr);border-radius:6px;overflow:hidden;margin-bottom:9px}
-.log-hdr{padding:5px 10px;border-bottom:1px solid var(--bdr);font-family:var(--mono);font-size:8px;font-weight:700;color:var(--t2);display:flex;justify-content:space-between;align-items:center}
-.log-body{max-height:110px;overflow-y:auto}
-.le{display:flex;gap:6px;padding:2px 10px;font-family:var(--mono);font-size:8px;border-bottom:1px solid rgba(30,38,56,.25)}
-.le:last-child{border:none}
-.lt{color:var(--t3);min-width:54px;flex-shrink:0}
-.lm.buy{color:var(--g)}.lm.sell{color:var(--r)}.lm.info{color:var(--b)}.lm.warn{color:var(--y)}.lm.tp{color:#4ade80}.lm.sl_{color:var(--r)}
-
-/* CHART */
-.det{background:var(--bg2);border:1px solid var(--bdr);border-radius:7px;overflow:hidden}
-.det-hdr{padding:8px 12px;border-bottom:1px solid var(--bdr);display:flex;align-items:center;gap:7px;flex-wrap:wrap}
-.det-body{display:grid;grid-template-columns:1fr 260px}
-.det-left{padding:9px;border-right:1px solid var(--bdr)}
-.det-right{padding:8px;overflow-y:auto;max-height:480px}
-.ctabs{display:flex;gap:3px;margin-bottom:6px}
-.ctab{background:var(--bg3);border:1px solid var(--bdr);color:var(--t2);border-radius:4px;padding:2px 8px;font-size:8px;font-family:var(--mono);cursor:pointer;font-weight:700}
-.ctab.on{background:var(--g);color:#000;border-color:var(--g)}
-.cwrap{position:relative;height:200px;margin-bottom:6px}
-.cload{position:absolute;inset:0;display:flex;align-items:center;justify-content:center;font-family:var(--mono);font-size:9px;color:var(--t2)}
-.ob-lv{padding:4px 6px;border-radius:4px;margin-bottom:2px;position:relative;overflow:hidden;border:1px solid transparent}
-.ob-lv.buy{border-color:rgba(0,229,160,.3);background:rgba(0,229,160,.05)}
-.ob-lv.buy.best{border-color:var(--g);background:rgba(0,229,160,.1)}
-.ob-lv.sell{border-color:rgba(239,68,68,.2);background:rgba(239,68,68,.04)}
-.ob-bg{position:absolute;top:0;left:0;height:100%;pointer-events:none;opacity:.07}
-.ob-row{display:flex;justify-content:space-between;align-items:center;position:relative;font-size:8px;font-family:var(--mono)}
-.ob-p{font-size:11px;font-weight:700;min-width:72px}
-.ob-sep{font-size:7px;color:var(--t2);text-transform:uppercase;letter-spacing:.07em;font-weight:700;margin:4px 0 2px}
-.ob-mid{text-align:center;padding:4px 0;font-family:var(--mono);font-size:11px;font-weight:700;border-top:1px solid var(--bdr);border-bottom:1px solid var(--bdr);margin:3px 0}
-
-/* MISC */
-.tag{font-size:7px;font-family:var(--mono);font-weight:700;padding:1px 5px;border-radius:3px}
-.tg{background:rgba(0,229,160,.12);color:var(--g);border:1px solid rgba(0,229,160,.2)}
-.ty{background:rgba(245,158,11,.1);color:var(--y);border:1px solid rgba(245,158,11,.2)}
-.tr{background:rgba(239,68,68,.1);color:var(--r);border:1px solid rgba(239,68,68,.18)}
-.tb{background:rgba(59,130,246,.1);color:var(--b);border:1px solid rgba(59,130,246,.18)}
-.tpu{background:rgba(139,92,246,.1);color:var(--pu);border:1px solid rgba(139,92,246,.18)}
-.pb{height:2px;background:var(--bg4);border-radius:99px;overflow:hidden;margin:3px 0}
-.pbf{height:100%;background:linear-gradient(90deg,var(--g),var(--b));border-radius:99px;transition:width .35s;width:0}
-.stxt{font-family:var(--mono);font-size:8px;color:var(--t2);min-height:11px}
-.flash{position:fixed;bottom:14px;right:14px;border-radius:8px;padding:11px 15px;max-width:320px;z-index:999;display:none;animation:fadein .25s}
-.flash.buy{background:rgba(0,229,160,.13);border:2px solid rgba(0,229,160,.5)}
-.flash.sell{background:rgba(239,68,68,.1);border:1px solid rgba(239,68,68,.35)}
-.flash.tp{background:rgba(0,229,160,.18);border:2px solid var(--g)}
-.fttl{font-family:var(--mono);font-size:11px;font-weight:700;margin-bottom:2px}
-.fsub{font-size:8px;color:var(--t2);line-height:1.5}
-.empty{display:flex;align-items:center;justify-content:center;height:160px;color:var(--t2);font-family:var(--mono);font-size:9px;flex-direction:column;gap:5px}
-::-webkit-scrollbar{width:3px;height:3px}::-webkit-scrollbar-track{background:var(--bg)}::-webkit-scrollbar-thumb{background:var(--bg4);border-radius:99px}
-.login-screen { position:fixed; inset:0; background:var(--bg); z-index:9999; display:flex; align-items:center; justify-content:center; flex-direction:column; gap:15px; }
-.login-box { background:var(--bg2); border:1px solid var(--bdr); padding:25px; border-radius:8px; width:320px; text-align:center; box-shadow:0 0 20px rgba(0,0,0,0.5); }
-</style>
-</head>
-<body>
-<div class="login-screen" id="loginScreen" style="display:none">
-  <div class="login-box">
-    <div class="logo" style="font-size:24px;margin-bottom:10px">DIP<span>/</span>HUNTER</div>
-    <div style="font-size:11px;color:var(--t2);margin-bottom:20px;line-height:1.4">Acceso Privado al Nodo VPS<br>(Requiere contraseña de administrador)</div>
-    <input type="password" id="pwInp" class="inp" placeholder="Ingresa la contraseña..." style="margin-bottom:15px;font-size:14px;padding:8px" onkeydown="if(event.key==='Enter') doLogin()">
-    <button class="btn btn-g" style="width:100%;font-size:13px;padding:8px" onclick="doLogin()">Autenticar</button>
-  </div>
-</div>
-<div class="app">
-
-
-<style>
-  .tab-nav { display:flex; gap:10px; padding:10px 20px; background:var(--bg2); border-bottom:1px solid var(--bdr); flex-wrap:wrap; }
-  .tab-btn { font-size:12px; padding:8px 16px; border:none; background:transparent; color:var(--t2); cursor:pointer; font-weight:600; border-bottom:2px solid transparent; }
-  .tab-btn:hover { color:var(--t); }
-  .tab-btn.active { color:var(--pu); border-bottom:2px solid var(--pu); }
-</style>
-<script>
-function switchTab(tabId) {
-  document.querySelectorAll('.tab-panel').forEach(el => el.style.display = 'none');
-  document.querySelectorAll('.tab-btn').forEach(el => el.classList.remove('active'));
-  const panel = document.getElementById('tab-' + tabId);
-  if (panel) {
-    panel.style.display = 'block';
-  }
-  const btn = document.getElementById('tabbtn-' + tabId);
-  if (btn) btn.classList.add('active');
-  localStorage.setItem('activeTab', tabId);
-  
-  if (tabId === 'config' || tabId === 'copilot') {
-    if (typeof loadConfigData === 'function') loadConfigData();
-  } else if (tabId === 'pool') {
-    if (typeof loadPoolData === 'function') loadPoolData();
-  }
-}
-window.addEventListener('DOMContentLoaded', () => {
-  const saved = localStorage.getItem('activeTab') || 'dashboard';
-  switchTab(saved);
-});
-</script>
-<div class="tab-nav">
-  <button id="tabbtn-dashboard" class="tab-btn" onclick="switchTab('dashboard')">📊 Dashboard</button>
-  <button id="tabbtn-pool" class="tab-btn" onclick="switchTab('pool')">🏦 Pool / Inversores</button>
-  <button id="tabbtn-copilot" class="tab-btn" onclick="switchTab('copilot')">🤖 Copiloto</button>
-  <button id="tabbtn-config" class="tab-btn" onclick="switchTab('config')">⚙️ Configuración</button>
-  <button id="tabbtn-history" class="tab-btn" onclick="switchTab('history')">📜 Historial</button>
-</div>
-
-<!-- HEADER -->
-<div class="hdr">
-  <span class="logo">DIP<span>/</span>HUNTER <span style="font-size:9px;color:var(--pu)">v6</span></span>
-  <span class="hbadge" id="hbadge">Escáner MEXC · Monitor 15s · Auto-Ejecución</span>
-  <div class="hdot" id="dot"></div>
-  <span class="htime" id="htime">—</span>
-  <div style="font-family:var(--mono);font-size:8px;color:var(--t2)" id="hstat">Monitor detenido</div>
-  <select id="modeSel" class="inp" style="width:120px;font-size:9px;padding:2px 4px;margin-left:10px;background:rgba(255,255,255,.05);border-color:var(--bdr2);color:var(--t);" onchange="changeRunMode()">
-    <option value="simulated">🟢 MODO SIMULADO</option>
-    <option value="real">🔴 API REAL</option>
-  </select>
-  <select id="solModeSel" class="inp" style="width:120px;font-size:9px;padding:2px 4px;margin-left:10px;background:rgba(255,255,255,.05);border-color:var(--bdr2);color:var(--t);" onchange="changeSolMode()">
-    <option value="sim">💰 Saldo Simulado</option>
-    <option value="pool">👥 Saldo Pool (Real)</option>
-    <option value="wallet">🟣 Wallet Real</option>
-  </select>
-  <span id="solanaVpsWallet" style="display:none;font-family:var(--mono);font-size:8px;background:rgba(20,241,149,0.12);padding:4px 8px;border-radius:4px;border:1px solid rgba(20,241,149,0.3);color:#14f195;align-items:center;gap:4px;margin-left:8px">
-    🤖 VPS Wallet: <span id="vpsSolAddress">No config</span> · <span id="vpsSolBalance" style="font-weight:700">0.00 SOL</span>
-  </span>
-  <span id="phantomWallet" style="display:none;font-family:var(--mono);font-size:8px;background:rgba(153,69,255,0.12);padding:4px 8px;border-radius:4px;border:1px solid rgba(153,69,255,0.3);color:#a855f7;align-items:center;gap:4px;margin-left:8px">
-    🟣 <span id="phantomAddress">No conectada</span>
-  </span>
-  <button class="btn btn-pu btn-sm" id="btnConnectPhantom" style="display:none;margin-left:8px" onclick="connectPhantom()">🔌 Conectar Wallet</button>
-  <div class="hctrls">
-    <button class="btn btn-d btn-sm" id="btnSound" onclick="toggleSound()">🔇 Sonido</button>
-    <button class="btn btn-d btn-sm" id="btnNotif" onclick="requestNotif()">🔔 Notif.</button>
-    <button class="btn btn-d btn-sm" onclick="openPoolModal()">🏦 Pool</button>
-    <button class="btn btn-d btn-sm" onclick="showTrades()">📋 Historial</button>
-    <button class="btn btn-d btn-sm" onclick="openConfigModal()">⚙️ Config</button>
-    <button class="btn btn-r btn-sm" id="btnStop" style="display:none" onclick="stopMonitor()">⏹ Parar monitor</button>
-    <button class="btn btn-g" id="btnStart" onclick="startMonitor()">▶ INICIAR MONITOR</button>
-  </div>
-</div>
-
-
-<div class="tab-panel" id="tab-dashboard" style="display:block;">
 <div class="body">
 
 <!-- ══ COL 1: ESCÁNER ══ -->
@@ -876,85 +569,140 @@ async function initServerState(){
 }
 function showTrades(){if(!SIM.trades.length){alert('Sin operaciones');return;}alert('HISTORIAL:\n\n'+SIM.trades.map((t,i)=>`#${i+1} ${t.symbol}: ${t.pnl>=0?'+':''}$${(+t.pnl).toFixed(2)} (${t.pnlPct}%) · ${t.at?new Date(t.at).toLocaleDateString('es'):''}`).join('\n'));}
 
-async function loadPoolData() {
+async function openPoolModal() {
+  const existing = document.getElementById('poolModalOverlay');
+  if (existing) existing.remove();
+  
+  const p = document.createElement('div');
+  p.id = 'poolModalOverlay';
+  p.style.cssText = 'position:fixed;inset:0;background:rgba(0,0,0,0.8);z-index:9000;display:flex;align-items:center;justify-content:center';
+  p.innerHTML = `
+    <div style="background:var(--bg2);width:500px;max-width:95%;border:1px solid var(--bdr);border-radius:8px;padding:25px;font-family:var(--sans);max-height:90vh;overflow-y:auto">
+      <div style="font-weight:700;margin-bottom:15px;color:var(--t);font-size:16px;">🏦 Gestión del Pool de Inversores</div>
+      <div style="margin-bottom:15px;font-size:11px;color:var(--t2)">
+        Configura la wallet central y la comisión del sistema. Los inversores verán esto en su panel (/investor). La billetera es generada automáticamente por el sistema.<br/><br/>
+        <strong>¿Cómo funciona USDC en Solana?</strong><br/>
+        El bot usa Júpiter Aggregator para sus trades. Aunque las comisiones de red ("gas") se pagan en SOL, el bot puede tener el saldo principal en USDC e intercambiar (hacer swap) directamente de USDC a otros tokens de Solana de forma transparente, y de regreso a USDC. Solo asegúrate de enviar un poco de SOL (~0.05 SOL) a la wallet del Pool para cubrir los fees transaccionales y la creación de cuentas de tokens.
+      </div>
+      <div style="margin-bottom:10px">
+        <div style="font-size:10px;color:var(--t2);margin-bottom:4px">Billetera del Sistema (Pool)</div>
+        <div style="display:flex;gap:4px">
+          <input type="text" id="cfgPoolWallet" class="inp" style="width:100%;" readonly>
+          <button class="btn btn-g" onclick="rotatePoolWallet(this)">Rotar</button>
+        </div>
+        <div style="font-family:var(--mono);font-size:10px;color:#14f195;margin-top:4px" id="poolWalletBalances">Balance: --</div>
+      </div>
+      <div style="margin-bottom:15px">
+        <div style="font-size:10px;color:var(--t2);margin-bottom:4px">Comisión del Administrador (%)</div>
+        <input type="number" id="cfgPoolCom" class="inp" placeholder="Ej: 20 para 20%" style="width:100%">
+      </div>
+      <div style="display:flex;gap:10px;margin-bottom:20px;flex-wrap:wrap;">
+        <button class="btn btn-g" style="flex:1;min-width:110px;" onclick="savePoolConfig(this)">💾 Guardar</button>
+        <button class="btn btn-y" style="flex:1;min-width:110px;" onclick="recoverPoolRent(this)">🧹 Limpiar Rent</button>
+        <button class="btn btn-a" style="flex:1;min-width:110px;" onclick="backupPoolWallet(this)">🔐 Backup (Key)</button>
+        <button class="btn btn-d" style="flex:1;min-width:110px;" onclick="document.getElementById('poolModalOverlay').remove()">❌ Cerrar</button>
+      </div>
+
+      <div style="font-weight:700;margin-bottom:10px;color:var(--t);font-size:14px;border-top:1px solid var(--bdr);padding-top:15px">👥 Inversores Actuales</div>
+      <div id="poolInvestorsList" style="font-family:var(--mono);font-size:11px;color:var(--t2);margin-bottom:15px;max-height:150px;overflow-y:auto">
+        Cargando...
+      </div>
+      
+      <div style="background:var(--bg3);padding:10px;border-radius:6px;margin-bottom:15px">
+        <div style="font-size:11px;margin-bottom:5px;font-weight:bold;color:var(--t)">Añadir / Actualizar Inversor</div>
+        <div style="display:flex;gap:4px;margin-bottom:5px">
+          <input type="text" id="addInvName" class="inp" placeholder="Nombre" style="flex:1">
+          <input type="number" id="addInvDeposit" class="inp" placeholder="Sumar Depósito" style="width:100px">
+        </div>
+        <div style="display:flex;gap:4px;margin-bottom:5px">
+          <input type="text" id="addInvPwd" class="inp" placeholder="Contraseña" style="flex:1">
+          <input type="text" id="addInvDepWallet" class="inp" placeholder="Wallet depósito (auto si vacío)" style="flex:2">
+        </div>
+        <button class="btn btn-g btn-sm" style="width:100%" onclick="savePoolInvestor()">Añadir/Editar</button>
+      </div>
+      
+      <div style="font-weight:700;margin-bottom:10px;color:var(--t);font-size:14px;border-top:1px solid var(--bdr);padding-top:15px">💰 Tus Ganancias (Admin)</div>
+      <div style="margin-bottom:15px;font-size:12px;color:var(--g);font-family:var(--mono);font-weight:bold">
+        Comisiones acumuladas: $<span id="lblAdminCom">0.00</span>
+      </div>
+      <div style="display:flex;gap:4px;margin-bottom:15px">
+        <input type="text" id="inpAdminWallet" class="inp" placeholder="Tu wallet personal" style="flex:1">
+        <input type="number" id="inpAdminAmt" class="inp" placeholder="Cantidad" style="width:100px">
+        <button class="btn btn-g btn-sm" onclick="withdrawAdmin()">Retirar a mi wallet</button>
+      </div>
+
+      <div style="font-weight:700;margin-bottom:10px;color:var(--t);font-size:14px;border-top:1px solid var(--bdr);padding-top:15px">💸 Solicitudes de Retiro</div>
+      <div id="poolRequestsList" style="font-family:var(--sans);font-size:11px;color:var(--t2);margin-bottom:15px;max-height:150px;overflow-y:auto">
+        Cargando solicitudes...
+      </div>
+    </div>
+  `;
+  document.body.appendChild(p);
+
   try {
     const res = await myFetch('/api/pool');
     const data = await res.json();
-    if (data.poolConfig) {
+    if(data.poolConfig) {
       document.getElementById('cfgPoolWallet').value = data.poolConfig.walletAddress || '';
-      document.getElementById('cfgPoolCom').value = Math.round((data.poolConfig.commissionRate || 0) * 100);
+      document.getElementById('poolWalletBalances').innerText = `Balance: ${data.solBalance ? data.solBalance.toFixed(4) : '0.0000'} SOL | $${data.usdcBalance ? data.usdcBalance.toFixed(2) : '0.00'} USDC`;
+      document.getElementById('cfgPoolCom').value = (data.poolConfig.commissionRate * 100).toFixed(1);
+      document.getElementById('lblAdminCom').innerText = (data.poolConfig.totalCommissionEarned || 0).toFixed(2);
       
-      const lblAdmin = document.getElementById('lblAdminCom');
-      if (lblAdmin) lblAdmin.textContent = (data.poolConfig.adminProfit || 0).toFixed(2);
-      
-      const balEl = document.getElementById('poolWalletBalances');
-      if (balEl) {
-        balEl.textContent = `Balance: ${data.solBalance ? data.solBalance.toFixed(4) : '0.0000'} SOL | $${data.usdcBalance ? data.usdcBalance.toFixed(2) : '0.00'} USDC`;
-      }
-      
-      const invList = document.getElementById('poolInvestorsList');
-      if (invList) {
-        if (!data.poolConfig.investors || data.poolConfig.investors.length === 0) {
-          invList.innerHTML = 'No hay inversores registrados.';
-        } else {
-          invList.innerHTML = data.poolConfig.investors.map(i => {
-            const statusBadge = i.status === 'inactive' ? ' <span style="color:var(--r);font-size:9px;">[Inactivo]</span>' : '';
-            let walletInfo = '';
-            if (i.depositWallet) {
-               walletInfo = `<div style="font-size:9px;color:var(--t2);margin-top:4px;">Depósito en: ${i.depositWallet} ${i.depositWalletPk ? `<a href="#" onclick="alert('Private Key de ${i.name}: ${i.depositWalletPk}')" style="color:var(--g)">[Ver PK]</a>` : ''}</div>`;
-            }
-            return `
-            <div style="border-bottom:1px solid var(--bg3);padding:6px 0;align-items:center;">
-              <div style="display:flex;justify-content:space-between;align-items:center;">
-                <div><strong style="color:var(--t)">${i.name}</strong> <span style="font-size:9px">(Deposit: $${(i.deposit||0).toFixed(2)})</span>${statusBadge}</div>
-                <div style="display:flex;align-items:center;gap:10px;">
-                  <div style="color:${(i.profit||0)>0?'var(--g)':'var(--r)'}">${(i.profit||0)>=0?'+':''}$${(i.profit||0).toFixed(2)} PNL</div>
-                  <button onclick="syncInvestorDeposit('${i.name}')" class="btn btn-a" style="font-size:9px;padding:2px 5px;">Sincronizar</button>
-                  <button onclick="editInvestorDeposit('${i.name}', ${i.deposit})" class="btn btn-g" style="font-size:9px;padding:2px 5px;">Editar Depósito</button>
-                  <button onclick="editInvestorPassword('${i.name}')" class="btn btn-y" style="font-size:9px;padding:2px 5px;">Editar Contraseña</button>
-                  <button onclick="deletePoolInvestor('${i.name}')" class="btn" style="background:var(--r);font-size:9px;padding:2px 5px;">Eliminar</button>
-                </div>
+      const list = document.getElementById('poolInvestorsList');
+      if (!data.poolConfig.investors || data.poolConfig.investors.length === 0) {
+        list.innerHTML = 'No hay inversores aún.';
+      } else {
+        list.innerHTML = data.poolConfig.investors.map(i => {
+          let statusBadge = '';
+          if (i.depositStatus === 'pending_user' || i.depositStatus === 'pending_admin') {
+            statusBadge = `<span style="font-size:9px;color:var(--t2);background:var(--bg3);padding:2px 4px;border-radius:4px;margin-left:5px">Esperando</span> <button onclick="approveDeposit('${i.name}', ${i.expectedDeposit || 0})" class="btn btn-g btn-sm" style="font-size:9px;padding:2px 5px;margin-left:5px">Forzar</button>`;
+          }
+          let walletInfo = '';
+          if (i.depositWallet) {
+             walletInfo = `<div style="font-size:9px;color:var(--t2);margin-top:4px;">Depósito en: ${i.depositWallet} ${i.depositWalletPk ? `<a href="#" onclick="alert('Private Key de ${i.name}: ${i.depositWalletPk}')" style="color:var(--g)">[Ver PK]</a>` : ''}</div>`;
+          }
+          return `
+          <div style="border-bottom:1px solid var(--bg3);padding:6px 0;align-items:center;">
+            <div style="display:flex;justify-content:space-between;align-items:center;">
+              <div><strong style="color:var(--t)">${i.name}</strong> <span style="font-size:9px">(Deposit: $${(i.deposit||0).toFixed(2)})</span>${statusBadge}</div>
+              <div style="display:flex;align-items:center;gap:10px;">
+                <div style="color:${(i.profit||0)>0?'var(--g)':'var(--r)'}">${(i.profit||0)>=0?'+':''}$${(i.profit||0).toFixed(2)} PNL</div>
+                <button onclick="syncInvestorDeposit('${i.name}')" class="btn btn-a" style="font-size:9px;padding:2px 5px;">Sincronizar</button>
+                <button onclick="editInvestorDeposit('${i.name}', ${i.deposit})" class="btn btn-g" style="font-size:9px;padding:2px 5px;">Editar Depósito</button>
+                <button onclick="editInvestorPassword('${i.name}')" class="btn btn-y" style="font-size:9px;padding:2px 5px;">Editar Contraseña</button>
+                <button onclick="deletePoolInvestor('${i.name}')" class="btn" style="background:var(--r);font-size:9px;padding:2px 5px;">Eliminar</button>
               </div>
-              ${walletInfo}
             </div>
-          `}).join('');
-        }
+            ${walletInfo}
+          </div>
+        `}).join('');
       }
 
       const reqList = document.getElementById('poolRequestsList');
-      if (reqList) {
-        if (!data.poolConfig.withdrawalRequests || data.poolConfig.withdrawalRequests.filter(r => r.status === 'pending').length === 0) {
-          reqList.innerHTML = 'No hay solicitudes pendientes.';
-        } else {
-          reqList.innerHTML = data.poolConfig.withdrawalRequests.filter(r => r.status === 'pending').map(r => `
-            <div style="border:1px solid var(--bdr);border-radius:4px;padding:8px;margin-bottom:8px;background:var(--bg3)">
-              <div style="display:flex;justify-content:space-between;margin-bottom:6px">
-                <strong style="color:var(--t);font-size:13px">${r.name}</strong>
-                <strong style="color:var(--t);font-size:13px">$${r.amount}</strong>
-              </div>
-              <div style="font-family:var(--mono);font-size:9px;color:var(--t2);margin-bottom:8px;word-break:break-all">
-                Wallet: ${r.destinationWallet}
-              </div>
-              <div style="display:flex;gap:4px">
-                <button class="btn btn-g btn-sm" style="flex:1" onclick="processWithdraw('${r.id}', 'approve')">Aprobar (Retirar)</button>
-                <button class="btn btn-r btn-sm" style="flex:1" onclick="processWithdraw('${r.id}', 'reject')">Rechazar</button>
-              </div>
+      if (!data.poolConfig.withdrawalRequests || data.poolConfig.withdrawalRequests.filter(r => r.status === 'pending').length === 0) {
+        reqList.innerHTML = 'No hay solicitudes pendientes.';
+      } else {
+        reqList.innerHTML = data.poolConfig.withdrawalRequests.filter(r => r.status === 'pending').map(r => `
+          <div style="border:1px solid var(--bdr);border-radius:4px;padding:8px;margin-bottom:8px;background:var(--bg3)">
+            <div style="display:flex;justify-content:space-between;margin-bottom:6px">
+              <strong style="color:var(--t);font-size:13px">${r.name}</strong>
+              <strong style="color:var(--t);font-size:13px">$${r.amount}</strong>
             </div>
-          `).join('');
-        }
+            <div style="font-family:var(--mono);font-size:9px;color:var(--t2);margin-bottom:8px;word-break:break-all">
+              Wallet: ${r.destinationWallet}
+            </div>
+            <div style="display:flex;gap:4px">
+              <button class="btn btn-g btn-sm" style="flex:1" onclick="processWithdraw('${r.id}', 'approve')">Aprobar (Retirar)</button>
+              <button class="btn btn-r btn-sm" style="flex:1" onclick="processWithdraw('${r.id}', 'reject')">Rechazar</button>
+            </div>
+          </div>
+        `).join('');
       }
     }
   } catch(e) {
-    console.error(e);
-    const invList = document.getElementById('poolInvestorsList');
-    if (invList) invList.innerHTML = 'Error al cargar';
-    const reqList = document.getElementById('poolRequestsList');
-    if (reqList) reqList.innerHTML = 'Error al cargar';
+    document.getElementById('poolInvestorsList').innerHTML = 'Error al cargar';
+    document.getElementById('poolRequestsList').innerHTML = 'Error al cargar';
   }
-}
-
-function openPoolModal() {
-  switchTab("pool");
 }
 
 async function rotatePoolWallet(btn) {
@@ -971,7 +719,7 @@ async function rotatePoolWallet(btn) {
         msg += '\n\n' + data.transferInfo.trim();
       }
       alert(msg);
-      switchTab('dashboard');
+      document.getElementById('poolModalOverlay').remove();
       openPoolModal();
     } else {
       alert(data.error || 'Error generando billetera');
@@ -1212,190 +960,329 @@ async function savePoolInvestor() {
   }
 }
 
-let currentConfig = {};
+async function openConfigModal() {
+  const existing = document.getElementById('configModalOverlay');
+  if (existing) existing.remove();
 
-async function loadConfigData() {
+  const p = document.createElement('div');
+  p.id = 'configModalOverlay';
+  p.style.cssText = 'position:fixed;inset:0;background:rgba(0,0,0,0.8);z-index:9000;display:flex;align-items:center;justify-content:center';
+  p.innerHTML = `
+    <div style="background:var(--bg2);width:450px;max-width:95%;border:1px solid var(--bdr);border-radius:8px;padding:25px;font-family:var(--sans);max-height:90vh;overflow-y:auto">
+      <div style="font-weight:700;margin-bottom:15px;color:var(--t);font-size:16px;">⚙️ Configuración del Servidor VPS</div>
+      <div style="margin-bottom:15px;font-size:11px;color:var(--t2)">
+        Estos datos se guardarán cifrados en el servidor. Son necesarios sí deseas operar automáticamente en tu cuenta principal o recibir alertas en tu grupo de Telegram.
+      </div>
+      
+      <div style="margin-bottom:10px">
+        <div style="font-size:10px;color:var(--t2);margin-bottom:4px">MEXC API Key (Lectura/Trading)</div>
+        <input type="text" id="cfgMexcKey" class="inp" placeholder="mx0vvlv..." style="width:100%">
+      </div>
+      <div style="margin-bottom:15px">
+        <div style="font-size:10px;color:var(--t2);margin-bottom:4px">MEXC API Secret</div>
+        <input type="password" id="cfgMexcSecret" class="inp" placeholder="********" style="width:100%">
+      </div>
+
+      <!-- SECCIÓN SOLANA -->
+      <div style="border-top:1px solid var(--bdr);margin-top:15px;padding-top:15px;margin-bottom:15px">
+        <div style="font-weight:600;color:var(--pu);font-size:11px;margin-bottom:10px;text-transform:uppercase;letter-spacing:0.05em">🔑 Configuración de Solana (DEX Swaps)</div>
+        <div style="margin-bottom:10px">
+          <div style="font-size:10px;color:var(--t2);margin-bottom:4px">Solana Private Key (Phantom/Base58)</div>
+          <input type="password" id="cfgSolKey" class="inp" placeholder="Ej: 5K8xSgQ..." style="width:100%">
+          <div id="cfgSolKeyErr" style="display:none;color:var(--r);font-size:10px;margin-top:4px;font-family:var(--mono);line-height:1.2;font-weight:600"></div>
+        </div>
+        <div style="margin-bottom:10px">
+          <div style="font-size:10px;color:var(--t2);margin-bottom:4px">Solana RPC URL</div>
+          <input type="text" id="cfgSolRpc" class="inp" placeholder="https://api.mainnet-beta.solana.com" style="width:100%">
+        </div>
+        <div style="margin-bottom:10px">
+          <div style="font-size:10px;color:var(--t2);margin-bottom:4px">Moneda Base de Operación</div>
+          <select id="cfgSolBase" class="inp" style="width:100%">
+            <option value="SOL">SOL (Wrapped SOL)</option>
+            <option value="USDC">USDC (Stablecoin)</option>
+          </select>
+        </div>
+        <div style="margin-bottom:10px;display:flex;gap:10px">
+          <div style="flex:1">
+            <div style="font-size:10px;color:var(--t2);margin-bottom:4px">Deslizamiento Máx (%)</div>
+            <input type="number" step="0.1" id="cfgSolSlippage" class="inp" placeholder="Ej: 2.5" style="width:100%">
+          </div>
+          <div style="flex:1">
+            <div style="font-size:10px;color:var(--t2);margin-bottom:4px">Tarifa Prioridad (Lamports)</div>
+            <select id="cfgSolPriority" class="inp" style="width:100%">
+              <option value="auto">Automático (auto)</option>
+              <option value="100000">Estándar (100k lamports)</option>
+              <option value="500000">Alta prioridad (500k lamports)</option>
+              <option value="1500000">Turbo Ultra (1.5M lamports)</option>
+            </select>
+          </div>
+        </div>
+      </div>
+
+      <!-- SECCIÓN RUGCHECK (SAFETY) -->
+      <div style="border-top:1px solid var(--bdr);margin-top:15px;padding-top:15px;margin-bottom:15px">
+        <div style="font-weight:600;color:var(--y);font-size:11px;margin-bottom:10px;text-transform:uppercase;letter-spacing:0.05em">🛡️ Seguridad Anti-Rug (RugCheck)</div>
+        <div style="margin-bottom:10px;display:flex;align-items:center;gap:10px;">
+          <input type="checkbox" id="cfgSafetyCheckEnabled" style="cursor:pointer">
+          <label for="cfgSafetyCheckEnabled" style="font-size:11px;color:var(--t1);cursor:pointer;">Habilitar Chequeo de Seguridad en Compras</label>
+        </div>
+        <div style="margin-bottom:10px;display:flex;align-items:center;gap:10px;">
+          <input type="checkbox" id="cfgUseJitoBundle" style="cursor:pointer">
+          <label for="cfgUseJitoBundle" style="font-size:11px;color:var(--t1);cursor:pointer;">Habilitar Jito Bundles (Protección Anti-Sandwich)</label>
+        </div>
+        <div style="font-size:9px;color:var(--t2);">Evita compras de tokens marcados como Danger en RugCheck o con Autoridad de Mint/Freeze activa on-chain.</div>
+      </div>
+
+      <!-- SECCIÓN COPILOTO AUTO-TRADING -->
+      <div style="border-top:1px solid var(--bdr);margin-top:15px;padding-top:15px;margin-bottom:15px">
+        <div style="font-weight:600;color:#14f195;font-size:11px;margin-bottom:10px;text-transform:uppercase;letter-spacing:0.05em">🤖 Copiloto Auto-Trading (Autopilot)</div>
+        <div style="margin-bottom:12px;display:flex;align-items:center;gap:10px;">
+          <input type="checkbox" id="cfgAutoTraderEnabled" style="cursor:pointer">
+          <label for="cfgAutoTraderEnabled" style="font-size:11px;color:var(--t1);cursor:pointer;font-weight:600;">Habilitar Piloto Automático</label>
+        </div>
+        <div style="margin-bottom:10px;display:flex;gap:10px">
+          <div style="flex:1">
+            <div style="font-size:10px;color:var(--t2);margin-bottom:4px">Monto por Operación ($)</div>
+            <input type="number" id="cfgAutoTraderAmount" class="inp" placeholder="50" style="width:100%">
+          </div>
+          <div style="flex:1">
+            <div style="font-size:10px;color:var(--t2);margin-bottom:4px">Volumen Min 24H ($)</div>
+            <input type="number" id="cfgAutoTraderMin24HVol" class="inp" placeholder="50000" style="width:100%">
+          </div>
+        </div>
+        <div style="margin-bottom:10px;display:flex;gap:10px">
+          <div style="flex:1">
+            <div style="font-size:10px;color:var(--t2);margin-bottom:4px">MarketCap Min ($)</div>
+            <input type="number" id="cfgAutoTraderMinMarketCap" class="inp" placeholder="200000" style="width:100%">
+          </div>
+          <div style="flex:1">
+            <div style="font-size:10px;color:var(--t2);margin-bottom:4px">MarketCap Max ($)</div>
+            <input type="number" id="cfgAutoTraderMaxMarketCap" class="inp" placeholder="2000000" style="width:100%">
+          </div>
+        </div>
+        <div style="margin-bottom:10px;display:flex;gap:10px">
+          <div style="flex:1">
+            <div style="font-size:10px;color:var(--t2);margin-bottom:4px">Antigüedad Min (Hrs)</div>
+            <input type="number" id="cfgAutoTraderMinAge" class="inp" placeholder="48" style="width:100%">
+          </div>
+          <div style="flex:1">
+            <div style="font-size:10px;color:var(--t2);margin-bottom:4px">Antigüedad Max (Hrs)</div>
+            <input type="number" id="cfgAutoTraderMaxAge" class="inp" placeholder="500" style="width:100%">
+          </div>
+        </div>
+        <div style="margin-bottom:10px;display:flex;gap:10px">
+          <div style="flex:1">
+            <div style="font-size:10px;color:var(--t2);margin-bottom:4px">Liquidez Min ($)</div>
+            <input type="number" id="cfgAutoTraderMinLiq" class="inp" placeholder="2000" style="width:100%">
+          </div>
+          <div style="flex:1">
+            <div style="font-size:10px;color:var(--t2);margin-bottom:4px">Stop Loss (%)</div>
+            <input type="number" id="cfgAutoTraderStopLoss" class="inp" placeholder="10" style="width:100%">
+          </div>
+        </div>
+        <div style="margin-bottom:10px;display:flex;gap:10px">
+          <div style="flex:1">
+            <div style="font-size:10px;color:var(--t2);margin-bottom:4px">Take Profit 1 (%)</div>
+            <input type="number" id="cfgAutoTraderTakeProfit1" class="inp" placeholder="8" style="width:100%">
+          </div>
+          <div style="flex:1">
+            <div style="font-size:10px;color:var(--t2);margin-bottom:4px">Take Profit 2 (%)</div>
+            <input type="number" id="cfgAutoTraderTakeProfit2" class="inp" placeholder="15" style="width:100%">
+          </div>
+        </div>
+        <div style="font-size:9px;color:var(--t2);">El Copiloto busca automáticamente tokens en DexScreener según estos filtros, analiza su seguridad (RugCheck), calcula la pared de soporte más fuerte de su liquidez, y programa DCA órdenes automáticas sin duplicar activos.</div>
+      </div>
+
+      <!-- SECCIÓN TELEGRAM ALERTS -->
+      <div style="border-top:1px solid var(--bdr);margin-top:15px;padding-top:15px;margin-bottom:15px">
+        <div style="font-weight:600;color:var(--b);font-size:11px;margin-bottom:10px;text-transform:uppercase;letter-spacing:0.05em">💬 Telegram Alerts</div>
+        <div style="margin-bottom:10px">
+          <div style="font-size:10px;color:var(--t2);margin-bottom:4px">Telegram Bot Token</div>
+          <input type="text" id="cfgTgToken" class="inp" placeholder="Ej: 123456789:ABCDefgh..." style="width:100%">
+        </div>
+        <div style="margin-bottom:10px">
+          <div style="font-size:10px;color:var(--t2);margin-bottom:4px">Telegram Chat ID</div>
+          <input type="text" id="cfgTgChat" class="inp" placeholder="-100xxxxxxx" style="width:100%">
+        </div>
+        <div style="margin-bottom:10px">
+          <button id="btnTestTg" class="btn btn-b" style="width:100%;font-size:10px;padding:6px 12px;margin-top:5px" onclick="testTelegramConnection(this)">🔌 Probar Mensaje de Telegram</button>
+        </div>
+      </div>
+
+      <!-- SECCIÓN DEXTOOLS -->
+      <div style="border-top:1px solid var(--bdr);margin-top:15px;padding-top:15px;margin-bottom:15px">
+        <div style="font-weight:600;color:#38bdf8;font-size:11px;margin-bottom:10px;text-transform:uppercase;letter-spacing:0.05em">📊 DEXTools API (Opcional)</div>
+        <div style="margin-bottom:10px">
+          <div style="font-size:10px;color:var(--t2);margin-bottom:4px">DEXTools API Key (Para Sincronización oficial)</div>
+          <input type="password" id="cfgDextoolsKey" class="inp" placeholder="Dejar vacío para usar GeckoTerminal gratis" style="width:100%">
+        </div>
+      </div>
+      
+      <!-- SECCIÓN TWITTER -->
+      <div style="border-top:1px solid var(--bdr);margin-top:15px;padding-top:15px;margin-bottom:15px">
+        <div style="font-weight:600;color:#1da1f2;font-size:11px;margin-bottom:10px;text-transform:uppercase;letter-spacing:0.05em">🐦 Twitter (X) API</div>
+        <div style="margin-bottom:10px">
+          <div style="font-size:10px;color:var(--t2);margin-bottom:4px">Twitter Bearer Token (Para análisis de Scam/Bullish)</div>
+          <input type="password" id="cfgTwitterKey" class="inp" placeholder="AAAAAAAAAAAAAAAAAAAAA..." style="width:100%">
+        </div>
+      </div>
+      
+      <div style="border-top:1px solid var(--bdr);margin-top:15px;padding-top:15px;margin-bottom:15px">
+        <div style="font-size:10px;color:var(--t2);margin-bottom:4px">Contraseña del Panel Web</div>
+        <input type="password" id="cfgAppPwd" class="inp" placeholder="Dejar en blanco para mantener la actual" style="width:100%">
+      </div>
+      
+      <div style="display:flex;gap:10px;justify-content:flex-end;margin-top:20px">
+        <button class="btn btn-d" onclick="document.getElementById('configModalOverlay').remove()">Cancelar</button>
+        <button class="btn btn-b" id="btnSaveCfg">Guardar Settings</button>
+      </div>
+    </div>
+  `;
+  document.body.appendChild(p);
+  
   try {
     const res = await myFetch('/api/config');
-    if (res.ok) {
-      const data = await res.json();
-      currentConfig = data.config || {};
-      
-      const setVal = (id, val) => {
-        const el = document.getElementById(id);
-        if (el) el.value = val !== undefined ? val : '';
-      };
-      const setCheck = (id, val) => {
-        const el = document.getElementById(id);
-        if (el) el.checked = !!val;
-      };
-      
-      setVal('cfgMexcKey', currentConfig.mexcApiKey);
-      setVal('cfgMexcSecret', currentConfig.mexcApiSecret);
-      setVal('cfgSolKey', currentConfig.solanaPrivateKey);
-      setVal('cfgSolSlippage', currentConfig.solanaSlippage || '2.5');
-      setVal('cfgSolPriority', currentConfig.solanaPriorityFee || 'auto');
-      setCheck('cfgSafetyCheckEnabled', currentConfig.safetyCheckEnabled);
-      setCheck('cfgUseJitoBundle', currentConfig.useJitoBundle);
-      
-      setCheck('cfgAutoTraderEnabled', currentConfig.autoTraderEnabled);
-      setVal('cfgAutoTraderAmount', currentConfig.autoTraderAmount);
-      setVal('cfgAutoTraderMin24HVol', currentConfig.autoTraderMin24HVol);
-      setVal('cfgAutoTraderMinMarketCap', currentConfig.autoTraderMinMarketCap);
-      setVal('cfgAutoTraderMaxMarketCap', currentConfig.autoTraderMaxMarketCap);
-      setVal('cfgAutoTraderMinAge', currentConfig.autoTraderMinAge);
-      setVal('cfgAutoTraderMaxAge', currentConfig.autoTraderMaxAge);
-      setVal('cfgAutoTraderMinLiq', currentConfig.autoTraderMinLiq);
-      setVal('cfgAutoTraderStopLoss', currentConfig.autoTraderStopLoss);
-      setVal('cfgAutoTraderTakeProfit1', currentConfig.autoTraderTakeProfit1);
-      setVal('cfgAutoTraderTakeProfit2', currentConfig.autoTraderTakeProfit2);
-      
-      validateSolanaKey();
-    }
-  } catch(e) {
-    console.error('Error loading config:', e);
-  }
-}
-
-function openConfigModal() {
-  switchTab("config");
-}
-
-function validateSolanaKey() {
+    const cfg = await res.json();
+    document.getElementById('cfgMexcKey').value = cfg.mexcApiKey || '';
+    document.getElementById('cfgMexcSecret').value = cfg.mexcApiSecret || '';
+    document.getElementById('cfgTgToken').value = cfg.tgBotToken || '';
+    document.getElementById('cfgTgChat').value = cfg.tgChatId || '';
+    document.getElementById('cfgSolKey').value = cfg.solanaPrivateKey || '';
+    document.getElementById('cfgSolRpc').value = cfg.solanaRpcUrl || '';
+    document.getElementById('cfgSolBase').value = cfg.solanaBaseToken || 'SOL';
+    document.getElementById('cfgSolSlippage').value = cfg.solanaSlippage || '2.5';
+    document.getElementById('cfgSolPriority').value = cfg.solanaPriorityFee || 'auto';
+    document.getElementById('cfgSafetyCheckEnabled').checked = !!cfg.safetyCheckEnabled;
+    document.getElementById('cfgUseJitoBundle').checked = !!cfg.useJitoBundle;
+    document.getElementById('cfgDextoolsKey').value = cfg.dextoolsApiKey || '';
+    document.getElementById('cfgTwitterKey').value = cfg.twitterBearerToken || '';
+    
+    document.getElementById('cfgAutoTraderEnabled').checked = !!cfg.autoTraderEnabled;
+    document.getElementById('cfgAutoTraderAmount').value = cfg.autoTraderAmount || 50;
+    document.getElementById('cfgAutoTraderMin24HVol').value = cfg.autoTraderMin24HVol || 50000;
+    document.getElementById('cfgAutoTraderMinMarketCap').value = cfg.autoTraderMinMarketCap || 200000;
+    document.getElementById('cfgAutoTraderMaxMarketCap').value = cfg.autoTraderMaxMarketCap || 2000000;
+    document.getElementById('cfgAutoTraderMinAge').value = cfg.autoTraderMinAge || 48;
+    document.getElementById('cfgAutoTraderMaxAge').value = cfg.autoTraderMaxAge || 500;
+    document.getElementById('cfgAutoTraderMinLiq').value = cfg.autoTraderMinLiq || 2000;
+    document.getElementById('cfgAutoTraderStopLoss').value = cfg.autoTraderStopLoss || 10;
+    document.getElementById('cfgAutoTraderTakeProfit1').value = cfg.autoTraderTakeProfit1 || 8;
+    document.getElementById('cfgAutoTraderTakeProfit2').value = cfg.autoTraderTakeProfit2 || 15;
+  } catch(e) {}
+  
   const solKeyInput = document.getElementById('cfgSolKey');
   const solKeyErr = document.getElementById('cfgSolKeyErr');
-  if (!solKeyInput) return true;
   
-  const val = solKeyInput.value.trim();
-  if (!val) {
-    if (solKeyErr) solKeyErr.style.display = 'none';
-    solKeyInput.style.borderColor = '';
-    return true;
-  }
-  
-  const b58Chars = "123456789ABCDEFGHJKLMNPQRSTUVWXYZabcdefghijkmnopqrstuvwxyz";
-  for (let i = 0; i < val.length; i++) {
-    if (b58Chars.indexOf(val[i]) === -1) {
-      if (solKeyErr) {
+  function validateSolanaKey() {
+    const val = solKeyInput.value.trim();
+    if (!val) {
+      solKeyErr.style.display = 'none';
+      solKeyInput.style.borderColor = '';
+      return true;
+    }
+    
+    // Check characters
+    const b58Chars = "123456789ABCDEFGHJKLMNPQRSTUVWXYZabcdefghijkmnopqrstuvwxyz";
+    for (let i = 0; i < val.length; i++) {
+      if (b58Chars.indexOf(val[i]) === -1) {
         solKeyErr.textContent = '❌ Contiene caracteres no válidos para Base58.';
         solKeyErr.style.display = 'block';
+        solKeyInput.style.borderColor = 'var(--r)';
+        return false;
       }
+    }
+    
+    // Decode Base58 to check exact byte length of 64 bytes
+    try {
+      const bytes = [];
+      for (let i = 0; i < val.length; i++) {
+        let value = b58Chars.indexOf(val[i]);
+        for (let j = 0; j < bytes.length; j++) {
+          value += bytes[j] * 58;
+          bytes[j] = value & 0xff;
+          value = value >> 8;
+        }
+        while (value > 0) {
+          bytes.push(value & 0xff);
+          value = value >> 8;
+        }
+      }
+      for (let i = 0; i < val.length && val[i] === '1'; i++) {
+        bytes.push(0);
+      }
+      
+      if (bytes.length !== 64) {
+        solKeyErr.textContent = `❌ Clave incorrecta: decodifica a ${bytes.length} bytes (se requieren exactamente 64 bytes). Suele tener entre 87 y 88 caracteres.`;
+        solKeyErr.style.display = 'block';
+        solKeyInput.style.borderColor = 'var(--r)';
+        return false;
+      }
+      
+      solKeyErr.style.display = 'none';
+      solKeyInput.style.borderColor = 'var(--g)';
+      return true;
+    } catch(err) {
+      solKeyErr.textContent = '❌ Error al decodificar la clave: ' + err.message;
+      solKeyErr.style.display = 'block';
       solKeyInput.style.borderColor = 'var(--r)';
       return false;
     }
   }
   
-  try {
-    const bytes = [];
-    for (let i = 0; i < val.length; i++) {
-      let value = b58Chars.indexOf(val[i]);
-      for (let j = 0; j < bytes.length; j++) {
-        value += bytes[j] * 58;
-        bytes[j] = value & 0xff;
-        value = value >> 8;
-      }
-      while (value > 0) {
-        bytes.push(value & 0xff);
-        value = value >> 8;
-      }
+  solKeyInput.oninput = validateSolanaKey;
+  
+  document.getElementById('btnSaveCfg').onclick = async () => {
+    if (!validateSolanaKey()) {
+      alert('⚠️ No se puede guardar: La clave privada de Solana no tiene un formato válido.');
+      return;
     }
-    for (let i = 0; i < val.length && val[i] === '1'; i++) {
-      bytes.push(0);
-    }
-    
-    if (bytes.length !== 64) {
-      if (solKeyErr) {
-        solKeyErr.textContent = `❌ Clave incorrecta: decodifica a ${bytes.length} bytes (se requieren exactamente 64 bytes). Suele tener entre 87 y 88 caracteres.`;
-        solKeyErr.style.display = 'block';
-      }
-      solKeyInput.style.borderColor = 'var(--r)';
-      return false;
-    }
-    
-    if (solKeyErr) solKeyErr.style.display = 'none';
-    solKeyInput.style.borderColor = 'var(--g)';
-    return true;
-  } catch(err) {
-    if (solKeyErr) {
-      solKeyErr.textContent = '❌ Error al decodificar la clave: ' + err.message;
-      solKeyErr.style.display = 'block';
-    }
-    solKeyInput.style.borderColor = 'var(--r)';
-    return false;
-  }
-}
-
-window.addEventListener('DOMContentLoaded', () => {
-  const solKeyInput = document.getElementById('cfgSolKey');
-  if (solKeyInput) {
-    solKeyInput.oninput = validateSolanaKey;
-  }
-});
-
-async function saveConfig() {
-  if (!validateSolanaKey()) {
-    alert('⚠️ No se puede guardar: La clave privada de Solana no tiene un formato válido.');
-    return;
-  }
-  try {
-    const getVal = id => {
-      const el = document.getElementById(id);
-      return el ? el.value.trim() : '';
-    };
-    const getCheck = id => {
-      const el = document.getElementById(id);
-      return el ? el.checked : false;
-    };
-
-    const payload = {
-      ...currentConfig,
-      mexcApiKey: getVal('cfgMexcKey'),
-      mexcApiSecret: getVal('cfgMexcSecret'),
-      solanaPrivateKey: getVal('cfgSolKey'),
-      solanaSlippage: getVal('cfgSolSlippage') || '2.5',
-      solanaPriorityFee: getVal('cfgSolPriority') || 'auto',
-      safetyCheckEnabled: getCheck('cfgSafetyCheckEnabled'),
-      useJitoBundle: getCheck('cfgUseJitoBundle'),
+    try {
+      const payload = {
+        mexcApiKey: document.getElementById('cfgMexcKey').value.trim(),
+        mexcApiSecret: document.getElementById('cfgMexcSecret').value.trim(),
+        tgBotToken: document.getElementById('cfgTgToken').value.trim(),
+        tgChatId: document.getElementById('cfgTgChat').value.trim(),
+        solanaPrivateKey: document.getElementById('cfgSolKey').value.trim(),
+        solanaRpcUrl: document.getElementById('cfgSolRpc').value.trim(),
+        solanaBaseToken: document.getElementById('cfgSolBase').value,
+        solanaSlippage: document.getElementById('cfgSolSlippage').value.trim() || '2.5',
+        solanaPriorityFee: document.getElementById('cfgSolPriority').value,
+        safetyCheckEnabled: document.getElementById('cfgSafetyCheckEnabled').checked,
+        useJitoBundle: document.getElementById('cfgUseJitoBundle').checked,
+        dextoolsApiKey: document.getElementById('cfgDextoolsKey').value.trim(),
+        twitterBearerToken: document.getElementById('cfgTwitterKey').value.trim(),
+        
+        autoTraderEnabled: document.getElementById('cfgAutoTraderEnabled').checked,
+        autoTraderAmount: document.getElementById('cfgAutoTraderAmount').value.trim(),
+        autoTraderMin24HVol: document.getElementById('cfgAutoTraderMin24HVol').value.trim(),
+        autoTraderMinMarketCap: document.getElementById('cfgAutoTraderMinMarketCap').value.trim(),
+        autoTraderMaxMarketCap: document.getElementById('cfgAutoTraderMaxMarketCap').value.trim(),
+        autoTraderMinAge: document.getElementById('cfgAutoTraderMinAge').value.trim(),
+        autoTraderMaxAge: document.getElementById('cfgAutoTraderMaxAge').value.trim(),
+        autoTraderMinLiq: document.getElementById('cfgAutoTraderMinLiq').value.trim(),
+        autoTraderStopLoss: document.getElementById('cfgAutoTraderStopLoss').value.trim(),
+        autoTraderTakeProfit1: document.getElementById('cfgAutoTraderTakeProfit1').value.trim(),
+        autoTraderTakeProfit2: document.getElementById('cfgAutoTraderTakeProfit2').value.trim()
+      };
       
-      autoTraderEnabled: getCheck('cfgAutoTraderEnabled'),
-      autoTraderAmount: getVal('cfgAutoTraderAmount'),
-      autoTraderMin24HVol: getVal('cfgAutoTraderMin24HVol'),
-      autoTraderMinMarketCap: getVal('cfgAutoTraderMinMarketCap'),
-      autoTraderMaxMarketCap: getVal('cfgAutoTraderMaxMarketCap'),
-      autoTraderMinAge: getVal('cfgAutoTraderMinAge'),
-      autoTraderMaxAge: getVal('cfgAutoTraderMaxAge'),
-      autoTraderMinLiq: getVal('cfgAutoTraderMinLiq'),
-      autoTraderStopLoss: getVal('cfgAutoTraderStopLoss'),
-      autoTraderTakeProfit1: getVal('cfgAutoTraderTakeProfit1'),
-      autoTraderTakeProfit2: getVal('cfgAutoTraderTakeProfit2')
-    };
-    
-    if (document.getElementById('cfgTgToken')) payload.tgBotToken = getVal('cfgTgToken');
-    if (document.getElementById('cfgTgChat')) payload.tgChatId = getVal('cfgTgChat');
-    if (document.getElementById('cfgSolRpc')) payload.solanaRpcUrl = getVal('cfgSolRpc');
-    if (document.getElementById('cfgSolBase')) payload.solanaBaseToken = getVal('cfgSolBase');
-    if (document.getElementById('cfgDextoolsKey')) payload.dextoolsApiKey = getVal('cfgDextoolsKey');
-    if (document.getElementById('cfgTwitterKey')) payload.twitterBearerToken = getVal('cfgTwitterKey');
-    
-    const newPwdEl = document.getElementById('cfgAppPwd');
-    const newPwd = newPwdEl ? newPwdEl.value.trim() : '';
-    if (newPwd) payload.appPassword = newPwd;
-    
-    await myFetch('/api/config', {
-      method: 'POST',
-      body: JSON.stringify(payload)
-    });
-    
-    if (newPwd) {
-      localStorage.setItem('vpsToken', newPwd);
-      alert('Contraseña actualizada correctamente. Iniciarás sesión con la nueva.');
+      const newPwd = document.getElementById('cfgAppPwd').value.trim();
+      if(newPwd) payload.appPassword = newPwd;
+      
+      await myFetch('/api/config', {
+        method: 'POST',
+        body: JSON.stringify(payload)
+      });
+      
+      if(newPwd) {
+        localStorage.setItem('vpsToken', newPwd);
+        alert('Contraseña actualizada correctamente. Iniciarás sesión con la nueva.');
+      }
+      alert('✅ Configuración guardada en el servidor');
+      p.remove();
+    } catch(e) {
+      alert('Error al guardar configuración');
     }
-    
-    alert('✅ Configuración guardada en el servidor');
-    await loadConfigData();
-  } catch(e) {
-    alert('Error al guardar configuración: ' + e.message);
-  }
+  };
 }
 
 async function testTelegramConnection(btn) {
@@ -3870,216 +3757,4 @@ initServerState().then(() => {
 if('Notification'in window&&Notification.permission==='granted'){notifOn=true;document.getElementById('btnNotif').textContent='🔔 Notif. ON';document.getElementById('btnNotif').className='btn btn-g btn-sm';}
 addLog('DIP HUNTER v6 listo — Escáner + Monitor 10s + Auto-Ejecución + Editor de órdenes (Guarda en Cloud/VPS)','info');
 </script>
-</div>
-
-<div class="tab-panel" id="tab-pool" style="display:none; padding:20px;">
-  
-    <div style="background:var(--bg2);width:100%;max-width:800px;margin:0 auto;border:1px solid var(--bdr);border-radius:8px;padding:25px;font-family:var(--sans);max-height:90vh;overflow-y:auto">
-      <div style="font-weight:700;margin-bottom:15px;color:var(--t);font-size:16px;">🏦 Gestión del Pool de Inversores</div>
-      <div style="margin-bottom:15px;font-size:11px;color:var(--t2)">
-        Configura la wallet central y la comisión del sistema. Los inversores verán esto en su panel (/investor). La billetera es generada automáticamente por el sistema.<br/><br/>
-        <strong>¿Cómo funciona USDC en Solana?</strong><br/>
-        El bot usa Júpiter Aggregator para sus trades. Aunque las comisiones de red ("gas") se pagan en SOL, el bot puede tener el saldo principal en USDC e intercambiar (hacer swap) directamente de USDC a otros tokens de Solana de forma transparente, y de regreso a USDC. Solo asegúrate de enviar un poco de SOL (~0.05 SOL) a la wallet del Pool para cubrir los fees transaccionales y la creación de cuentas de tokens.
-      </div>
-      <div style="margin-bottom:10px">
-        <div style="font-size:10px;color:var(--t2);margin-bottom:4px">Billetera del Sistema (Pool)</div>
-        <div style="display:flex;gap:4px">
-          <input type="text" id="cfgPoolWallet" class="inp" style="width:100%;" readonly>
-          <button class="btn btn-g" onclick="rotatePoolWallet(this)">Rotar</button>
-        </div>
-        <div style="font-family:var(--mono);font-size:10px;color:#14f195;margin-top:4px" id="poolWalletBalances">Balance: --</div>
-      </div>
-      <div style="margin-bottom:15px">
-        <div style="font-size:10px;color:var(--t2);margin-bottom:4px">Comisión del Administrador (%)</div>
-        <input type="number" id="cfgPoolCom" class="inp" placeholder="Ej: 20 para 20%" style="width:100%">
-      </div>
-      <div style="display:flex;gap:10px;margin-bottom:20px;flex-wrap:wrap;">
-        <button class="btn btn-g" style="flex:1;min-width:110px;" onclick="savePoolConfig(this)">💾 Guardar</button>
-        <button class="btn btn-y" style="flex:1;min-width:110px;" onclick="recoverPoolRent(this)">🧹 Limpiar Rent</button>
-        <button class="btn btn-a" style="flex:1;min-width:110px;" onclick="backupPoolWallet(this)">🔐 Backup (Key)</button>
-        <button class="btn btn-d" style="flex:1;min-width:110px;" onclick="switchTab('dashboard')">❌ Cerrar</button>
-      </div>
-
-      <div style="font-weight:700;margin-bottom:10px;color:var(--t);font-size:14px;border-top:1px solid var(--bdr);padding-top:15px">👥 Inversores Actuales</div>
-      <div id="poolInvestorsList" style="font-family:var(--mono);font-size:11px;color:var(--t2);margin-bottom:15px;max-height:150px;overflow-y:auto">
-        Cargando...
-      </div>
-      
-      <div style="background:var(--bg3);padding:10px;border-radius:6px;margin-bottom:15px">
-        <div style="font-size:11px;margin-bottom:5px;font-weight:bold;color:var(--t)">Añadir / Actualizar Inversor</div>
-        <div style="display:flex;gap:4px;margin-bottom:5px">
-          <input type="text" id="addInvName" class="inp" placeholder="Nombre" style="flex:1">
-          <input type="number" id="addInvDeposit" class="inp" placeholder="Sumar Depósito" style="width:100px">
-        </div>
-        <div style="display:flex;gap:4px;margin-bottom:5px">
-          <input type="text" id="addInvPwd" class="inp" placeholder="Contraseña" style="flex:1">
-          <input type="text" id="addInvDepWallet" class="inp" placeholder="Wallet depósito (auto si vacío)" style="flex:2">
-        </div>
-        <button class="btn btn-g btn-sm" style="width:100%" onclick="savePoolInvestor()">Añadir/Editar</button>
-      </div>
-      
-      <div style="font-weight:700;margin-bottom:10px;color:var(--t);font-size:14px;border-top:1px solid var(--bdr);padding-top:15px">💰 Tus Ganancias (Admin)</div>
-      <div style="margin-bottom:15px;font-size:12px;color:var(--g);font-family:var(--mono);font-weight:bold">
-        Comisiones acumuladas: $<span id="lblAdminCom">0.00</span>
-      </div>
-      <div style="display:flex;gap:4px;margin-bottom:15px">
-        <input type="text" id="inpAdminWallet" class="inp" placeholder="Tu wallet personal" style="flex:1">
-        <input type="number" id="inpAdminAmt" class="inp" placeholder="Cantidad" style="width:100px">
-        <button class="btn btn-g btn-sm" onclick="withdrawAdmin()">Retirar a mi wallet</button>
-      </div>
-
-      <div style="font-weight:700;margin-bottom:10px;color:var(--t);font-size:14px;border-top:1px solid var(--bdr);padding-top:15px">💸 Solicitudes de Retiro</div>
-      <div id="poolRequestsList" style="font-family:var(--sans);font-size:11px;color:var(--t2);margin-bottom:15px;max-height:150px;overflow-y:auto">
-        Cargando solicitudes...
-      </div>
-    </div>
-  
-</div>
-<div class="tab-panel" id="tab-copilot" style="display:none; padding:20px;">
-  <div style="background:var(--bg2);width:100%;max-width:800px;margin:0 auto;border:1px solid var(--bdr);border-radius:8px;padding:25px;font-family:var(--sans);">
-
-      <!-- SECCIÓN COPILOTO AUTO-TRADING -->
-      <div style="border-top:1px solid var(--bdr);margin-top:15px;padding-top:15px;margin-bottom:15px">
-        <div style="font-weight:600;color:#14f195;font-size:11px;margin-bottom:10px;text-transform:uppercase;letter-spacing:0.05em">🤖 Copiloto Auto-Trading (Autopilot)</div>
-        <div style="margin-bottom:12px;display:flex;align-items:center;gap:10px;">
-          <input type="checkbox" id="cfgAutoTraderEnabled" style="cursor:pointer">
-          <label for="cfgAutoTraderEnabled" style="font-size:11px;color:var(--t1);cursor:pointer;font-weight:600;">Habilitar Piloto Automático</label>
-        </div>
-        <div style="margin-bottom:10px;display:flex;gap:10px">
-          <div style="flex:1">
-            <div style="font-size:10px;color:var(--t2);margin-bottom:4px">Monto por Operación ($)</div>
-            <input type="number" id="cfgAutoTraderAmount" class="inp" placeholder="50" style="width:100%">
-          </div>
-          <div style="flex:1">
-            <div style="font-size:10px;color:var(--t2);margin-bottom:4px">Volumen Min 24H ($)</div>
-            <input type="number" id="cfgAutoTraderMin24HVol" class="inp" placeholder="50000" style="width:100%">
-          </div>
-        </div>
-        <div style="margin-bottom:10px;display:flex;gap:10px">
-          <div style="flex:1">
-            <div style="font-size:10px;color:var(--t2);margin-bottom:4px">MarketCap Min ($)</div>
-            <input type="number" id="cfgAutoTraderMinMarketCap" class="inp" placeholder="200000" style="width:100%">
-          </div>
-          <div style="flex:1">
-            <div style="font-size:10px;color:var(--t2);margin-bottom:4px">MarketCap Max ($)</div>
-            <input type="number" id="cfgAutoTraderMaxMarketCap" class="inp" placeholder="2000000" style="width:100%">
-          </div>
-        </div>
-        <div style="margin-bottom:10px;display:flex;gap:10px">
-          <div style="flex:1">
-            <div style="font-size:10px;color:var(--t2);margin-bottom:4px">Antigüedad Min (Hrs)</div>
-            <input type="number" id="cfgAutoTraderMinAge" class="inp" placeholder="48" style="width:100%">
-          </div>
-          <div style="flex:1">
-            <div style="font-size:10px;color:var(--t2);margin-bottom:4px">Antigüedad Max (Hrs)</div>
-            <input type="number" id="cfgAutoTraderMaxAge" class="inp" placeholder="500" style="width:100%">
-          </div>
-        </div>
-        <div style="margin-bottom:10px;display:flex;gap:10px">
-          <div style="flex:1">
-            <div style="font-size:10px;color:var(--t2);margin-bottom:4px">Liquidez Min ($)</div>
-            <input type="number" id="cfgAutoTraderMinLiq" class="inp" placeholder="2000" style="width:100%">
-          </div>
-          <div style="flex:1">
-            <div style="font-size:10px;color:var(--t2);margin-bottom:4px">Stop Loss (%)</div>
-            <input type="number" id="cfgAutoTraderStopLoss" class="inp" placeholder="10" style="width:100%">
-          </div>
-        </div>
-        <div style="margin-bottom:10px;display:flex;gap:10px">
-          <div style="flex:1">
-            <div style="font-size:10px;color:var(--t2);margin-bottom:4px">Take Profit 1 (%)</div>
-            <input type="number" id="cfgAutoTraderTakeProfit1" class="inp" placeholder="8" style="width:100%">
-          </div>
-          <div style="flex:1">
-            <div style="font-size:10px;color:var(--t2);margin-bottom:4px">Take Profit 2 (%)</div>
-            <input type="number" id="cfgAutoTraderTakeProfit2" class="inp" placeholder="15" style="width:100%">
-          </div>
-        </div>
-        <div style="font-size:9px;color:var(--t2);">El Copiloto busca automáticamente tokens en DexScreener según estos filtros, analiza su seguridad (RugCheck), calcula la pared de soporte más fuerte de su liquidez, y programa DCA órdenes automáticas sin duplicar activos.</div>
-      </div>
-      <div style="display:flex;gap:10px;margin-bottom:20px">
-        <button class="btn btn-g" style="flex:1" onclick="saveConfig()">💾 Guardar Configuración</button>
-        <button class="btn btn-d" style="flex:1" onclick="switchTab('dashboard')">❌ Cerrar</button>
-      </div>
-
-  </div>
-</div>
-<div class="tab-panel" id="tab-config" style="display:none; padding:20px;">
-  <div style="background:var(--bg2);width:100%;max-width:800px;margin:0 auto;border:1px solid var(--bdr);border-radius:8px;padding:25px;font-family:var(--sans);">
-
-      <div style="font-weight:700;margin-bottom:15px;color:var(--t);font-size:16px;">⚙️ Configuración del Servidor VPS</div>
-      <div style="margin-bottom:15px;font-size:11px;color:var(--t2)">
-        Estos datos se guardarán cifrados en el servidor. Son necesarios sí deseas operar automáticamente en tu cuenta principal o recibir alertas en tu grupo de Telegram.
-      </div>
-      
-      <div style="margin-bottom:10px">
-        <div style="font-size:10px;color:var(--t2);margin-bottom:4px">MEXC API Key (Lectura/Trading)</div>
-        <input type="text" id="cfgMexcKey" class="inp" placeholder="mx0vvlv..." style="width:100%">
-      </div>
-      <div style="margin-bottom:15px">
-        <div style="font-size:10px;color:var(--t2);margin-bottom:4px">MEXC API Secret</div>
-        <input type="password" id="cfgMexcSecret" class="inp" placeholder="********" style="width:100%">
-      </div>
-
-      <!-- SECCIÓN SOLANA -->
-      <div style="border-top:1px solid var(--bdr);margin-top:15px;padding-top:15px;margin-bottom:15px">
-        <div style="font-weight:600;color:var(--pu);font-size:11px;margin-bottom:10px;text-transform:uppercase;letter-spacing:0.05em">🔑 Configuración de Solana (DEX Swaps)</div>
-        <div style="margin-bottom:10px">
-          <div style="font-size:10px;color:var(--t2);margin-bottom:4px">Solana Private Key (Phantom/Base58)</div>
-          <input type="password" id="cfgSolKey" class="inp" placeholder="5K..." style="width:100%">
-        </div>
-        <div style="margin-bottom:10px;display:flex;gap:10px">
-          <div style="flex:1">
-            <div style="font-size:10px;color:var(--t2);margin-bottom:4px">Deslizamiento Máx (%)</div>
-            <input type="number" step="0.1" id="cfgSolSlippage" class="inp" placeholder="Ej: 2.5" style="width:100%">
-          </div>
-          <div style="flex:1">
-            <div style="font-size:10px;color:var(--t2);margin-bottom:4px">Tarifa Prioridad (Lamports)</div>
-            <select id="cfgSolPriority" class="inp" style="width:100%">
-              <option value="auto">Automático (auto)</option>
-              <option value="100000">Estándar (100k lamports)</option>
-              <option value="500000">Alta prioridad (500k lamports)</option>
-              <option value="1500000">Turbo Ultra (1.5M lamports)</option>
-            </select>
-          </div>
-        </div>
-      </div>
-
-      <!-- SECCIÓN RUGCHECK (SAFETY) -->
-      <div style="border-top:1px solid var(--bdr);margin-top:15px;padding-top:15px;margin-bottom:15px">
-        <div style="font-weight:600;color:var(--y);font-size:11px;margin-bottom:10px;text-transform:uppercase;letter-spacing:0.05em">🛡️ Seguridad Anti-Rug (RugCheck)</div>
-        <div style="margin-bottom:10px;display:flex;align-items:center;gap:10px;">
-          <input type="checkbox" id="cfgSafetyCheckEnabled" style="cursor:pointer">
-          <label for="cfgSafetyCheckEnabled" style="font-size:11px;color:var(--t1);cursor:pointer;">Habilitar Chequeo de Seguridad en Compras</label>
-        </div>
-        <div style="margin-bottom:10px;display:flex;align-items:center;gap:10px;">
-          <input type="checkbox" id="cfgUseJitoBundle" style="cursor:pointer">
-          <label for="cfgUseJitoBundle" style="font-size:11px;color:var(--t1);cursor:pointer;">Habilitar Jito Bundles (Protección Anti-Sandwich)</label>
-        </div>
-        <div style="font-size:9px;color:var(--t2);">Evita compras de tokens marcados como Danger en RugCheck o con Autoridad de Mint/Freeze activa on-chain.</div>
-      </div>
-      
-      <div style="display:flex;gap:10px;margin-bottom:20px">
-        <button class="btn btn-g" style="flex:1" onclick="saveConfig()">💾 Guardar Configuración</button>
-        <button class="btn btn-d" style="flex:1" onclick="switchTab('dashboard')">❌ Cerrar</button>
-      </div>
-
-  </div>
-</div>
-<div class="tab-panel" id="tab-history" style="display:none; padding:20px;">
-  <div style="background:var(--bg2);width:100%;max-width:800px;margin:0 auto;border:1px solid var(--bdr);border-radius:8px;padding:25px;font-family:var(--sans);">
-    <div style="font-weight:700;margin-bottom:15px;color:var(--t);font-size:16px;">📜 Historial de Trades</div>
-    <div id="historyContent"></div>
-    <div style="margin-top:30px;border-top:1px solid var(--bdr);padding-top:15px">
-      <div style="font-weight:700;margin-bottom:15px;color:var(--t);font-size:16px;">🔍 Escáner Buscar Estafa</div>
-      <div style="font-size:11px;color:var(--t2);margin-bottom:15px;">Busca en X (Twitter) posibles alertas de rug pull para un token.</div>
-      <div style="display:flex;gap:10px;">
-        <input type="text" id="manualScamSearch" class="inp" placeholder="Ej: Dirección del contrato o símbolo" style="flex:1">
-        <button class="btn btn-y" onclick="if(document.getElementById('manualScamSearch').value) window.open('https://x.com/search?q=' + encodeURIComponent(document.getElementById('manualScamSearch').value + ' scam OR rug'), '_blank')">Buscar en X</button>
-      </div>
-    </div>
-  </div>
-</div>
-
 </body>
-</html>
