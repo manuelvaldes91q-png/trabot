@@ -6,8 +6,37 @@ import { createServer as createViteServer } from "vite";
 import crypto from "crypto";
 import "dotenv/config";
 import { Connection, Keypair, VersionedTransaction, PublicKey, SystemProgram, Transaction, sendAndConfirmTransaction } from '@solana/web3.js';
-import { getAssociatedTokenAddress, createTransferInstruction, getAccount, createCloseAccountInstruction, createAssociatedTokenAccountInstruction, getMint } from '@solana/spl-token';
+import { getAssociatedTokenAddress, createTransferInstruction, getAccount, createCloseAccountInstruction, createAssociatedTokenAccountInstruction, getMint, TOKEN_2022_PROGRAM_ID, getExtensionTypes, ExtensionType } from '@solana/spl-token';
 import bs58 from 'bs58';
+
+const TOKEN_METADATA_PROGRAM_ID = new PublicKey('metaqbxxUERdq28cj1RbAWkYQm3ybzjb6a8bt518x1s');
+
+function deserializeMetadata(accountInfo) {
+  const buf = accountInfo.data;
+  let offset = 1 + 32 + 32;
+  function readString() {
+    const len = buf.readUInt32LE(offset);
+    offset += 4;
+    const str = buf.slice(offset, offset + len).toString('utf8').replace(/\0/g, '').trim();
+    offset += len;
+    return str;
+  }
+  const name = readString();
+  const symbol = readString();
+  const uri = readString();
+  offset += 2;
+  const hasCreators = buf.readUInt8(offset);
+  offset += 1;
+  if (hasCreators === 1) {
+    const creatorsLen = buf.readUInt32LE(offset);
+    offset += 4;
+    offset += creatorsLen * 34;
+  }
+  offset += 1;
+  const isMutable = buf.readUInt8(offset) === 1;
+  return { name, symbol, uri, isMutable };
+}
+
 import * as phoenix from '@ellipsis-labs/phoenix-sdk';
 import https from "https";
 import http from "http";
@@ -1268,6 +1297,72 @@ function detectWashTrading(volume24h, liquidityUsd, buys24h, sells24h, totalHold
   }
 
   return { suspicious, volLiqRatio: +volLiqRatio.toFixed(2), totalTxns, warnings };
+}
+
+
+async function checkToken2022Extensions(tokenMint) {
+  const result = { isToken2022: false, dangerousExtensions: [], warning: null };
+  const rpcs = [appConfig.solanaRpcUrl || process.env.SOLANA_RPC_URL, 'https://solana.drpc.org', 'https://solana-rpc.publicnode.com', 'https://rpc.ankr.com/solana'].filter(Boolean);
+  for (const rpc of rpcs) {
+    try {
+      const connection = new Connection(rpc, 'confirmed');
+      const mintPubkey = new PublicKey(tokenMint);
+      const accountInfo = await connection.getAccountInfo(mintPubkey);
+      if (!accountInfo) return result;
+      const isToken2022 = accountInfo.owner.equals(TOKEN_2022_PROGRAM_ID);
+      result.isToken2022 = isToken2022;
+      if (!isToken2022) return result;
+      const mintInfo = await getMint(connection, mintPubkey, 'confirmed', TOKEN_2022_PROGRAM_ID);
+      const extensionTypes = getExtensionTypes(mintInfo.tlvData);
+      const dangerous = [];
+      if (extensionTypes.includes(ExtensionType.PermanentDelegate)) dangerous.push('PermanentDelegate: el creador puede mover/quitar tus tokens sin tu permiso.');
+      if (extensionTypes.includes(ExtensionType.TransferFeeConfig)) dangerous.push('TransferFeeConfig: cada transferencia tiene un "impuesto" que el creador puede cambiar.');
+      if (extensionTypes.includes(ExtensionType.TransferHook)) dangerous.push('TransferHook: lógica personalizada en cada transferencia — puede bloquear ventas selectivamente.');
+      result.dangerousExtensions = dangerous;
+      if (dangerous.length > 0) result.warning = `⚠️ Token-2022 con extensión(es) peligrosa(s): ${dangerous.join(' | ')}`;
+      return result;
+    } catch (e) { console.warn(`[checkToken2022Extensions] Falló con ${rpc}: ${e.message}`); }
+  }
+  return result;
+}
+
+async function checkLpLockStatus(tokenMint) {
+  const result = { checked: false, lpLockedPct: null, warning: null };
+  try {
+    const res = await fetchWithRetry(`https://api.rugcheck.xyz/v1/tokens/${tokenMint}/report`, { timeout: 8000 }, 2, 1000);
+    if (!res || !res.ok) return result;
+    const data = await res.json();
+    if (data.markets && data.markets.length > 0) {
+      const market = data.markets[0];
+      const lpLockedPct = market.lpLockedPct ?? (market.lp ? market.lp.lpLockedPct : null);
+      if (lpLockedPct !== null && lpLockedPct !== undefined) {
+        result.checked = true;
+        result.lpLockedPct = lpLockedPct;
+        if (lpLockedPct < 50) result.warning = `⚠️ Solo ${lpLockedPct}% de la liquidez está bloqueada/quemada — el creador podría retirar el resto en cualquier momento.`;
+      }
+    }
+  } catch (e) { console.warn(`[checkLpLockStatus] Error: ${e.message}`); }
+  return result;
+}
+
+async function checkMetadataMutability(tokenMint) {
+  const result = { checked: false, isMutable: null, warning: null };
+  const rpcs = [appConfig.solanaRpcUrl || process.env.SOLANA_RPC_URL, 'https://solana.drpc.org', 'https://solana-rpc.publicnode.com'].filter(Boolean);
+  for (const rpc of rpcs) {
+    try {
+      const connection = new Connection(rpc, 'confirmed');
+      const mintPubkey = new PublicKey(tokenMint);
+      const [metadataPda] = PublicKey.findProgramAddressSync([Buffer.from('metadata'), TOKEN_METADATA_PROGRAM_ID.toBuffer(), mintPubkey.toBuffer()], TOKEN_METADATA_PROGRAM_ID);
+      const accountInfo = await connection.getAccountInfo(metadataPda);
+      if (!accountInfo) return result;
+      const metadata = deserializeMetadata(accountInfo);
+      result.checked = true;
+      result.isMutable = metadata.isMutable;
+      if (metadata.isMutable) result.warning = `⚠️ La metadata (nombre/símbolo/imagen) del token es MUTABLE — el creador podría cambiar su identidad después.`;
+      return result;
+    } catch (e) { console.warn(`[checkMetadataMutability] Falló con ${rpc}: ${e.message}`); }
+  }
+  return result;
 }
 
 async function checkTokenSafety(tokenMint) {
