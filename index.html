@@ -48,7 +48,7 @@ body{background:var(--bg);color:var(--t);font-family:var(--sans);min-height:100v
 .hctrls{margin-left:auto;display:flex;gap:5px;flex-wrap:wrap;align-items:center}
 
 /* BODY — 3 columnas */
-.body{display:grid;grid-template-columns:300px 1fr;overflow:hidden;height:100%}
+.body{display:grid;grid-template-columns:335px 1fr;overflow:hidden;height:100%}
 .col{border-right:1px solid var(--bdr);display:flex;flex-direction:column;overflow:hidden;background:var(--bg2)}
 .col:last-child{border:none;background:var(--bg)}
 .col-right{overflow-y:auto;padding:10px}
@@ -324,62 +324,167 @@ window.addEventListener('DOMContentLoaded', () => {
       <input type="text" id="symSearch" class="inp" placeholder="NOCK, KINS, GENIUS..." style="text-transform:uppercase;flex:1" onkeydown="if(event.key==='Enter')searchDirect()">
       <button class="btn btn-b btn-sm" onclick="searchDirect()">🔎</button>
     </div>
-    <div class="scfg-grid">
-      <div class="sf"><div class="lbl">Vol mín 24h</div>
-        <select id="cfVol" class="inp">
-          <option value="5000">$5K</option><option value="10000" selected>$10K</option>
-          <option value="30000">$30K</option><option value="100000">$100K</option>
-        </select>
-      </div>
-      <div class="sf"><div class="lbl">Cambio 24h mín</div>
-        <select id="cfChg" class="inp">
-          <option value="-999">Cualquiera</option><option value="0" selected>0%+</option>
-          <option value="3">3%+</option><option value="5">5%+</option><option value="10">10%+</option>
-        </select>
-      </div>
-      <div class="sf"><div class="lbl">Mín Días (Edad)</div>
-        <input type="number" id="cfMinAge" class="inp" value="0" min="0" step="0.1">
-      </div>
-      <div class="sf"><div class="lbl">Mín MarketCap ($)</div>
-        <input type="number" id="cfMinMarketCap" class="inp" value="0" min="0" step="1000">
-      </div>
-      <div class="sf"><div class="lbl">Tendencia</div>
-        <select id="cfTrend" class="inp">
-          <option value="any">Cualquiera</option>
-          <option value="bull" selected>Alcista</option>
-          <option value="strong">Alcista fuerte</option>
-          <option value="acc">Acumulación (Post-Crash)</option>
-        </select>
-      </div>
-      <div class="sf"><div class="lbl">Ordenar</div>
-        <select id="cfSort" class="inp" onchange="renderScanResults()">
-          <option value="score">Score</option><option value="chg">Cambio</option>
-          <option value="dist">Dist. dip</option><option value="vol">Volumen</option>
-        </select>
-      </div>
-      <div class="sf"><div class="lbl">Máx monedas</div>
-        <select id="cfMax" class="inp">
-          <option value="200">200</option><option value="400" selected>400</option>
-          <option value="9999">Todas</option>
-        </select>
-      </div>
-      <div class="sf" style="justify-content:center; align-items:flex-start;">
-        <label style="display:flex; align-items:center; cursor:pointer; color:var(--t2); font-size:11px; height:100%;">
-          <input type="checkbox" id="cfSafeOnly" style="margin-right:4px;"> 🛡️ 100% Seguro (Anti-Rug)
-        </label>
-      </div>
-      <div class="sf" style="justify-content:flex-end;padding-top:12px">
-        <button class="btn btn-g btn-sm" id="btnScan" onclick="startScan()" style="width:100%">🔍 ESCANEAR</button>
+    
+  
+
+  <style>
+    .ds-filters {
+      background: var(--bg2);
+      border-radius: 6px;
+      border: 1px solid var(--bdr);
+      margin-bottom: 12px;
+      padding: 10px;
+    }
+    .ds-filter-row {
+      display: flex;
+      align-items: center;
+      margin-bottom: 6px;
+    }
+    .ds-filter-label {
+      width: 65px;
+      font-size: 10px;
+      color: var(--t2);
+      text-align: right;
+      margin-right: 8px;
+      font-weight: 600;
+    }
+    .ds-filter-inputs {
+      display: flex;
+      gap: 4px;
+      flex: 1;
+    }
+    .ds-input-wrap {
+      display: flex;
+      flex: 1;
+      background: var(--bg3);
+      border: 1px solid var(--bdr);
+      border-radius: 4px;
+      align-items: center;
+      overflow: hidden;
+      height: 22px;
+    }
+    .ds-prefix, .ds-suffix {
+      padding: 0 4px;
+      color: var(--t2);
+      background: var(--bg4);
+      height: 100%;
+      display: flex;
+      align-items: center;
+      font-family: var(--mono);
+      font-size: 9px;
+    }
+    .ds-prefix { border-right: 1px solid var(--bdr); }
+    .ds-suffix { border-left: 1px solid var(--bdr); }
+    .ds-input {
+      flex: 1;
+      background: transparent;
+      border: none;
+      color: var(--t);
+      padding: 0 4px;
+      font-size: 10px;
+      outline: none;
+      width: 100%;
+      min-width: 0;
+    }
+    .ds-input::placeholder { color: var(--t2); opacity: 0.6; }
+    .ds-bot-row {
+      display: flex;
+      align-items: center;
+      justify-content: space-between;
+      margin-top: 8px;
+      border-top: 1px solid var(--bdr);
+      padding-top: 8px;
+    }
+    .ds-bot-select {
+      background: var(--bg3);
+      border: 1px solid var(--bdr);
+      color: var(--t);
+      font-size: 9px;
+      padding: 2px 4px;
+      border-radius: 3px;
+      margin-left: 4px;
+      outline: none;
+    }
+  </style>
+  
+  <div class="ds-filters">
+    <div class="ds-filter-row">
+      <div class="ds-filter-label">Liquidity:</div>
+      <div class="ds-filter-inputs">
+        <div class="ds-input-wrap"><span class="ds-prefix">$</span><input type="number" id="f_liqMin" class="ds-input" placeholder="Min" value="100"></div>
+        <div class="ds-input-wrap"><span class="ds-prefix">$</span><input type="number" id="f_liqMax" class="ds-input" placeholder="Max"></div>
       </div>
     </div>
-    <div class="pb"><div class="pbf" id="pbf"></div></div>
-    <div class="stxt" id="stxt">Busca directamente o escanea todo MEXC</div>
+    <div class="ds-filter-row">
+      <div class="ds-filter-label">Market cap:</div>
+      <div class="ds-filter-inputs">
+        <div class="ds-input-wrap"><span class="ds-prefix">$</span><input type="number" id="f_mcMin" class="ds-input" placeholder="Min" value="200"></div>
+        <div class="ds-input-wrap"><span class="ds-prefix">$</span><input type="number" id="f_mcMax" class="ds-input" placeholder="Max" value="100"></div>
+      </div>
+    </div>
+    <div class="ds-filter-row">
+      <div class="ds-filter-label">Pair age:</div>
+      <div class="ds-filter-inputs">
+        <div class="ds-input-wrap"><input type="number" id="f_ageMin" class="ds-input" placeholder="Min"><span class="ds-suffix">h</span></div>
+        <div class="ds-input-wrap"><input type="number" id="f_ageMax" class="ds-input" placeholder="Max"><span class="ds-suffix">h</span></div>
+      </div>
+    </div>
+    <div class="ds-filter-row">
+      <div class="ds-filter-label">24H volume:</div>
+      <div class="ds-filter-inputs">
+        <div class="ds-input-wrap"><span class="ds-prefix">$</span><input type="number" id="f_volMin" class="ds-input" placeholder="Min" value="500"></div>
+        <div class="ds-input-wrap"><span class="ds-prefix">$</span><input type="number" id="f_volMax" class="ds-input" placeholder="Max"></div>
+      </div>
+    </div>
+
+    <div style="margin-top:8px; display:flex; flex-direction:column; gap:8px;">
+      <label style="display:flex; align-items:center; cursor:pointer; color:var(--t2); font-size:10px;">
+        <input type="checkbox" id="cfSafeOnly" style="margin-right:6px;" checked> 🛡️ 100% Seguro (Anti-Rug)
+      </label>
+      <div style="display:grid; grid-template-columns: repeat(3, 1fr); gap: 8px;">
+        <div style="display:flex; flex-direction:column; gap:4px;">
+          <span style="font-size:9px; color:var(--t2); font-weight:600;">Tendencia:</span>
+          <select id="cfTrend" class="ds-bot-select" style="margin-left:0; width:100%; height:24px; padding:2px 4px;">
+            <option value="any" selected>Todas</option>
+            <option value="bull">Alcista</option>
+            <option value="strong">Alcista fuerte</option>
+            <option value="acc">Acumulación</option>
+          </select>
+        </div>
+        <div style="display:flex; flex-direction:column; gap:4px;">
+          <span style="font-size:9px; color:var(--t2); font-weight:600;">Máx:</span>
+          <select id="cfMax" class="ds-bot-select" style="margin-left:0; width:100%; height:24px; padding:2px 4px;">
+            <option value="200">200</option>
+            <option value="400" selected>400</option>
+            <option value="9999">Todas</option>
+          </select>
+        </div>
+        <div style="display:flex; flex-direction:column; gap:4px;">
+          <span style="font-size:9px; color:var(--t2); font-weight:600;">Ordenar por:</span>
+          <select id="cfSort" onchange="renderScanResults()" class="ds-bot-select" style="margin-left:0; width:100%; height:24px; padding:2px 4px;">
+            <option value="score">Score</option>
+            <option value="chg">Cambio</option>
+            <option value="dist">Dist. dip</option>
+            <option value="vol">Volumen</option>
+          </select>
+        </div>
+      </div>
+    </div>
   </div>
 
-  <!-- Resultados -->
-  <div class="rlist" id="rlist">
-    <div class="empty"><div style="font-size:22px">🔍</div><div>Escanea o busca un símbolo</div></div>
+
+
+    <div style="margin-top: 12px;">
+      <button class="btn btn-g btn-sm" id="btnScan" onclick="startScan()" style="width:100%; padding:8px; font-weight:700;">⚡ ESCANEAR SOLANA</button>
+    </div>
+    <div style="margin-top:6px">
+      <div class="pb"><div class="pbf" id="pbf"></div></div>
+      <div class="stxt" id="stxt"></div>
+    </div>
   </div>
+  
+  <!-- Lista de resultados -->
+  <div class="rlist" id="rlist"></div>
 </div>
 
 <!-- ══ COL 3: DETALLE + DASH ══ -->
@@ -421,7 +526,7 @@ window.addEventListener('DOMContentLoaded', () => {
 
   <div id="view-orders" style="display:none; flex:1; overflow-y:auto; padding-right:10px; flex-direction:column;">
     <!-- Monitor status -->
-    <div class="mon-bar">
+    <div class="mon-bar" style="flex-shrink:0; margin-bottom:10px;">
       <div class="mb-row">
         <div>
           <div style="font-size:7px;color:var(--t2);font-family:var(--mono)">PRÓXIMO CICLO</div>
@@ -439,18 +544,19 @@ window.addEventListener('DOMContentLoaded', () => {
         </div>
       </div>
     </div>
-    <div class="sec-hdr">
+
+    <!-- Vigilancia activa -->
+    <div class="sec-hdr" style="flex-shrink:0;">
       👁 Vigilancia activa
       <div style="display:flex;gap:3px">
         <button class="btn btn-d btn-xs" onclick="clearDone()">Limpiar cerradas</button>
         <button class="btn btn-r btn-xs" onclick="clearAll()">Limpiar todo</button>
       </div>
     </div>
-    <div class="wlist" id="wlist" style="flex:1;">
+    <div class="wlist" id="wlist" style="flex:1; overflow-y:auto;">
       <div class="empty"><div style="font-size:22px">👁</div><div>Sin monedas vigiladas</div><div style="font-size:8px;color:var(--t3)">Click en resultado → configurar → Agregar</div></div>
     </div>
   </div>
-
   <div id="view-logs" style="display:none; flex:1; overflow-y:auto; padding-right:10px; flex-direction:column; gap:10px;">
     <!-- LOG -->
     <div class="logbox">
@@ -1453,14 +1559,18 @@ function updateSolanaVpsWalletUI(vpsSolWallet) {
   if (vpsSolWallet && vpsSolWallet.address) {
     el.style.display = 'inline-flex';
     const shortAddr = vpsSolWallet.address.slice(0, 4) + '...' + vpsSolWallet.address.slice(-4);
-    document.getElementById('vpsSolAddress').textContent = shortAddr;
-    document.getElementById('vpsSolAddress').title = vpsSolWallet.address;
+    const addrEl = document.getElementById('vpsSolAddress');
+    if (addrEl) {
+      addrEl.textContent = shortAddr;
+      addrEl.title = vpsSolWallet.address;
+    }
     
     let balText = '';
     const base = (vpsSolWallet.baseToken || 'SOL').toUpperCase();
     const solVal = vpsSolWallet.sol !== undefined ? vpsSolWallet.sol : 0;
     const usdcVal = vpsSolWallet.usdc !== undefined ? vpsSolWallet.usdc : 0;
-    const solMode = document.getElementById('solModeSel').value;
+    const solModeEl = document.getElementById('solModeSel');
+    const solMode = solModeEl ? solModeEl.value : 'simulated';
     const solModeLabel = solMode === 'wallet' ? '🟣 Wallet' : (solMode === 'pool' ? '👥 Pool' : '💰 Simulado');
     
     if (base === 'USDC') {
@@ -1468,29 +1578,46 @@ function updateSolanaVpsWalletUI(vpsSolWallet) {
     } else {
       balText = solVal.toFixed(3) + ' SOL | ' + usdcVal.toFixed(2) + ' USDC';
     }
-    document.getElementById('vpsSolBalance').textContent = balText + ' (' + solModeLabel + ')';
+    const balEl = document.getElementById('vpsSolBalance');
+    if (balEl) {
+      balEl.textContent = balText + ' (' + solModeLabel + ')';
+    }
   } else {
     el.style.display = 'none';
   }
 }
 
 function updateDash(){
-  document.getElementById('dBal').textContent = '$' + SIM.balance.toFixed(2);
+  const dBal = document.getElementById('dBal');
+  if (dBal) dBal.textContent = '$' + SIM.balance.toFixed(2);
   const pnl=SIM.pnl,pct=SIM.initBal>0?pnl/SIM.initBal*100:0;
-  document.getElementById('dPnL').textContent=(pnl>=0?'+':'')+'$'+pnl.toFixed(2);
-  document.getElementById('dPnL').style.color=pnl>=0?'var(--g)':'var(--r)';
-  document.getElementById('dPnLS').textContent=(pnl>=0?'+':'')+pct.toFixed(2)+'%';
-  document.getElementById('dc1').className='dc'+(pnl>0?' hi':pnl<0?' lo':'');
-  document.getElementById('dWins').textContent=SIM.wins;
-  document.getElementById('dLoss').textContent=SIM.losses;
-  document.getElementById('dExec').textContent=SIM.totalExec;
-  document.getElementById('watchN').textContent=watchItems.length;
-  document.getElementById('execN').textContent=SIM.totalExec;
+  const dPnL = document.getElementById('dPnL');
+  if (dPnL) {
+    dPnL.textContent=(pnl>=0?'+':'')+'$'+pnl.toFixed(2);
+    dPnL.style.color=pnl>=0?'var(--g)':'var(--r)';
+  }
+  const dPnLS = document.getElementById('dPnLS');
+  if (dPnLS) dPnLS.textContent=(pnl>=0?'+':'')+pct.toFixed(2)+'%';
+  const dc1 = document.getElementById('dc1');
+  if (dc1) dc1.className='dc'+(pnl>0?' hi':pnl<0?' lo':'');
+  const dWins = document.getElementById('dWins');
+  if (dWins) dWins.textContent=SIM.wins;
+  const dLoss = document.getElementById('dLoss');
+  if (dLoss) dLoss.textContent=SIM.losses;
+  const dExec = document.getElementById('dExec');
+  if (dExec) dExec.textContent=SIM.totalExec;
+  const watchN = document.getElementById('watchN');
+  if (watchN) watchN.textContent=watchItems.length;
+  const execN = document.getElementById('execN');
+  if (execN) execN.textContent=SIM.totalExec;
   const wins=SIM.trades.filter(t=>t.pnl>0),losses=SIM.trades.filter(t=>t.pnl<=0);
-  document.getElementById('dAvgW').textContent=wins.length?'avg +'+(wins.reduce((a,t)=>a+(+t.pnlPct),0)/wins.length).toFixed(1)+'%':'avg +0%';
-  document.getElementById('dAvgL').textContent=losses.length?'avg '+(losses.reduce((a,t)=>a+(+t.pnlPct),0)/losses.length).toFixed(1)+'%':'avg 0%';
+  const dAvgW = document.getElementById('dAvgW');
+  if (dAvgW) dAvgW.textContent=wins.length?'avg +'+(wins.reduce((a,t)=>a+(+t.pnlPct),0)/wins.length).toFixed(1)+'%':'avg +0%';
+  const dAvgL = document.getElementById('dAvgL');
+  if (dAvgL) dAvgL.textContent=losses.length?'avg '+(losses.reduce((a,t)=>a+(+t.pnlPct),0)/losses.length).toFixed(1)+'%':'avg 0%';
   const inv=watchItems.reduce((a,w)=>a+(w.orders.filter(o=>o.status==='filled').reduce((s,o)=>s+o.amount,0)),0);
-  document.getElementById('dBalS').textContent=inv>0?`libre · pos $${inv.toFixed(0)}`:'disponible';
+  const dBalS = document.getElementById('dBalS');
+  if (dBalS) dBalS.textContent=inv>0?`libre · pos $${inv.toFixed(0)}`:'disponible';
 }
 
 // ══════════════════════════════════════════════════════════
@@ -1806,31 +1933,62 @@ async function startScan(){
         return;
       }
       
-      const volMin = +document.getElementById('cfVol').value || 10000;
-      const chgMin = +document.getElementById('cfChg').value || -999;
-      const trendReq = document.getElementById('cfTrend').value || 'any';
-      const maxCoins = +document.getElementById('cfMax').value || 400;
-      const minAge = document.getElementById('cfMinAge') ? +document.getElementById('cfMinAge').value : 0;
-      const minMarketCap = document.getElementById('cfMinMarketCap') ? +document.getElementById('cfMinMarketCap').value : 0;
+
+      const liqMin = document.getElementById('f_liqMin') && document.getElementById('f_liqMin').value !== "" ? +document.getElementById('f_liqMin').value : 0;
+      const liqMax = document.getElementById('f_liqMax') && document.getElementById('f_liqMax').value !== "" ? +document.getElementById('f_liqMax').value : 9999999999;
+      const mcMin = document.getElementById('f_mcMin') && document.getElementById('f_mcMin').value !== "" ? +document.getElementById('f_mcMin').value : 0;
+      const mcMax = document.getElementById('f_mcMax') && document.getElementById('f_mcMax').value !== "" ? +document.getElementById('f_mcMax').value : 9999999999;
+      const fdvMin = document.getElementById('f_fdvMin') && document.getElementById('f_fdvMin').value !== "" ? +document.getElementById('f_fdvMin').value : 0;
+      const fdvMax = document.getElementById('f_fdvMax') && document.getElementById('f_fdvMax').value !== "" ? +document.getElementById('f_fdvMax').value : 9999999999;
+      const ageMin = document.getElementById('f_ageMin') && document.getElementById('f_ageMin').value !== "" ? +document.getElementById('f_ageMin').value : 0;
+      const ageMax = document.getElementById('f_ageMax') && document.getElementById('f_ageMax').value !== "" ? +document.getElementById('f_ageMax').value : 999999;
+      const txnsMin = document.getElementById('f_txnsMin') && document.getElementById('f_txnsMin').value !== "" ? +document.getElementById('f_txnsMin').value : 0;
+      const txnsMax = document.getElementById('f_txnsMax') && document.getElementById('f_txnsMax').value !== "" ? +document.getElementById('f_txnsMax').value : 999999999;
+      const buysMin = document.getElementById('f_buysMin') && document.getElementById('f_buysMin').value !== "" ? +document.getElementById('f_buysMin').value : 0;
+      const buysMax = document.getElementById('f_buysMax') && document.getElementById('f_buysMax').value !== "" ? +document.getElementById('f_buysMax').value : 999999999;
+      const sellsMin = document.getElementById('f_sellsMin') && document.getElementById('f_sellsMin').value !== "" ? +document.getElementById('f_sellsMin').value : 0;
+      const sellsMax = document.getElementById('f_sellsMax') && document.getElementById('f_sellsMax').value !== "" ? +document.getElementById('f_sellsMax').value : 999999999;
+      const volMin = document.getElementById('f_volMin') && document.getElementById('f_volMin').value !== "" ? +document.getElementById('f_volMin').value : 0;
+      const volMax = document.getElementById('f_volMax') && document.getElementById('f_volMax').value !== "" ? +document.getElementById('f_volMax').value : 9999999999;
+      const chgMin = document.getElementById('f_chgMin') && document.getElementById('f_chgMin').value !== "" ? +document.getElementById('f_chgMin').value : -9999;
+      const chgMax = document.getElementById('f_chgMax') && document.getElementById('f_chgMax').value !== "" ? +document.getElementById('f_chgMax').value : 99999;
+      const trendReq = document.getElementById('cfTrend') ? document.getElementById('cfTrend').value : 'any';
+      const maxCoins = document.getElementById('cfMax') ? +document.getElementById('cfMax').value : 400;
+      
       const safeOnly = document.getElementById('cfSafeOnly') ? document.getElementById('cfSafeOnly').checked : false;
       
       setSt(`Procesando ${solPairs.length} pares...`, 40);
       
       const nowMs = Date.now();
       const pool = solPairs.filter(p => {
-        if ((p.volume?.h24 || 0) < volMin) return false;
-        if ((p.priceChange?.h24 || 0) < chgMin) return false;
+        const pLiq = p.liquidity?.usd || 0;
+        if (pLiq < liqMin || pLiq > liqMax) return false;
         
-        if (minAge > 0) {
-          if (!p.pairCreatedAt) return false;
-          const ageDays = (nowMs - p.pairCreatedAt) / (1000 * 60 * 60 * 24);
-          if (ageDays < minAge) return false;
+        const pMc = p.marketCap || 0;
+        if (pMc < mcMin || pMc > mcMax) return false;
+        
+        const pFdv = p.fdv || 0;
+        if (pFdv < fdvMin || pFdv > fdvMax) return false;
+        
+        if (p.pairCreatedAt) {
+          const ageHours = (nowMs - p.pairCreatedAt) / (1000 * 60 * 60);
+          if (ageHours < ageMin || ageHours > ageMax) return false;
         }
         
-        if (minMarketCap > 0) {
-          const mc = p.marketCap || p.fdv || 0;
-          if (mc < minMarketCap) return false;
-        }
+        const pTxns = (p.txns?.h24?.buys || 0) + (p.txns?.h24?.sells || 0);
+        if (pTxns < txnsMin || pTxns > txnsMax) return false;
+        
+        const pBuys = p.txns?.h24?.buys || 0;
+        if (pBuys < buysMin || pBuys > buysMax) return false;
+        
+        const pSells = p.txns?.h24?.sells || 0;
+        if (pSells < sellsMin || pSells > sellsMax) return false;
+        
+        const pVol = p.volume?.h24 || 0;
+        if (pVol < volMin || pVol > volMax) return false;
+        
+        const pChg = p.priceChange?.h24 || 0;
+        if (pChg < chgMin || pChg > chgMax) return false;
         
         return true;
       }).slice(0, maxCoins);
@@ -2013,15 +2171,27 @@ async function startScan(){
 let selScan=null;
 function renderScanResults(){
   const sort=document.getElementById('cfSort').value;
-  const minAge=parseFloat(document.getElementById('cfMinAge').value)||0;
-  const minCap=parseFloat(document.getElementById('cfMinMarketCap').value)||0;
+  const liqMin = document.getElementById('f_liqMin') && document.getElementById('f_liqMin').value !== "" ? +document.getElementById('f_liqMin').value : 0;
+  const liqMax = document.getElementById('f_liqMax') && document.getElementById('f_liqMax').value !== "" ? +document.getElementById('f_liqMax').value : 9999999999;
+  const mcMin = document.getElementById('f_mcMin') && document.getElementById('f_mcMin').value !== "" ? +document.getElementById('f_mcMin').value : 0;
+  const mcMax = document.getElementById('f_mcMax') && document.getElementById('f_mcMax').value !== "" ? +document.getElementById('f_mcMax').value : 9999999999;
+  const fdvMin = document.getElementById('f_fdvMin') && document.getElementById('f_fdvMin').value !== "" ? +document.getElementById('f_fdvMin').value : 0;
+  const fdvMax = document.getElementById('f_fdvMax') && document.getElementById('f_fdvMax').value !== "" ? +document.getElementById('f_fdvMax').value : 9999999999;
+  const ageMin = document.getElementById('f_ageMin') && document.getElementById('f_ageMin').value !== "" ? +document.getElementById('f_ageMin').value : 0;
+  const ageMax = document.getElementById('f_ageMax') && document.getElementById('f_ageMax').value !== "" ? +document.getElementById('f_ageMax').value : 999999;
+  const volMin = document.getElementById('f_volMin') && document.getElementById('f_volMin').value !== "" ? +document.getElementById('f_volMin').value : 0;
+  const volMax = document.getElementById('f_volMax') && document.getElementById('f_volMax').value !== "" ? +document.getElementById('f_volMax').value : 9999999999;
+  
   const now=Date.now();
   
   let data=scanResults.filter(d => {
-    // Si no tiene pairCreatedAt, asumimos que pasa el filtro (MEXC tokens) o si es muy viejo.
-    const ageDays = d.pairCreatedAt ? (now - d.pairCreatedAt) / (24*60*60*1000) : 999999;
+    // Si no tiene pairCreatedAt, asumimos que pasa el filtro o si es muy viejo.
+    const ageHours = d.pairCreatedAt ? (now - d.pairCreatedAt) / (60*60*1000) : 999999;
     const mc = d.marketCap !== undefined ? d.marketCap : 999999999999;
-    return ageDays >= minAge && mc >= minCap;
+    const liq = d.liq || 0;
+    const vol = d.vol || 0;
+    
+    return ageHours >= ageMin && ageHours <= ageMax && mc >= mcMin && mc <= mcMax && liq >= liqMin && liq <= liqMax && vol >= volMin && vol <= volMax;
   });
   
   if(sort==='chg')data.sort((a,b)=>b.chg-a.chg);
@@ -2168,9 +2338,11 @@ function showAddForm(d){
     </table>
     <button class="btn btn-g" style="width:100%;margin-top:5px;font-size:10px" onclick="addToWatch()">➕ AGREGAR A VIGILANCIA</button>
   `;
-  // Insertar antes del wlist
-  const wlist=document.getElementById('wlist');
-  wlist.parentNode.insertBefore(panel,wlist);
+  // Insertar arriba en view-detail (Análisis)
+  const viewDetail = document.getElementById('view-detail');
+  if (viewDetail) {
+    viewDetail.insertBefore(panel, viewDetail.firstChild);
+  }
   updateAfDist();
 }
 
@@ -2733,15 +2905,19 @@ setInterval(async () => {
     monitorInterval = data.monitorInterval || monitorInterval;
     
     if(data.mode) {
-      document.getElementById('modeSel').value = data.mode;
-      document.getElementById('dBalS').textContent = data.mode === 'real' ? 'USDT (Real MEXC)' : 'disponible';
+      const modeSel = document.getElementById('modeSel');
+      if (modeSel) modeSel.value = data.mode;
+      const dBalS = document.getElementById('dBalS');
+      if (dBalS) dBalS.textContent = data.mode === 'real' ? 'USDT (Real MEXC)' : 'disponible';
     }
     if (data.solMode) {
-      document.getElementById('solModeSel').value = data.solMode;
+      const solModeSel = document.getElementById('solModeSel');
+      if (solModeSel) solModeSel.value = data.solMode;
     }
     watchItems = data.watchItems || watchItems;
     cycleN = data.cycleN || cycleN;
-    document.getElementById('dCycle').textContent = cycleN;
+    const dCycle = document.getElementById('dCycle');
+    if (dCycle) dCycle.textContent = cycleN;
     
     // Update header badge and status
     const badge = document.getElementById('hbadge');
@@ -2824,7 +3000,10 @@ setInterval(async () => {
     renderWatchList();
     renderLog();
     
-    document.getElementById('htime').textContent=new Date().toLocaleTimeString('es',{hour:'2-digit',minute:'2-digit',second:'2-digit'});
+    const htime = document.getElementById('htime');
+    if (htime) {
+      htime.textContent=new Date().toLocaleTimeString('es',{hour:'2-digit',minute:'2-digit',second:'2-digit'});
+    }
   } catch(e) {
     if (e.message !== 'Failed to fetch' && e.message !== 'Unauthorized') {
       console.error('Interval error:', e);
@@ -4336,5 +4515,5 @@ addLog('DIP HUNTER v6 listo — Escáner + Monitor 10s + Auto-Ejecución + Edito
 
 </div>
 
-</body>
-</html>
+
+</body></html>
