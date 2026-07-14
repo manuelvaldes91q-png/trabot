@@ -363,6 +363,11 @@ window.addEventListener('DOMContentLoaded', () => {
           <option value="9999">Todas</option>
         </select>
       </div>
+      <div class="sf" style="justify-content:center; align-items:flex-start;">
+        <label style="display:flex; align-items:center; cursor:pointer; color:var(--t2); font-size:11px; height:100%;">
+          <input type="checkbox" id="cfSafeOnly" style="margin-right:4px;"> 🛡️ 100% Seguro (Anti-Rug)
+        </label>
+      </div>
       <div class="sf" style="justify-content:flex-end;padding-top:12px">
         <button class="btn btn-g btn-sm" id="btnScan" onclick="startScan()" style="width:100%">🔍 ESCANEAR</button>
       </div>
@@ -1807,6 +1812,7 @@ async function startScan(){
       const maxCoins = +document.getElementById('cfMax').value || 400;
       const minAge = document.getElementById('cfMinAge') ? +document.getElementById('cfMinAge').value : 0;
       const minMarketCap = document.getElementById('cfMinMarketCap') ? +document.getElementById('cfMinMarketCap').value : 0;
+      const safeOnly = document.getElementById('cfSafeOnly') ? document.getElementById('cfSafeOnly').checked : false;
       
       setSt(`Procesando ${solPairs.length} pares...`, 40);
       
@@ -1829,8 +1835,46 @@ async function startScan(){
         return true;
       }).slice(0, maxCoins);
       
-      for (let i = 0; i < pool.length; i++) {
-        const p = pool[i];
+      let finalPool = pool;
+      if (safeOnly) {
+         setSt(`Filtrando anti-rug en ${pool.length} pares (puede demorar)...`, 45);
+         const safePool = [];
+         const batchSize = 3;
+         for (let i = 0; i < pool.length; i += batchSize) {
+            const batch = pool.slice(i, i + batchSize);
+            setSt(`Auditoría de seguridad... (${Math.min(i + batchSize, pool.length)}/${pool.length})`, 45 + (i/pool.length)*30);
+            const promises = batch.map(async (p) => {
+               try {
+                  const res = await myFetch('/api/token-safety/' + p.baseToken.address);
+                  if (res.ok) {
+                    const safety = await res.json();
+                    if (safety && safety.safe) {
+                      // También comprobar el auditor (rugcheck base)
+                      const auditRes = await myFetch('/api/token/audit/' + p.baseToken.address);
+                      if (auditRes.ok) {
+                        const data = await auditRes.json();
+                        if (data.available) {
+                          const rugProb = parseFloat(data.rugProb) || 0;
+                          if (rugProb < 20 && data.top10 < 30 && data.dev < 10 && data.noMint && data.noBlacklist && data.lpBurned > 80 && data.insiders === '0%' && data.phishing === '0%') {
+                            return p;
+                          }
+                        }
+                      }
+                    }
+                  }
+               } catch(e) {}
+               return null;
+            });
+            const results = await Promise.all(promises);
+            safePool.push(...results.filter(Boolean));
+            // Pequeña pausa para no saturar RugCheck
+            await new Promise(r => setTimeout(r, 200));
+         }
+         finalPool = safePool;
+      }
+      
+      for (let i = 0; i < finalPool.length; i++) {
+        const p = finalPool[i];
         const symbol = p.baseToken.symbol;
         const address = p.baseToken.address;
         const pairAddress = p.pairAddress;
