@@ -1112,9 +1112,35 @@ async function rotatePoolWallet(btn) {
 
 async function recoverPoolRent(btn) {
   const original = btn.textContent;
-  btn.textContent = '⏳ Limpiando...';
+  btn.textContent = '⏳ Calculando...';
   btn.disabled = true;
   try {
+    const previewRes = await myFetch('/api/pool/rent_preview');
+    const previewData = await previewRes.json();
+    if (previewData.error) {
+      alert('Error: ' + previewData.error);
+      btn.textContent = original;
+      btn.disabled = false;
+      return;
+    }
+    if (previewData.count === 0) {
+      alert('No hay cuentas vacías para limpiar.');
+      btn.textContent = original;
+      btn.disabled = false;
+      return;
+    }
+    
+    const confirmMsg = `Se encontraron ${previewData.count} cuentas vacías.\n` +
+      `Se estima recuperar ~${previewData.estimatedSolRecovered} SOL.\n\n` +
+      `¿Deseas proceder con el cierre de estas cuentas?`;
+      
+    if (!confirm(confirmMsg)) {
+      btn.textContent = original;
+      btn.disabled = false;
+      return;
+    }
+    
+    btn.textContent = '⏳ Limpiando...';
     const res = await myFetch('/api/pool/recover_rent', {
       method: 'POST',
       headers: {'Content-Type': 'application/json'}
@@ -2826,6 +2852,18 @@ function quickMarketBuy() {
   const amount = prompt(`¿Cuánto quieres comprar de ${curDet.symbol}?`, '50');
   if (!amount || +amount <= 0) return;
   
+  const slStr = prompt('Stop Loss (%)', '10');
+  if (slStr === null) return;
+  const sl = +slStr;
+  
+  const tp1Str = prompt('Take Profit 1 (%)', '8');
+  if (tp1Str === null) return;
+  const tp1 = +tp1Str;
+  
+  const tp2Str = prompt('Take Profit 2 (%)', '15');
+  if (tp2Str === null) return;
+  const tp2 = +tp2Str;
+  
   myFetch('/api/action', {
     method: 'POST', 
     headers: {'Content-Type': 'application/json'}, 
@@ -2836,7 +2874,10 @@ function quickMarketBuy() {
         network: curDet.network, 
         address: curDet.address, 
         pair: curDet.pair, 
-        amount: +amount 
+        amount: +amount,
+        sl: sl,
+        tp1: tp1,
+        tp2: tp2
       }
     })
   }).then(r => r.json()).then(d => {

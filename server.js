@@ -814,7 +814,7 @@ async function getTokenBalance(connection, ownerPubKey, tokenMintStr) {
 async function getEmptyTokenAccounts(connection, ownerPublicKey) {
   const emptyAccounts = [];
   const TOKEN_PROGRAM_ID = new PublicKey('TokenkegQfeZyiNwAJbNbGKPFXCWuBvf9Ss623VQ5DA');
-  const TOKEN_2022_PROGRAM_ID = new PublicKey('Tokenz45L1mCH9Gf8fSZ7Gaq8Tsh7xKcm6ZAnc6q6g7');
+  const TOKEN_2022_PROGRAM_ID = new PublicKey('TokenzQdBNbLqP5VEhdkAS6EPFLC1PHnBqCXEpPxuEb');
   
   try {
     const standardAccounts = await connection.getParsedTokenAccountsByOwner(
@@ -3356,7 +3356,7 @@ app.post('/api/action', adminAuth, async (req, res) => {
       SIM.totalExec = 0;
       if (payload.clearLogs) logs.length = 0;
     } else if (action === 'quickMarketBuy') {
-      const { symbol, network, address, pair, amount } = payload;
+      const { symbol, network, address, pair, amount, sl = 10, tp1 = 8, tp2 = 15 } = payload;
       let w = watchItems.find(item => (address && item.address === address) || item.symbol === symbol);
       if (!w) {
         w = {
@@ -3386,6 +3386,7 @@ app.post('/api/action', adminAuth, async (req, res) => {
           level: w.orders.length + 1,
           price: cp,
           amount: amount,
+          sl, tp1, tp2,
           note: 'Compra de Mercado Rápida',
           status: 'filled',
           type: 'dca',
@@ -3398,9 +3399,9 @@ app.post('/api/action', adminAuth, async (req, res) => {
         w.filledBuys.push({ price: cp, amount: amount, level: order.level });
         
         if (!w.slPrice) {
-          w.slPrice = cp * (1 - 10/100);
-          w.tp1Price = cp * (1 + 8/100);
-          w.tp2Price = cp * (1 + 15/100);
+          w.slPrice = cp * (1 - sl/100);
+          w.tp1Price = cp * (1 + tp1/100);
+          w.tp2Price = cp * (1 + tp2/100);
         }
         
         if (w.network === 'solana') {
@@ -3791,6 +3792,24 @@ app.use('/api', (req, res, next) => {
 });
 
 // ADMIN ENDPOINTS
+
+app.get('/api/pool/rent_preview', adminAuth, async (req, res) => {
+  if (!poolConfig.privateKey) return res.json({ error: 'La wallet del Pool no tiene llaves configuradas' });
+  try {
+    const rpcUrl = appConfig.solanaRpcUrl || process.env.SOLANA_RPC_URL || 'https://solana-rpc.publicnode.com';
+    const connection = new Connection(rpcUrl, 'confirmed');
+    const ownerKeypair = Keypair.fromSecretKey(bs58.decode(poolConfig.privateKey));
+    const emptyAccounts = await getEmptyTokenAccounts(connection, ownerKeypair.publicKey);
+    res.json({
+      success: true,
+      count: emptyAccounts.length,
+      estimatedSolRecovered: +(emptyAccounts.length * 0.002039).toFixed(5),
+      accounts: emptyAccounts.map(a => ({ mint: a.mint, pubkey: a.pubkey.toString() }))
+    });
+  } catch (e) {
+    res.json({ error: e.message || 'Error de red o de RPC al revisar cuentas' });
+  }
+});
 
 app.post('/api/pool/recover_rent', adminAuth, async (req, res) => {
   if (!poolConfig.privateKey) {
