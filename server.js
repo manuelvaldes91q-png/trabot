@@ -2106,11 +2106,12 @@ async function executeSolanaTradeInternal(w, side, amountUSDT, price, pk, feePay
       
       const diffRaw = side === 'SELL' ? (baseBalAfter - baseBalBefore) : (baseBalBefore - baseBalAfter);
       let exactAmountUSDT = 0;
-      if (isSOL) {
-        const solPrice = await mxPrice('SOL') || 140;
-        exactAmountUSDT = (diffRaw / 1e9) * solPrice;
+      if (side === 'BUY') {
+         // Para compras, usar el monto exacto de entrada (sin contar comisiones de red/renta)
+         exactAmountUSDT = isSOL ? (rawAmount / 1e9) * (await mxPrice('SOL') || 140) : (rawAmount / 1e6);
       } else {
-        exactAmountUSDT = diffRaw / 1e6;
+         // Para ventas, diffRaw (recibido neto descontando comisiones de gas)
+         exactAmountUSDT = isSOL ? (diffRaw / 1e9) * (await mxPrice('SOL') || 140) : (diffRaw / 1e6);
       }
       
       const tokenDiff = side === 'BUY' ? (tokenBalAfter - tokenBalBefore) : (tokenBalBefore - tokenBalAfter);
