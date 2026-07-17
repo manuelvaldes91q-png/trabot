@@ -784,6 +784,32 @@ async function getSolanaPrice(tokenAddress) {
   return res[tokenAddress]?.price || 0;
 }
 
+async function getTokenUiBalance(connection, ownerPubKey, tokenMintStr) {
+  try {
+    const owner = new PublicKey(ownerPubKey);
+    if (tokenMintStr === 'So11111111111111111111111111111111111111112') {
+      const nativeBal = await connection.getBalance(owner);
+      let wsolBalRaw = 0;
+      try {
+        const mint = new PublicKey(tokenMintStr);
+        const accounts = await connection.getParsedTokenAccountsByOwner(owner, { mint });
+        if (accounts && accounts.value && accounts.value.length) {
+          wsolBalRaw = Number(accounts.value[0].account.data.parsed.info.tokenAmount.amount);
+        }
+      } catch (e) {}
+      return (nativeBal + wsolBalRaw) / 1e9;
+    }
+    const mint = new PublicKey(tokenMintStr);
+    const accounts = await connection.getParsedTokenAccountsByOwner(owner, { mint });
+    if (accounts && accounts.value && accounts.value.length) {
+      return accounts.value[0].account.data.parsed.info.tokenAmount.uiAmount || 0;
+    }
+    return 0;
+  } catch (e) {
+    return 0;
+  }
+}
+
 async function getTokenBalance(connection, ownerPubKey, tokenMintStr) {
   try {
     const owner = new PublicKey(ownerPubKey);
@@ -969,6 +995,7 @@ async function executeSolanaTrade(w, side, amountUSDT, price) {
 
      let allOk = true;
      let totalExactAmountUSDT = 0;
+     let totalTokens = 0;
      const mainTxid = 'pool_multi';
 
      addLog(`👥 Ejecutando trade ${side} en ${activeInvestors.length} wallets del pool...`, 'info');
@@ -977,7 +1004,7 @@ async function executeSolanaTrade(w, side, amountUSDT, price) {
         const invShare = inv.deposit / totalDeposit;
         const invAmountUSDT = amountUSDT * invShare;
         if (invAmountUSDT < 0.5) { 
-           addLog(`⏭️ Saltando ${inv.name} por monto muy pequeño ($${invAmountUSDT.toFixed(2)})`, 'info');
+           addLog(`⏭️ Saltando ${inv.name} por monto muy pequeño (${invAmountUSDT.toFixed(2)})`, 'info');
            continue;
         }
 
@@ -985,6 +1012,7 @@ async function executeSolanaTrade(w, side, amountUSDT, price) {
         const res = await executeSolanaTradeInternal(w, side, invAmountUSDT, price, inv.depositWalletPk, adminPk);
         if (res.ok) {
            if (res.exactAmountUSDT) totalExactAmountUSDT += res.exactAmountUSDT;
+           if (res.exactTokens) totalTokens += res.exactTokens;
         } else {
            allOk = false;
         }
@@ -992,7 +1020,10 @@ async function executeSolanaTrade(w, side, amountUSDT, price) {
         await new Promise(r => setTimeout(r, 500)); // avoid rate limits
      }
 
-     return { ok: allOk, txid: mainTxid, exactAmountUSDT: totalExactAmountUSDT };
+     let avgExactPrice = price;
+     if (totalTokens > 0 && totalExactAmountUSDT > 0) avgExactPrice = totalExactAmountUSDT / totalTokens;
+
+     return { ok: allOk, txid: mainTxid, exactAmountUSDT: totalExactAmountUSDT, exactPrice: avgExactPrice, exactTokens: totalTokens };
   } else {
      const pk = poolConfig.privateKey || appConfig.solanaPrivateKey || process.env.SOLANA_PRIVATE_KEY;
      return await executeSolanaTradeInternal(w, side, amountUSDT, price, pk);
@@ -1921,6 +1952,7 @@ async function executeSolanaTradeInternal(w, side, amountUSDT, price, pk, feePay
     try {
       let inputMint, outputMint, rawAmount;
       const baseBalBefore = await getTokenBalance(connection, userPublicKey, baseMint);
+      const tokenBalBefore = await getTokenUiBalance(connection, userPublicKey, targetMint);
 
       if (side === 'BUY') {
         inputMint = baseMint;
@@ -2070,6 +2102,8 @@ async function executeSolanaTradeInternal(w, side, amountUSDT, price, pk, feePay
       }, 'confirmed');
 
       const baseBalAfter = await getTokenBalance(connection, userPublicKey, baseMint);
+      const tokenBalAfter = await getTokenUiBalance(connection, userPublicKey, targetMint);
+      
       const diffRaw = side === 'SELL' ? (baseBalAfter - baseBalBefore) : (baseBalBefore - baseBalAfter);
       let exactAmountUSDT = 0;
       if (isSOL) {
@@ -2078,12 +2112,18 @@ async function executeSolanaTradeInternal(w, side, amountUSDT, price, pk, feePay
       } else {
         exactAmountUSDT = diffRaw / 1e6;
       }
+      
+      const tokenDiff = side === 'BUY' ? (tokenBalAfter - tokenBalBefore) : (tokenBalBefore - tokenBalAfter);
+      let exactPrice = price; // default to passed price
+      if (tokenDiff > 0 && exactAmountUSDT > 0) {
+        exactPrice = exactAmountUSDT / tokenDiff;
+      }
 
       addLog(`🎉 Solana trade ${side} confirmado con éxito para ${w.symbol}! TxID: ${txid}`, side==='BUY'?'buy':'sell');
       solanaSwapLogs.unshift({ txid, symbol: w.symbol, side, amountUSDT, time: Date.now() });
       if(solanaSwapLogs.length > 50) solanaSwapLogs.pop();
 
-      return { ok: true, txid, exactAmountUSDT };
+      return { ok: true, txid, exactAmountUSDT, exactPrice, exactTokens: tokenDiff };
     } catch (err) {
       lastError = err;
       addLog(`❌ Error en ejecución de Solana (intento ${attempt + 1}/${MAX_SWAP_ATTEMPTS}): ${err.message}`, 'warn');
@@ -2232,7 +2272,7 @@ async function runCycle() {
             SIM.pnl += pnl; distributePnL(pnl);
             SIM.losses++;
           } else continue;
-          SIM.trades.push({ symbol: w.symbol, avgEntry: avg, exit: cp, pnl, pnlPct: pnlP.toFixed(2), at: Date.now() });
+          SIM.trades.push({ symbol: w.symbol, avgEntry: avg, exit: (realRes.exactPrice || cp), pnl, pnlPct: pnlP.toFixed(2), at: Date.now() });
           
           w.orders.forEach(o => { if (o.status === 'pending') o.status = 'cancelled'; });
           w.slPrice = null; w.tp1Price = null; w.tp2Price = null;
@@ -2253,7 +2293,7 @@ async function runCycle() {
             SIM.pnl += pnl; distributePnL(pnl);
             SIM.wins++;
           } else continue;
-          SIM.trades.push({ symbol: w.symbol, avgEntry: avg, exit: cp, pnl, pnlPct: pnlP.toFixed(2), at: Date.now() });
+          SIM.trades.push({ symbol: w.symbol, avgEntry: avg, exit: (realRes.exactPrice || cp), pnl, pnlPct: pnlP.toFixed(2), at: Date.now() });
           
           w.orders.forEach(o => { if (o.status === 'pending') o.status = 'cancelled'; });
           w.tp1Hit = true;
@@ -2275,7 +2315,7 @@ async function runCycle() {
             SIM.pnl += pnl; distributePnL(pnl);
             SIM.wins++;
           } else continue;
-          SIM.trades.push({ symbol: w.symbol, avgEntry: avg, exit: cp, pnl, pnlPct: pnlP.toFixed(2), at: Date.now() });
+          SIM.trades.push({ symbol: w.symbol, avgEntry: avg, exit: (realRes.exactPrice || cp), pnl, pnlPct: pnlP.toFixed(2), at: Date.now() });
           
           w.orders.forEach(o => { if (o.status === 'pending') o.status = 'cancelled'; });
           w.tp2Hit = true;
@@ -2669,7 +2709,7 @@ async function runSolanaCycle() {
             }
             SIM.pnl += pnl; distributePnL(pnl);
             SIM.losses++;
-            SIM.trades.push({ symbol: w.symbol, avgEntry: avg, exit: cp, pnl, pnlPct: pnlP.toFixed(2), at: Date.now() });
+            SIM.trades.push({ symbol: w.symbol, avgEntry: avg, exit: (realRes.exactPrice || cp), pnl, pnlPct: pnlP.toFixed(2), at: Date.now() });
             
             w.orders.forEach(o => { if (o.status === 'pending') o.status = 'cancelled'; });
             w.slPrice = null; w.tp1Price = null; w.tp2Price = null;
@@ -2695,7 +2735,7 @@ async function runSolanaCycle() {
             }
             SIM.pnl += pnl; distributePnL(pnl);
             SIM.wins++;
-            SIM.trades.push({ symbol: w.symbol, avgEntry: avg, exit: cp, pnl, pnlPct: pnlP.toFixed(2), at: Date.now() });
+            SIM.trades.push({ symbol: w.symbol, avgEntry: avg, exit: (realRes.exactPrice || cp), pnl, pnlPct: pnlP.toFixed(2), at: Date.now() });
             
             w.orders.forEach(o => { if (o.status === 'pending') o.status = 'cancelled'; });
             w.tp1Hit = true;
@@ -2722,7 +2762,7 @@ async function runSolanaCycle() {
             }
             SIM.pnl += pnl; distributePnL(pnl);
             SIM.wins++;
-            SIM.trades.push({ symbol: w.symbol, avgEntry: avg, exit: cp, pnl, pnlPct: pnlP.toFixed(2), at: Date.now() });
+            SIM.trades.push({ symbol: w.symbol, avgEntry: avg, exit: (realRes.exactPrice || cp), pnl, pnlPct: pnlP.toFixed(2), at: Date.now() });
             
             w.orders.forEach(o => { if (o.status === 'pending') o.status = 'cancelled'; });
             w.tp2Hit = true;
@@ -3325,7 +3365,7 @@ app.post('/api/action', adminAuth, async (req, res) => {
             }
             SIM.pnl += pnl; distributePnL(pnl);
             if (pnl >= 0) SIM.wins++; else SIM.losses++;
-            SIM.trades.push({ symbol: w.symbol, avgEntry: avg, exit: cp, pnl, pnlPct: pnlP.toFixed(2), at: Date.now() });
+            SIM.trades.push({ symbol: w.symbol, avgEntry: avg, exit: (realRes.exactPrice || cp), pnl, pnlPct: pnlP.toFixed(2), at: Date.now() });
             
             w.orders.forEach(o => { 
               if (o.status === 'filled' || o.status === 'done') o.status = 'closed'; 
@@ -3379,19 +3419,22 @@ app.post('/api/action', adminAuth, async (req, res) => {
       }
       if (!cp || cp <= 0) cp = w.currentPrice || 1;
       
-      addLog(`⚡ [Compra Mercado Rápida] Disparando swap compra para ${w.symbol} de $${amount}...`, 'info');
+      addLog(`⚡ [Compra Mercado Rápida] Disparando swap compra para ${w.symbol} de ${amount}...`, 'info');
       const realRes = await executeOrder(w, 'BUY', amount, cp);
       if (realRes && realRes.ok) {
+        const finalPrice = realRes.exactPrice || cp;
+        w.currentPrice = finalPrice;
+        
         const order = {
           level: w.orders.length + 1,
-          price: cp,
-          amount: amount,
+          price: finalPrice,
+          amount: realRes.exactAmountUSDT || amount,
           sl, tp1, tp2,
           note: 'Compra de Mercado Rápida',
           status: 'filled',
           type: 'dca',
           filledAt: Date.now(),
-          filledPrice: cp
+          filledPrice: finalPrice
         };
         w.orders.push(order);
         
