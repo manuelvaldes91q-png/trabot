@@ -2889,25 +2889,30 @@ function addOrderToWatch(wi){
   const amt=prompt('Monto $','50');
   const note=prompt('Nota','DCA extra');
   const order = {level:w.orders.length+1,price:+price,amount:+(amt||50),note:note||'',status:'pending',type:'dca'};
-  myFetch('/api/action', {method: 'POST', headers: {'Content-Type': 'application/json'}, body: JSON.stringify({action: 'addOrder', payload: {wi, order}})});
+  myFetch('/api/action', {method: 'POST', headers: {'Content-Type': 'application/json'}, body: JSON.stringify({action: 'addOrder', payload: {wi, symbol: w.symbol, address: w.address, order}})});
 }
 
 function manualFill(wi,oi){
-  myFetch('/api/action', {method: 'POST', headers: {'Content-Type': 'application/json'}, body: JSON.stringify({action: 'manualFill', payload: {wi, oi}})});
+  const w=watchItems[wi];
+  myFetch('/api/action', {method: 'POST', headers: {'Content-Type': 'application/json'}, body: JSON.stringify({action: 'manualFill', payload: {wi, symbol: w.symbol, address: w.address, oi}})});
 }
 function resumeOrder(wi,oi){
-  myFetch('/api/action', {method: 'POST', headers: {'Content-Type': 'application/json'}, body: JSON.stringify({action: 'resumeOrder', payload: {wi, oi}})});
+  const w=watchItems[wi];
+  myFetch('/api/action', {method: 'POST', headers: {'Content-Type': 'application/json'}, body: JSON.stringify({action: 'resumeOrder', payload: {wi, symbol: w.symbol, address: w.address, oi}})});
 }
 function unFill(wi,oi){
   if(!confirm('¿Deshacer esta ejecución?'))return;
-  myFetch('/api/action', {method: 'POST', headers: {'Content-Type': 'application/json'}, body: JSON.stringify({action: 'unFill', payload: {wi, oi}})});
+  const w=watchItems[wi];
+  myFetch('/api/action', {method: 'POST', headers: {'Content-Type': 'application/json'}, body: JSON.stringify({action: 'unFill', payload: {wi, symbol: w.symbol, address: w.address, oi}})});
 }
 function closeTrade(wi){
   if(!confirm(`¿Seguro que quieres cerrar esta posición ahora manualmente?`))return;
-  myFetch('/api/action', {method: 'POST', headers: {'Content-Type': 'application/json'}, body: JSON.stringify({action: 'closeTrade', payload: {index: wi}})});
+  const w=watchItems[wi];
+  myFetch('/api/action', {method: 'POST', headers: {'Content-Type': 'application/json'}, body: JSON.stringify({action: 'closeTrade', payload: {index: wi, symbol: w.symbol, address: w.address}})});
 }
 function removeWatch(wi){
-  myFetch('/api/action', {method: 'POST', headers: {'Content-Type': 'application/json'}, body: JSON.stringify({action: 'removeWatch', payload: {index: wi}})});
+  const w=watchItems[wi];
+  myFetch('/api/action', {method: 'POST', headers: {'Content-Type': 'application/json'}, body: JSON.stringify({action: 'removeWatch', payload: {index: wi, symbol: w.symbol, address: w.address}})});
 }
 
 function quickMarketBuy() {

@@ -3462,39 +3462,49 @@ app.post('/api/action', adminAuth, async (req, res) => {
       watchItems.push(payload);
       addLog(`👀 Moneda agregada: ${payload.symbol}`, 'info');
     } else if (action === 'removeWatch') {
-      watchItems.splice(payload.index, 1);
+      const idx = watchItems.findIndex(item => item.symbol === payload.symbol || (payload.address && item.address === payload.address));
+      if (idx !== -1) {
+        watchItems.splice(idx, 1);
+      } else {
+        watchItems.splice(payload.index, 1);
+      }
     } else if (action === 'clearWatch') {
       watchItems = payload.items || [];
       addLog(`🧹 Watchlist limpiada`, 'info');
     } else if (action === 'addOrder') {
-      if (watchItems[payload.wi]) {
-        watchItems[payload.wi].orders.push(payload.order);
+      const w = watchItems.find(item => item.symbol === payload.symbol || (payload.address && item.address === payload.address)) || watchItems[payload.wi];
+      if (w) {
+        w.orders.push(payload.order);
       }
     } else if (action === 'editOrder') {
-      if (watchItems[payload.wi] && watchItems[payload.wi].orders[payload.oi]) {
-        Object.assign(watchItems[payload.wi].orders[payload.oi], payload.updates);
+      const w = watchItems.find(item => item.symbol === payload.symbol || (payload.address && item.address === payload.address)) || watchItems[payload.wi];
+      if (w && w.orders[payload.oi]) {
+        Object.assign(w.orders[payload.oi], payload.updates);
       }
     } else if (action === 'manualFill') {
-      if (watchItems[payload.wi] && watchItems[payload.wi].orders[payload.oi]) {
-        const w = watchItems[payload.wi];
+      const w = watchItems.find(item => item.symbol === payload.symbol || (payload.address && item.address === payload.address)) || watchItems[payload.wi];
+      if (w && w.orders[payload.oi]) {
         const o = w.orders[payload.oi];
         o.status = 'done';
         SIM.balance -= o.amount;
         addLog(`✅ Orden manual FILL: ${w.symbol} a ${o.price}`, 'buy');
       }
     } else if (action === 'resumeOrder') {
-      if (watchItems[payload.wi] && watchItems[payload.wi].orders[payload.oi]) {
-        watchItems[payload.wi].orders[payload.oi].status = 'pending';
+      const w = watchItems.find(item => item.symbol === payload.symbol || (payload.address && item.address === payload.address)) || watchItems[payload.wi];
+      if (w && w.orders[payload.oi]) {
+        w.orders[payload.oi].status = 'pending';
       }
     } else if (action === 'unFill') {
-      if (watchItems[payload.wi] && watchItems[payload.wi].orders[payload.oi]) {
-        const o = watchItems[payload.wi].orders[payload.oi];
+      const w = watchItems.find(item => item.symbol === payload.symbol || (payload.address && item.address === payload.address)) || watchItems[payload.wi];
+      if (w && w.orders[payload.oi]) {
+        const o = w.orders[payload.oi];
         o.status = 'pending';
         SIM.balance += o.amount;
       }
     } else if (action === 'closeTrade') {
-      if (watchItems[payload.index]) {
-        const w = watchItems[payload.index];
+      const idx = watchItems.findIndex(item => item.symbol === payload.symbol || (payload.address && item.address === payload.address));
+      const w = idx !== -1 ? watchItems[idx] : watchItems[payload.index];
+      if (w) {
         const filled = w.orders.filter(o => o.status === 'filled' || o.status === 'done');
         if (filled.length > 0) {
           const inv = filled.reduce((a, o) => a + o.amount, 0);
@@ -3539,7 +3549,8 @@ app.post('/api/action', adminAuth, async (req, res) => {
             w.slPrice = null; w.tp1Price = null; w.tp2Price = null; w.tp1Hit = false; w.tp2Hit = false;
             addLog(`📉 Posición cerrada manualmente: ${w.symbol} (Entrada: $${fpZ(avg,avg)} ➡ Salida: $${fpZ(cp,cp)}) · P&L $${pnl.toFixed(2)} (${pnlP.toFixed(1)}%)`, 'sell');
             
-            watchItems.splice(payload.index, 1);
+            const freshIdx = watchItems.findIndex(item => item.symbol === w.symbol || (w.address && item.address === w.address));
+            if (freshIdx !== -1) watchItems.splice(freshIdx, 1);
           } else {
             return res.status(500).json({ error: 'La venta de cierre real falló. Verifica fondos o red.' });
           }
@@ -3549,7 +3560,8 @@ app.post('/api/action', adminAuth, async (req, res) => {
           w.orders.forEach(o => { if (o.status === 'done' || o.status === 'filled') { totalInv += o.amount; o.status = 'closed'; } });
           SIM.balance += totalInv; 
           addLog(`📉 Posición cerrada manualmente (virtual/sin órdenes): ${w.symbol}`, 'sell');
-          watchItems.splice(payload.index, 1);
+          const freshIdx = watchItems.findIndex(item => item.symbol === w.symbol || (w.address && item.address === w.address));
+          if (freshIdx !== -1) watchItems.splice(freshIdx, 1);
         }
       }
     } else if (action === 'resetSim') {
@@ -4095,50 +4107,87 @@ app.post('/api/swap-sol-usdc', adminAuth, async (req, res) => {
     const outputMint = side === 'buy' ? 'EPjFWdd5AufqSSqeM2qN1xzybapC8G4wEGGkZwyTDt1v' : 'So11111111111111111111111111111111111111112';
     const rawAmount = Math.floor(amount * (side === 'buy' ? 1e9 : 1e6));
 
-    const slippageBps = Math.round((appConfig.solanaSlippage || 2.5) * 100);
-    const quoteUrl = `https://api.jup.ag/swap/v1/quote?inputMint=${inputMint}&outputMint=${outputMint}&amount=${rawAmount}&slippageBps=${slippageBps}&prioritizationFeeLamports=auto`;
-    const qr = await fetchWithRetry(quoteUrl, { timeout: 8000 }, 3, 1500);
-    if (!qr.ok) return res.status(500).json({ error: 'Error obteniendo cotización' });
-    const quoteResponse = await qr.json();
+    let attempts = 0;
+    const maxAttempts = 3;
+    let currentSlippage = appConfig.solanaSlippage || 2.5;
+    let txid = null;
+    let lastError = null;
 
-    const swapRes = await fetchWithRetry('https://api.jup.ag/swap/v1/swap', {
-      method: 'POST',
-      headers: { 'Content-Type': 'application/json' },
-      body: JSON.stringify({
-        quoteResponse,
-        userPublicKey,
-        wrapAndUnwrapSol: true,
-        dynamicComputeUnitLimit: true,
-        prioritizationFeeLamports: 'auto'
-      })
-    });
-    const swapData = await swapRes.json();
-    if (!swapData.swapTransaction) return res.status(500).json({ error: 'Error ejecutando el swap' });
-
-    const tx = VersionedTransaction.deserialize(Buffer.from(swapData.swapTransaction, 'base64'));
-    
-    const rpcUrl = appConfig.solanaRpcUrl || process.env.SOLANA_RPC_URL || 'https://solana-rpc.publicnode.com';
-    const connection = new Connection(rpcUrl, 'confirmed');
-
-    if (!force) {
+    while (attempts < maxAttempts) {
       try {
-        const feeInfo = await connection.getFeeForMessage(tx.message, 'confirmed');
-        if (feeInfo && feeInfo.value !== null) {
-          const feeSol = feeInfo.value / 1e9;
-          const feeLimit = appConfig.solanaFeeLimit || 0.05;
-          if (feeSol > feeLimit) {
-            console.warn(`⚠️ ALERTA: Swap fee estimado (${feeSol.toFixed(6)} SOL) excede el umbral de ${feeLimit} SOL.`);
-            return res.status(409).json({ error: `La tarifa de gas es alta: ${feeSol.toFixed(6)} SOL. ¿Continuar?`, fee: feeSol });
+        attempts++;
+        const slippageBps = Math.round(currentSlippage * 100);
+        console.log(`[Swap SOL-USDC] Intento ${attempts}/${maxAttempts} con slippage de ${currentSlippage}% (${slippageBps} bps)...`);
+        
+        const quoteUrl = `https://api.jup.ag/swap/v1/quote?inputMint=${inputMint}&outputMint=${outputMint}&amount=${rawAmount}&slippageBps=${slippageBps}&prioritizationFeeLamports=auto`;
+        const qr = await fetchWithRetry(quoteUrl, { timeout: 8000 }, 3, 1500);
+        if (!qr.ok) {
+          const errText = await qr.text();
+          throw new Error(`Error obteniendo cotización: ${errText}`);
+        }
+        const quoteResponse = await qr.json();
+
+        const swapRes = await fetchWithRetry('https://api.jup.ag/swap/v1/swap', {
+          method: 'POST',
+          headers: { 'Content-Type': 'application/json' },
+          body: JSON.stringify({
+            quoteResponse,
+            userPublicKey,
+            wrapAndUnwrapSol: true,
+            dynamicComputeUnitLimit: true,
+            prioritizationFeeLamports: 'auto'
+          })
+        });
+        const swapData = await swapRes.json();
+        if (!swapData.swapTransaction) {
+          throw new Error('Error ejecutando el swap (API de Jupiter no retornó transacción)');
+        }
+
+        const tx = VersionedTransaction.deserialize(Buffer.from(swapData.swapTransaction, 'base64'));
+        
+        const rpcUrl = appConfig.solanaRpcUrl || process.env.SOLANA_RPC_URL || 'https://solana-rpc.publicnode.com';
+        const connection = new Connection(rpcUrl, 'confirmed');
+
+        if (!force && attempts === 1) {
+          try {
+            const feeInfo = await connection.getFeeForMessage(tx.message, 'confirmed');
+            if (feeInfo && feeInfo.value !== null) {
+              const feeSol = feeInfo.value / 1e9;
+              const feeLimit = appConfig.solanaFeeLimit || 0.05;
+              if (feeSol > feeLimit) {
+                console.warn(`⚠️ ALERTA: Swap fee estimado (${feeSol.toFixed(6)} SOL) excede el umbral de ${feeLimit} SOL.`);
+                return res.status(409).json({ error: `La tarifa de gas es alta: ${feeSol.toFixed(6)} SOL. ¿Continuar?`, fee: feeSol });
+              }
+            }
+          } catch (e) {
+            console.warn('⚠️ No se pudo estimar el fee del swap, omitiendo chequeo.', e);
           }
         }
-      } catch (e) {
-        console.warn('⚠️ No se pudo estimar el fee del swap, omitiendo chequeo.', e);
+
+        tx.sign([keypair]);
+        txid = await connection.sendRawTransaction(tx.serialize());
+        console.log(`[Swap SOL-USDC] Transacción enviada con éxito: ${txid}`);
+        break; // Éxito, salir de la estructura de repetición
+      } catch (err) {
+        lastError = err;
+        const errMsg = err.message || '';
+        const isSlippageError = errMsg.includes('0x1788') || errMsg.includes('6024') || errMsg.toLowerCase().includes('slippage');
+        
+        if (isSlippageError && attempts < maxAttempts) {
+          const prevSlippage = currentSlippage;
+          if (attempts === 1) {
+            currentSlippage = Math.max(5.0, currentSlippage * 2);
+          } else if (attempts === 2) {
+            currentSlippage = Math.max(10.0, currentSlippage * 2);
+          }
+          console.warn(`⚠️ Intento ${attempts} falló por slippage. Reintentando con un slippage mayor: ${prevSlippage}% ➡ ${currentSlippage}%`);
+          await new Promise(r => setTimeout(r, 1000));
+        } else {
+          throw err;
+        }
       }
     }
 
-    tx.sign([keypair]);
-    const txid = await connection.sendRawTransaction(tx.serialize());
-    
     res.json({ success: true, txid });
   } catch (e) {
     console.error('Error in swap:', e);
