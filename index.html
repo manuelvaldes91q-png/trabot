@@ -1376,7 +1376,7 @@ async function loadConfigData() {
     const res = await myFetch('/api/config');
     if (res.ok) {
       const data = await res.json();
-      currentConfig = data.config || {};
+      currentConfig = data.config || data || {};
       
       const setVal = (id, val) => {
         const el = document.getElementById(id);

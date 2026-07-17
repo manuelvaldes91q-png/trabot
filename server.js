@@ -2091,6 +2091,31 @@ async function executeSolanaTradeInternal(w, side, amountUSDT, price, pk, feePay
         rawAmount = bal;
       }
 
+      // Proactive Balance and Gas verification to prevent simulation and transaction failures
+      const nativeSolBalLamports = await connection.getBalance(new PublicKey(userPublicKey));
+      const solBal = nativeSolBalLamports / 1e9;
+      const MIN_GAS_RESERVE = 0.0045; // Gas & ATA Rent creation buffer
+
+      if (solBal < MIN_GAS_RESERVE) {
+        addLog(`🛑 Balance de gas SOL crítico en tu wallet: ${solBal.toFixed(5)} SOL. Requiere al menos ${MIN_GAS_RESERVE} SOL para transacciones de red. Abortando swap.`, 'warn');
+        return { ok: false };
+      }
+
+      if (side === 'BUY') {
+        if (isSOL) {
+          const totalSolNeeded = (rawAmount / 1e9) + MIN_GAS_RESERVE;
+          if (solBal < totalSolNeeded) {
+            addLog(`🛑 Balance de SOL insuficiente: tienes ${solBal.toFixed(5)} SOL, pero necesitas ${(rawAmount / 1e9).toFixed(5)} SOL + ${MIN_GAS_RESERVE} SOL de gas. Abortando swap.`, 'warn');
+            return { ok: false };
+          }
+        } else {
+          if (baseBalBefore < rawAmount) {
+            addLog(`🛑 Balance de USDC insuficiente: tienes ${(baseBalBefore / 1e6).toFixed(2)} USDC, requerido ${(rawAmount / 1e6).toFixed(2)} USDC. Abortando swap.`, 'warn');
+            return { ok: false };
+          }
+        }
+      }
+
       const baseSlip = appConfig.solanaSlippage || 2.5;
       const slipPercent = baseSlip * SLIPPAGE_ESCALATION_FACTORS[attempt];
       const slippageBps = Math.floor(slipPercent * 100);
