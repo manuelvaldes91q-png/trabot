@@ -4738,7 +4738,7 @@ async function executeSwap(side, force = false) {
 
   const balSol = parseFloat(document.getElementById('swapBalSol').textContent) || 0;
   const balUsdc = parseFloat(document.getElementById('swapBalUsdc').textContent) || 0;
-  const RESERVA_GAS_SOL = 0.01;
+  const RESERVA_GAS_SOL = 0.001;
 
   if (side === 'buy') {
     const disponible = Math.max(0, balSol - RESERVA_GAS_SOL);
