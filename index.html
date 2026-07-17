@@ -526,6 +526,14 @@ window.addEventListener('DOMContentLoaded', () => {
     
     <!-- ALERTAS -->
     <div class="alert-area" id="alertArea"></div>
+    
+    <!-- HISTORIAL DE TRADES -->
+    <div style="margin-top:20px; flex:1; display:flex; flex-direction:column;">
+      <div style="font-size:14px; font-weight:700; margin-bottom:10px; color:var(--g)">📜 Historial de Trades Cerrados</div>
+      <div id="tradeHistoryList" style="background:var(--bg2); border:1px solid var(--bdr); border-radius:8px; padding:10px; flex:1; overflow-y:auto; max-height: 400px;">
+        <div style="text-align:center; color:var(--t2); font-size:12px; padding:20px;">No hay operaciones registradas aún.</div>
+      </div>
+    </div>
   </div>
 
   <div id="view-orders" style="display:none; flex:1; overflow-y:auto; padding-right:10px; flex-direction:column;">
@@ -1664,6 +1672,41 @@ function updateDash(){
   const inv=watchItems.reduce((a,w)=>a+(w.orders.filter(o=>o.status==='filled').reduce((s,o)=>s+o.amount,0)),0);
   const dBalS = document.getElementById('dBalS');
   if (dBalS) dBalS.textContent=inv>0?`libre · pos $${inv.toFixed(0)}`:'disponible';
+
+  // Render trade history list
+  const historyList = document.getElementById('tradeHistoryList');
+  if (historyList) {
+    if (!SIM.trades || SIM.trades.length === 0) {
+      historyList.innerHTML = '<div style="text-align:center; color:var(--t2); font-size:12px; padding:20px;">No hay operaciones registradas aún.</div>';
+    } else {
+      // Reverse array to show newest first
+      const sortedTrades = [...SIM.trades].reverse();
+      let html = '';
+      sortedTrades.forEach((t, i) => {
+        const isWin = t.pnl >= 0;
+        const pnlColor = isWin ? 'var(--g)' : 'var(--r)';
+        const dateStr = t.at ? new Date(t.at).toLocaleString('es') : '-';
+        html += `
+          <div style="display:flex; justify-content:space-between; align-items:center; padding:10px; border-bottom:1px solid var(--bdr); font-size:12px;">
+            <div style="display:flex; flex-direction:column; gap:4px;">
+              <div>
+                <strong style="font-size:14px; color:var(--t)">${t.symbol}</strong>
+                <span style="color:var(--t2); margin-left:8px;">${dateStr}</span>
+              </div>
+              <div style="color:var(--t2);">
+                Entrada: $${t.avgEntry ? Number(t.avgEntry).toFixed(6) : '0'} ➡ Salida: $${t.exit ? Number(t.exit).toFixed(6) : '0'}
+              </div>
+            </div>
+            <div style="text-align:right;">
+              <div style="color:${pnlColor}; font-weight:700; font-size:14px;">${isWin ? '+' : ''}$${Number(t.pnl).toFixed(2)}</div>
+              <div style="color:${pnlColor}; font-size:11px;">${isWin ? '+' : ''}${Number(t.pnlPct).toFixed(2)}%</div>
+            </div>
+          </div>
+        `;
+      });
+      historyList.innerHTML = html;
+    }
+  }
 }
 
 // ══════════════════════════════════════════════════════════

@@ -525,24 +525,21 @@ loadState();
 
 let phoenixClient = null;
 async function initPhoenix() {
-  const rpcs = [
-    appConfig.solanaRpcUrl,
-    process.env.SOLANA_RPC_URL,
-    'https://api.mainnet-beta.solana.com',
-    'https://solana-mainnet.rpc.extrnode.com'
-  ].filter(Boolean);
+  const rpcs = [...getRpcEndpoints(), 'https://api.mainnet-beta.solana.com'];
   
   for (const rpc of rpcs) {
     try {
       const connection = new Connection(rpc);
       phoenixClient = await phoenix.Client.create(connection);
-      console.log(`Phoenix client initialized with ${phoenixClient.marketStates.size} markets using ${rpc}`);
-      return;
+      if (phoenixClient) {
+          console.log(`Phoenix client initialized using ${rpc}`);
+          return;
+      }
     } catch (e) {
-      // console.warn(`Phoenix init failed on ${rpc}: ${e.message}`);
+      // ignore
     }
   }
-  console.error("Phoenix init failed on all RPCs.");
+  console.log("Phoenix client disabled (RPC init failed)");
 }
 setTimeout(initPhoenix, 2000);
 
@@ -2283,6 +2280,7 @@ async function runCycle() {
           if (realRes && realRes.ok) {
             if (realRes.exactAmountUSDT !== undefined) {
                pnl = realRes.exactAmountUSDT - inv;
+               pnlP = (pnl / inv) * 100;
                addLog(`ℹ️ [Solana Real] PNL exacto ajustado post-swap: $${pnl.toFixed(2)}`, 'info');
             }
             if(mode!=='real') SIM.balance += inv + pnl;
@@ -2719,6 +2717,7 @@ async function runSolanaCycle() {
           if (realRes && realRes.ok) {
             if (realRes.exactAmountUSDT !== undefined) {
                pnl = realRes.exactAmountUSDT - inv;
+               pnlP = (pnl / inv) * 100;
                addLog(`ℹ️ [Solana Real] PNL exacto ajustado post-swap (SL): $${pnl.toFixed(2)}`, 'info');
             }
             if (solMode !== 'wallet' && solMode !== 'pool') {
@@ -2745,6 +2744,7 @@ async function runSolanaCycle() {
           if (realRes && realRes.ok) {
             if (realRes.exactAmountUSDT !== undefined) {
                pnl = realRes.exactAmountUSDT - inv;
+               pnlP = (pnl / inv) * 100;
                addLog(`ℹ️ [Solana Real] PNL exacto ajustado post-swap (TP1): $${pnl.toFixed(2)}`, 'info');
             }
             if (solMode !== 'wallet' && solMode !== 'pool') {
@@ -2772,6 +2772,7 @@ async function runSolanaCycle() {
           if (realRes && realRes.ok) {
             if (realRes.exactAmountUSDT !== undefined) {
                pnl = realRes.exactAmountUSDT - inv;
+               pnlP = (pnl / inv) * 100;
                addLog(`ℹ️ [Solana Real] PNL exacto ajustado post-swap (TP2): $${pnl.toFixed(2)}`, 'info');
             }
             if (solMode !== 'wallet' && solMode !== 'pool') {
@@ -3369,6 +3370,7 @@ app.post('/api/action', adminAuth, async (req, res) => {
           if (realRes && realRes.ok) {
             if (realRes.exactAmountUSDT !== undefined) {
               pnl = realRes.exactAmountUSDT - inv;
+              pnlP = (pnl / inv) * 100;
               addLog(`ℹ️ [Cierre Manual Real] PNL exacto ajustado post-swap: $${pnl.toFixed(2)}`, 'info');
             }
             if (w.network === 'solana') {
