@@ -2648,25 +2648,32 @@ async function runSolanaCycle() {
         if (cp <= o.price * 1.005) {
           o.status = 'filled'; 
           o.filledAt = Date.now(); 
-          o.filledPrice = cp;
-          
-          if (!w.filledBuys) w.filledBuys = [];
-          w.filledBuys.push({ price: cp, amount: o.amount, level: o.level });
           
           addLog(`⚡ [Solana Instant] Disparando swap compra para ${w.symbol} a $${fpZ(cp,cp)}...`, 'info');
           const realRes = await executeOrder(w, 'BUY', o.amount, cp);
           if (realRes && realRes.ok) {
+            const realFillPrice = realRes.exactPrice || cp;
+            o.filledPrice = realFillPrice;
+            if (!w.filledBuys) w.filledBuys = [];
+            w.filledBuys.push({ price: realFillPrice, amount: realRes.exactAmountUSDT || o.amount, level: o.level });
+
             o.retryCount = 0;
             if (solMode !== 'wallet' && solMode !== 'pool') {
-                SIM.balance -= o.amount;
-                SIM.solBalance += o.amount / cp;
+                SIM.balance -= (realRes.exactAmountUSDT || o.amount);
+                SIM.solBalance += (realRes.exactAmountUSDT || o.amount) / realFillPrice;
             }
             SIM.totalExec++;
+
+            if (!w.slPrice) {
+               w.slPrice = realFillPrice * (1 - (o.sl || 10)/100);
+               w.tp1Price = realFillPrice * (1 + (o.tp1 || 8)/100);
+               w.tp2Price = realFillPrice * (1 + (o.tp2 || 15)/100);
+            }
+            addLog(`✅ AUTO-COMPRA SOLANA COMPLETADA: ${w.symbol} #${o.level} · $${realRes.exactAmountUSDT || o.amount} a $${fpZ(realFillPrice, realFillPrice)}`, 'buy');
           } else {
             o.retryCount = (o.retryCount || 0) + 1;
             o.filledAt = null;
             o.filledPrice = null;
-            w.filledBuys.pop();
             if (o.retryCount >= 3) {
               o.status = 'paused';
               addLog(`🚨 Swap real en Solana para ${w.symbol} falló 3 veces. Orden pausada automáticamente para evitar spam. Por favor, revisa tus fondos, RPC o configuración de red y reactívala.`, 'warn');
@@ -2676,15 +2683,9 @@ async function runSolanaCycle() {
             }
             continue; 
           }
-          
-          if (!w.slPrice) {
-             w.slPrice = o.price * (1 - (o.sl || 10)/100);
-             w.tp1Price = o.price * (1 + (o.tp1 || 8)/100);
-             w.tp2Price = o.price * (1 + (o.tp2 || 15)/100);
-          }
-          addLog(`✅ AUTO-COMPRA SOLANA COMPLETADA: ${w.symbol} #${o.level} · $${o.amount}`, 'buy');
-          break; // sólo una por ciclo
+          break; // Stop processing more orders for this coin in this tick to allow state updates
         }
+          
       }
       
       // VERIFICAR SL / TP SOLANA
@@ -3439,12 +3440,12 @@ app.post('/api/action', adminAuth, async (req, res) => {
         w.orders.push(order);
         
         if (!w.filledBuys) w.filledBuys = [];
-        w.filledBuys.push({ price: cp, amount: amount, level: order.level });
+        w.filledBuys.push({ price: finalPrice, amount: realRes.exactAmountUSDT || amount, level: order.level });
         
         if (!w.slPrice) {
-          w.slPrice = cp * (1 - sl/100);
-          w.tp1Price = cp * (1 + tp1/100);
-          w.tp2Price = cp * (1 + tp2/100);
+          w.slPrice = finalPrice * (1 - sl/100);
+          w.tp1Price = finalPrice * (1 + tp1/100);
+          w.tp2Price = finalPrice * (1 + tp2/100);
         }
         
         if (w.network === 'solana') {
