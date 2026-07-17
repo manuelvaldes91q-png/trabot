@@ -1393,12 +1393,105 @@ async function checkMetadataMutability(tokenMint) {
   return result;
 }
 
+async function detectCamouflagedDevWallets(connection, creatorAddress, topHolders) {
+  const result = { camouflagedCount: 0, details: [] };
+  if (!creatorAddress) return result;
+
+  const targets = topHolders.filter(h => !h.isPool && h.owner && h.owner !== creatorAddress);
+  if (targets.length === 0) return result;
+
+  const promises = targets.slice(0, 5).map(async (holder) => {
+    try {
+      const holderPubkey = new PublicKey(holder.owner);
+      const sigs = await connection.getSignaturesForAddress(holderPubkey, { limit: 10 });
+      if (sigs.length === 0) return null;
+
+      let directFunded = false;
+      let interactedWithCreator = false;
+
+      // Check the oldest transaction for direct funding
+      const oldestSig = sigs[sigs.length - 1].signature;
+      const oldestTx = await connection.getParsedTransaction(oldestSig, { maxSupportedTransactionVersion: 0 });
+      let fundingSource = null;
+      if (oldestTx && oldestTx.transaction && oldestTx.transaction.message) {
+        const instructions = oldestTx.transaction.message.instructions || [];
+        for (const ix of instructions) {
+          if (ix.program === 'system' && ix.parsed && ix.parsed.type === 'transfer') {
+            const info = ix.parsed.info;
+            if (info.destination === holder.owner) {
+              fundingSource = info.source;
+              break;
+            }
+          }
+        }
+      }
+
+      if (fundingSource === creatorAddress) {
+        directFunded = true;
+      }
+
+      // Check other transactions
+      for (const sig of sigs) {
+        try {
+          const parsed = await connection.getParsedTransaction(sig.signature, { maxSupportedTransactionVersion: 0 });
+          if (!parsed || !parsed.transaction) continue;
+          
+          const accounts = parsed.transaction.message.accountKeys.map(k => {
+            if (typeof k === 'string') return k;
+            if (k && k.pubkey) return k.pubkey.toString();
+            return k.toString();
+          });
+          
+          if (accounts.includes(creatorAddress)) {
+            interactedWithCreator = true;
+          }
+
+          const instructions = parsed.transaction.message.instructions || [];
+          for (const ix of instructions) {
+            if (ix.program === 'system' && ix.parsed && ix.parsed.type === 'transfer') {
+              const info = ix.parsed.info;
+              if (info.source === creatorAddress && info.destination === holder.owner) {
+                directFunded = true;
+              }
+            }
+          }
+        } catch (txErr) {}
+      }
+
+      if (directFunded || interactedWithCreator) {
+        return {
+          wallet: holder.owner,
+          pct: holder.pct,
+          reason: directFunded 
+            ? 'Financiada por wallet dev' 
+            : 'Interacción con wallet dev'
+        };
+      }
+    } catch (err) {}
+    return null;
+  });
+
+  try {
+    const outputs = await Promise.all(promises);
+    for (const out of outputs) {
+      if (out) {
+        result.camouflagedCount++;
+        result.details.push(out);
+      }
+    }
+  } catch (e) {}
+
+  return result;
+}
+
 async function checkTokenSafety(tokenMint) {
   const result = { safe: true, warnings: [], details: {} };
   let rcMintAuthority = undefined;
   let rcFreezeAuthority = undefined;
   let hasRcTokenInfo = false;
   let rc = null;
+  let realHolders = [];
+  let simConnection = null;
 
   try {
     const rcRes = await fetchWithRetry(`https://api.rugcheck.xyz/v1/tokens/${tokenMint}/report`, { timeout: 8000 }, 2, 1000);
@@ -1441,6 +1534,16 @@ async function checkTokenSafety(tokenMint) {
     result.warnings.push(`RugCheck no disponible: ${e.message}`);
   }
 
+  const t22Info = await checkToken2022Extensions(tokenMint);
+  result.details.token2022 = t22Info;
+  if (t22Info.isToken2022) {
+    result.warnings.push(`⚠️ Programa Token-2022 detectado.`);
+    if (t22Info.warning) {
+      result.safe = false;
+      result.warnings.push(t22Info.warning);
+    }
+  }
+
   const rpcs = [
     appConfig.solanaRpcUrl || process.env.SOLANA_RPC_URL,
     'https://solana.drpc.org',
@@ -1458,7 +1561,8 @@ async function checkTokenSafety(tokenMint) {
     try {
       const displayRpc = rpc.split('?')[0];
       const connection = new Connection(rpc, 'confirmed');
-      mintInfo = await getMint(connection, new PublicKey(tokenMint));
+      const programId = t22Info.isToken2022 ? TOKEN_2022_PROGRAM_ID : undefined;
+      mintInfo = await getMint(connection, new PublicKey(tokenMint), 'confirmed', programId);
       authorityCheckSuccess = true;
       break;
     } catch (e) {
@@ -1503,7 +1607,7 @@ async function checkTokenSafety(tokenMint) {
     result.details.sellSimulation = { attempted: false, success: false, error: null };
     
     let largestAccounts = null;
-    let simConnection = null;
+    simConnection = null;
     
     for (const rpc of rpcs) {
       try {
@@ -1553,10 +1657,10 @@ async function checkTokenSafety(tokenMint) {
           const ownerAccInfo = ownerInfos[i];
           const isPool = ownerAccInfo ? ownerAccInfo.owner.toString() !== SYSTEM_PROGRAM : false;
           const pct = totalSupply ? (h.amount / totalSupply) * 100 : null;
-          return { address: h.address, amount: h.amount, pct: pct !== null ? +pct.toFixed(2) : null, isPool };
+          return { address: h.address, owner: h.owner.toString(), amount: h.amount, pct: pct !== null ? +pct.toFixed(2) : null, isPool };
         });
 
-        const realHolders = allHolders.filter(h => !h.isPool);
+        realHolders = allHolders.filter(h => !h.isPool);
         const poolsExcluded = allHolders.length - realHolders.length;
         const top10Pct = totalSupply ? +realHolders.reduce((a, h) => a + (h.pct || 0), 0).toFixed(2) : null;
 
@@ -1699,6 +1803,22 @@ async function checkTokenSafety(tokenMint) {
     }
   } catch (e) {
     result.warnings.push(`No se pudo revisar volumen sospechoso: ${e.message}`);
+  }
+
+  try {
+    const creatorAddress = result.details.creatorHistory?.creatorAddress || rc?.creator || rc?.token?.creators?.[0]?.address || null;
+    if (simConnection && creatorAddress && realHolders && realHolders.length > 0) {
+      const camouflageRes = await detectCamouflagedDevWallets(simConnection, creatorAddress, realHolders);
+      result.details.camouflagedDevWallets = camouflageRes;
+      if (camouflageRes.camouflagedCount > 0) {
+        result.safe = false;
+        camouflageRes.details.forEach(c => {
+          result.warnings.push(`⚠️ Wallet Dev Camuflada: La wallet ${c.wallet.slice(0, 8)}... (que posee ${c.pct}%) tiene nexos directos de financiamiento o transacciones con el creador.`);
+        });
+      }
+    }
+  } catch (camErr) {
+    console.error('Error en detección de wallet camuflada:', camErr.message);
   }
 
   return result;
