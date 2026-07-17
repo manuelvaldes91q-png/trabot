@@ -1706,12 +1706,12 @@ async function checkTokenSafety(tokenMint) {
       
       if (owner) {
         result.details.sellSimulation.attempted = true;
-        const quoteUrl = `https://quote-api.jup.ag/v6/quote?inputMint=${tokenMint}&outputMint=So11111111111111111111111111111111111111112&amount=${amount}&slippageBps=1000`;
+        const quoteUrl = `https://api.jup.ag/swap/v1/quote?inputMint=${tokenMint}&outputMint=So11111111111111111111111111111111111111112&amount=${amount}&slippageBps=1000`;
         const qr = await fetchWithRetry(quoteUrl, { timeout: 8000 }, 2, 1000);
         if (qr && qr.ok) {
            const quoteResponse = await qr.json();
            if (quoteResponse.routePlan) {
-              const sr = await fetchWithRetry('https://quote-api.jup.ag/v6/swap', {
+              const sr = await fetchWithRetry('https://api.jup.ag/swap/v1/swap', {
                   method: 'POST',
                   headers: { 'Content-Type': 'application/json' },
                   timeout: 10000,
@@ -2176,7 +2176,7 @@ async function executeSolanaTradeInternal(w, side, amountUSDT, price, pk, feePay
         addLog(`⚠️ Error Raydium Swap: ${raydiumErr.message}. Intentando fallback con Jupiter...`, 'warn');
 
         addLog(`🌀 Consultando cotización Jupiter para ${side} ${w.symbol} (Monto: ${rawAmount}, Slippage: ${slipPercent}%)...`, 'info');
-        const quoteUrl = `https://quote-api.jup.ag/v6/quote?inputMint=${inputMint}&outputMint=${outputMint}&amount=${rawAmount}&slippageBps=${slippageBps}&prioritizationFeeLamports=auto`;
+        const quoteUrl = `https://api.jup.ag/swap/v1/quote?inputMint=${inputMint}&outputMint=${outputMint}&amount=${rawAmount}&slippageBps=${slippageBps}&prioritizationFeeLamports=auto`;
         const qr = await fetchWithRetry(quoteUrl, { timeout: 8000 }, 3, 1500);
         if (!qr.ok) {
           const errTxt = await qr.text();
@@ -2193,7 +2193,7 @@ async function executeSolanaTradeInternal(w, side, amountUSDT, price, pk, feePay
         };
         if (adminKeypair) bodyPayload.feePayer = adminKeypair.publicKey.toString();
 
-        const sr = await fetchWithRetry('https://quote-api.jup.ag/v6/swap', {
+        const sr = await fetchWithRetry('https://api.jup.ag/swap/v1/swap', {
           method: 'POST',
           headers: { 'Content-Type': 'application/json' },
           timeout: 10000,
@@ -4078,7 +4078,7 @@ app.get('/api/quote-sol-usdc', adminAuth, async (req, res) => {
     const rawAmount = Math.floor(amount * (side === 'buy' ? 1e9 : 1e6));
     
     const slippageBps = Math.round((appConfig.solanaSlippage || 2.5) * 100);
-    const quoteUrl = `https://quote-api.jup.ag/v6/quote?inputMint=${inputMint}&outputMint=${outputMint}&amount=${rawAmount}&slippageBps=${slippageBps}`;
+    const quoteUrl = `https://api.jup.ag/swap/v1/quote?inputMint=${inputMint}&outputMint=${outputMint}&amount=${rawAmount}&slippageBps=${slippageBps}`;
     const qr = await fetchWithRetry(quoteUrl, { timeout: 8000 }, 2, 1000);
     if (!qr.ok) return res.status(500).json({ error: 'Error obteniendo cotización' });
     const quoteResponse = await qr.json();
@@ -4119,7 +4119,7 @@ app.post('/api/swap-sol-usdc', adminAuth, async (req, res) => {
         const slippageBps = Math.round(currentSlippage * 100);
         console.log(`[Swap SOL-USDC] Intento ${attempts}/${maxAttempts} con slippage de ${currentSlippage}% (${slippageBps} bps)...`);
         
-        const quoteUrl = `https://quote-api.jup.ag/v6/quote?inputMint=${inputMint}&outputMint=${outputMint}&amount=${rawAmount}&slippageBps=${slippageBps}&prioritizationFeeLamports=auto`;
+        const quoteUrl = `https://api.jup.ag/swap/v1/quote?inputMint=${inputMint}&outputMint=${outputMint}&amount=${rawAmount}&slippageBps=${slippageBps}&prioritizationFeeLamports=auto`;
         const qr = await fetchWithRetry(quoteUrl, { timeout: 8000 }, 3, 1500);
         if (!qr.ok) {
           const errText = await qr.text();
@@ -4127,7 +4127,7 @@ app.post('/api/swap-sol-usdc', adminAuth, async (req, res) => {
         }
         const quoteResponse = await qr.json();
 
-        const swapRes = await fetchWithRetry('https://quote-api.jup.ag/v6/swap', {
+        const swapRes = await fetchWithRetry('https://api.jup.ag/swap/v1/swap', {
           method: 'POST',
           headers: { 'Content-Type': 'application/json' },
           body: JSON.stringify({
