@@ -4735,6 +4735,25 @@ async function updateSwapQuote() {
 async function executeSwap(side, force = false) {
   const amount = document.getElementById('swapAmount').value;
   if (!amount || amount <= 0) return alert('Monto inválido');
+
+  const balSol = parseFloat(document.getElementById('swapBalSol').textContent) || 0;
+  const balUsdc = parseFloat(document.getElementById('swapBalUsdc').textContent) || 0;
+  const RESERVA_GAS_SOL = 0.01;
+
+  if (side === 'buy') {
+    const disponible = Math.max(0, balSol - RESERVA_GAS_SOL);
+    if (parseFloat(amount) > disponible) {
+      return alert(`❌ No tienes suficiente SOL. Balance: ${balSol.toFixed(4)} SOL (dejando ${RESERVA_GAS_SOL} SOL de colchón para el fee de red, disponible real: ${disponible.toFixed(4)} SOL).`);
+    }
+  } else {
+    if (parseFloat(amount) > balUsdc) {
+      return alert(`❌ No tienes suficiente USDC. Balance disponible: ${balUsdc.toFixed(2)} USDC.`);
+    }
+    if (balSol < RESERVA_GAS_SOL) {
+      return alert(`❌ Te falta SOL para pagar el fee de red de este swap. Balance SOL: ${balSol.toFixed(4)} (necesitas al menos ${RESERVA_GAS_SOL} SOL).`);
+    }
+  }
+
   document.getElementById('swapResult').textContent = 'Ejecutando swap...';
   try {
     const r = await myFetch('/api/swap-sol-usdc', {

@@ -4103,6 +4103,29 @@ app.post('/api/swap-sol-usdc', adminAuth, async (req, res) => {
     const keypair = Keypair.fromSecretKey(bs58.decode(pk));
     const userPublicKey = keypair.publicKey.toString();
 
+    const rpcUrlCheck = appConfig.solanaRpcUrl || process.env.SOLANA_RPC_URL || 'https://solana-rpc.publicnode.com';
+    const checkConnection = new Connection(rpcUrlCheck, 'confirmed');
+    const RESERVA_GAS_SOL = 0.01;
+    const SOL_MINT = 'So11111111111111111111111111111111111111112';
+    const USDC_MINT = 'EPjFWdd5AufqSSqeM2qN1xzybapC8G4wEGGkZwyTDt1v';
+
+    if (side === 'buy') {
+      const solBal = await getTokenUiBalance(checkConnection, userPublicKey, SOL_MINT);
+      const disponible = Math.max(0, solBal - RESERVA_GAS_SOL);
+      if (amount > disponible) {
+        return res.status(400).json({ error: `Balance insuficiente de SOL. Tienes ${solBal.toFixed(4)} SOL, disponible real (dejando ${RESERVA_GAS_SOL} de colchón para fees): ${disponible.toFixed(4)} SOL.` });
+      }
+    } else {
+      const usdcBal = await getTokenUiBalance(checkConnection, userPublicKey, USDC_MINT);
+      const solBal = await getTokenUiBalance(checkConnection, userPublicKey, SOL_MINT);
+      if (amount > usdcBal) {
+        return res.status(400).json({ error: `Balance insuficiente de USDC. Tienes ${usdcBal.toFixed(2)} USDC.` });
+      }
+      if (solBal < RESERVA_GAS_SOL) {
+        return res.status(400).json({ error: `Te falta SOL para pagar el fee de red. Balance SOL: ${solBal.toFixed(4)} (necesitas al menos ${RESERVA_GAS_SOL}).` });
+      }
+    }
+
     const inputMint = side === 'buy' ? 'So11111111111111111111111111111111111111112' : 'EPjFWdd5AufqSSqeM2qN1xzybapC8G4wEGGkZwyTDt1v';
     const outputMint = side === 'buy' ? 'EPjFWdd5AufqSSqeM2qN1xzybapC8G4wEGGkZwyTDt1v' : 'So11111111111111111111111111111111111111112';
     const rawAmount = Math.floor(amount * (side === 'buy' ? 1e9 : 1e6));
