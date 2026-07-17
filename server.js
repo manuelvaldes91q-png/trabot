@@ -171,7 +171,7 @@ async function fetchWithRetry(url, options = {}, retries = 3, initialDelay = 100
 // ============================================
 // STATE DEL BOT (SE MANTIENE EN LA MEMORIA RAM Y SE GUARDA EN ARCHIVO)
 // ============================================
-let SIM = { balance: 1000, solBalance: 10, initBal: 1000, trades: [], pnl: 0, wins: 0, losses: 0, totalExec: 0 };
+let SIM = { balance: 1000, solBalance: 10, usdtBalance: 1000, initBal: 1000, trades: [], pnl: 0, wins: 0, losses: 0, totalExec: 0 };
 let watchItems = [];
 let autopilotTradedMints = [];
 let autopilotRejectedMints = {}; // { mintAddress: timestampMs }
@@ -939,6 +939,7 @@ async function closeEmptyTokenAccounts(connection, ownerPk, feePayerPk = null) {
 let solanaWalletAddress = '';
 let solanaSolBalance = 0;
 let solanaUsdcBalance = 0;
+let solanaUsdtBalance = 0;
 let lastSolanaBalanceUpdate = 0;
 let solanaSwapLogs = [];
 
@@ -960,6 +961,7 @@ async function updateSolanaWalletInfo() {
     if (solMode !== 'wallet' && solMode !== 'pool') {
         solanaUsdcBalance = SIM.balance || 1000;
         solanaSolBalance = SIM.solBalance || 10;
+        solanaUsdtBalance = SIM.usdtBalance || 1000;
         return;
     }
     
@@ -972,6 +974,10 @@ async function updateSolanaWalletInfo() {
     const usdcMint = 'EPjFWdd5AufqSSqeM2qN1xzybapC8G4wEGGkZwyTDt1v';
     const usdcBalRaw = await getTokenBalance(connection, solanaWalletAddress, usdcMint);
     solanaUsdcBalance = usdcBalRaw / 1e6;
+
+    const usdtMint = 'Es9vMFrzaCERmJfrF4H2FYD4CoNkY11McCe8BenwNYB';
+    const usdtBalRaw = await getTokenBalance(connection, solanaWalletAddress, usdtMint);
+    solanaUsdtBalance = usdtBalRaw / 1e6;
     
     lastSolanaBalanceUpdate = now;
   } catch (err) {
@@ -4071,11 +4077,33 @@ app.get('/api/pool/backup', adminAuth, (req, res) => {
 
 app.get('/api/quote-sol-usdc', adminAuth, async (req, res) => {
   try {
-    const { amount, side } = req.query;
+    const { amount, side, input, output } = req.query;
     if (!amount || amount <= 0) return res.json({ expectedOutput: 0 });
-    const inputMint = side === 'buy' ? 'So11111111111111111111111111111111111111112' : 'EPjFWdd5AufqSSqeM2qN1xzybapC8G4wEGGkZwyTDt1v';
-    const outputMint = side === 'buy' ? 'EPjFWdd5AufqSSqeM2qN1xzybapC8G4wEGGkZwyTDt1v' : 'So11111111111111111111111111111111111111112';
-    const rawAmount = Math.floor(amount * (side === 'buy' ? 1e9 : 1e6));
+
+    let inputMint = 'So11111111111111111111111111111111111111112';
+    let outputMint = 'EPjFWdd5AufqSSqeM2qN1xzybapC8G4wEGGkZwyTDt1v';
+    let inputDecimals = 9;
+    let outputDecimals = 6;
+
+    if (input) {
+      if (input === 'SOL') { inputMint = 'So11111111111111111111111111111111111111112'; inputDecimals = 9; }
+      else if (input === 'USDC') { inputMint = 'EPjFWdd5AufqSSqeM2qN1xzybapC8G4wEGGkZwyTDt1v'; inputDecimals = 6; }
+      else if (input === 'USDT') { inputMint = 'Es9vMFrzaCERmJfrF4H2FYD4KCoNkY11McCe8BenwNYB'; inputDecimals = 6; }
+    } else {
+      inputMint = side === 'buy' ? 'So11111111111111111111111111111111111111112' : 'EPjFWdd5AufqSSqeM2qN1xzybapC8G4wEGGkZwyTDt1v';
+      inputDecimals = side === 'buy' ? 9 : 6;
+    }
+
+    if (output) {
+      if (output === 'SOL') { outputMint = 'So11111111111111111111111111111111111111112'; outputDecimals = 9; }
+      else if (output === 'USDC') { outputMint = 'EPjFWdd5AufqSSqeM2qN1xzybapC8G4wEGGkZwyTDt1v'; outputDecimals = 6; }
+      else if (output === 'USDT') { outputMint = 'Es9vMFrzaCERmJfrF4H2FYD4KCoNkY11McCe8BenwNYB'; outputDecimals = 6; }
+    } else {
+      outputMint = side === 'buy' ? 'EPjFWdd5AufqSSqeM2qN1xzybapC8G4wEGGkZwyTDt1v' : 'So11111111111111111111111111111111111111112';
+      outputDecimals = side === 'buy' ? 6 : 9;
+    }
+
+    const rawAmount = Math.floor(amount * (10 ** inputDecimals));
     
     const slippageBps = Math.round((appConfig.solanaSlippage || 2.5) * 100);
     const quoteUrl = `https://api.jup.ag/swap/v1/quote?inputMint=${inputMint}&outputMint=${outputMint}&amount=${rawAmount}&slippageBps=${slippageBps}`;
@@ -4083,7 +4111,7 @@ app.get('/api/quote-sol-usdc', adminAuth, async (req, res) => {
     if (!qr.ok) return res.status(500).json({ error: 'Error obteniendo cotización' });
     const quoteResponse = await qr.json();
     
-    const outAmount = quoteResponse.outAmount / (side === 'buy' ? 1e6 : 1e9);
+    const outAmount = quoteResponse.outAmount / (10 ** outputDecimals);
     res.json({ 
         expectedOutput: outAmount,
         priceImpactPct: quoteResponse.priceImpactPct,
@@ -4096,7 +4124,7 @@ app.get('/api/quote-sol-usdc', adminAuth, async (req, res) => {
 
 app.post('/api/swap-sol-usdc', adminAuth, async (req, res) => {
   try {
-    const { amount, side, force } = req.body;
+    const { amount, side, force, input, output } = req.body;
     const pk = poolConfig.privateKey || appConfig.solanaPrivateKey || process.env.SOLANA_PRIVATE_KEY;
     if (!pk) return res.status(400).json({ error: 'No se encontró la llave privada' });
     
@@ -4106,29 +4134,53 @@ app.post('/api/swap-sol-usdc', adminAuth, async (req, res) => {
     const rpcUrlCheck = appConfig.solanaRpcUrl || process.env.SOLANA_RPC_URL || 'https://solana-rpc.publicnode.com';
     const checkConnection = new Connection(rpcUrlCheck, 'confirmed');
     const RESERVA_GAS_SOL = 0.001;
-    const SOL_MINT = 'So11111111111111111111111111111111111111112';
-    const USDC_MINT = 'EPjFWdd5AufqSSqeM2qN1xzybapC8G4wEGGkZwyTDt1v';
 
-    if (side === 'buy') {
-      const solBal = await getTokenUiBalance(checkConnection, userPublicKey, SOL_MINT);
+    let inputMint = 'So11111111111111111111111111111111111111112';
+    let outputMint = 'EPjFWdd5AufqSSqeM2qN1xzybapC8G4wEGGkZwyTDt1v';
+    let inputDecimals = 9;
+    let outputDecimals = 6;
+    let inputSymbol = 'SOL';
+    let outputSymbol = 'USDC';
+
+    if (input && output) {
+      inputSymbol = input;
+      outputSymbol = output;
+      if (input === 'SOL') { inputMint = 'So11111111111111111111111111111111111111112'; inputDecimals = 9; }
+      else if (input === 'USDC') { inputMint = 'EPjFWdd5AufqSSqeM2qN1xzybapC8G4wEGGkZwyTDt1v'; inputDecimals = 6; }
+      else if (input === 'USDT') { inputMint = 'Es9vMFrzaCERmJfrF4H2FYD4KCoNkY11McCe8BenwNYB'; inputDecimals = 6; }
+
+      if (output === 'SOL') { outputMint = 'So11111111111111111111111111111111111111112'; outputDecimals = 9; }
+      else if (output === 'USDC') { outputMint = 'EPjFWdd5AufqSSqeM2qN1xzybapC8G4wEGGkZwyTDt1v'; outputDecimals = 6; }
+      else if (output === 'USDT') { outputMint = 'Es9vMFrzaCERmJfrF4H2FYD4KCoNkY11McCe8BenwNYB'; outputDecimals = 6; }
+    } else {
+      inputSymbol = side === 'buy' ? 'SOL' : 'USDC';
+      outputSymbol = side === 'buy' ? 'USDC' : 'SOL';
+      inputMint = side === 'buy' ? 'So11111111111111111111111111111111111111112' : 'EPjFWdd5AufqSSqeM2qN1xzybapC8G4wEGGkZwyTDt1v';
+      outputMint = side === 'buy' ? 'EPjFWdd5AufqSSqeM2qN1xzybapC8G4wEGGkZwyTDt1v' : 'So11111111111111111111111111111111111111112';
+      inputDecimals = side === 'buy' ? 9 : 6;
+      outputDecimals = side === 'buy' ? 6 : 9;
+    }
+
+    // Balance checks
+    const solBal = await getTokenUiBalance(checkConnection, userPublicKey, 'So11111111111111111111111111111111111111112');
+    
+    if (inputSymbol === 'SOL') {
       const disponible = Math.max(0, solBal - RESERVA_GAS_SOL);
       if (amount > disponible) {
         return res.status(400).json({ error: `Balance insuficiente de SOL. Tienes ${solBal.toFixed(4)} SOL, disponible real (dejando ${RESERVA_GAS_SOL} de colchón para fees): ${disponible.toFixed(4)} SOL.` });
       }
     } else {
-      const usdcBal = await getTokenUiBalance(checkConnection, userPublicKey, USDC_MINT);
-      const solBal = await getTokenUiBalance(checkConnection, userPublicKey, SOL_MINT);
-      if (amount > usdcBal) {
-        return res.status(400).json({ error: `Balance insuficiente de USDC. Tienes ${usdcBal.toFixed(2)} USDC.` });
+      const inputMintToCheck = inputSymbol === 'USDC' ? 'EPjFWdd5AufqSSqeM2qN1xzybapC8G4wEGGkZwyTDt1v' : 'Es9vMFrzaCERmJfrF4H2FYD4KCoNkY11McCe8BenwNYB';
+      const tokenBal = await getTokenUiBalance(checkConnection, userPublicKey, inputMintToCheck);
+      if (amount > tokenBal) {
+        return res.status(400).json({ error: `Balance insuficiente de ${inputSymbol}. Tienes ${tokenBal.toFixed(2)} ${inputSymbol}.` });
       }
       if (solBal < RESERVA_GAS_SOL) {
         return res.status(400).json({ error: `Te falta SOL para pagar el fee de red. Balance SOL: ${solBal.toFixed(4)} (necesitas al menos ${RESERVA_GAS_SOL}).` });
       }
     }
 
-    const inputMint = side === 'buy' ? 'So11111111111111111111111111111111111111112' : 'EPjFWdd5AufqSSqeM2qN1xzybapC8G4wEGGkZwyTDt1v';
-    const outputMint = side === 'buy' ? 'EPjFWdd5AufqSSqeM2qN1xzybapC8G4wEGGkZwyTDt1v' : 'So11111111111111111111111111111111111111112';
-    const rawAmount = Math.floor(amount * (side === 'buy' ? 1e9 : 1e6));
+    const rawAmount = Math.floor(amount * (10 ** inputDecimals));
 
     let attempts = 0;
     const maxAttempts = 3;
@@ -4140,7 +4192,7 @@ app.post('/api/swap-sol-usdc', adminAuth, async (req, res) => {
       try {
         attempts++;
         const slippageBps = Math.round(currentSlippage * 100);
-        console.log(`[Swap SOL-USDC] Intento ${attempts}/${maxAttempts} con slippage de ${currentSlippage}% (${slippageBps} bps)...`);
+        console.log(`[Swap ${inputSymbol}-${outputSymbol}] Intento ${attempts}/${maxAttempts} con slippage de ${currentSlippage}% (${slippageBps} bps)...`);
         
         const quoteUrl = `https://api.jup.ag/swap/v1/quote?inputMint=${inputMint}&outputMint=${outputMint}&amount=${rawAmount}&slippageBps=${slippageBps}&prioritizationFeeLamports=auto`;
         const qr = await fetchWithRetry(quoteUrl, { timeout: 8000 }, 3, 1500);
@@ -4189,7 +4241,7 @@ app.post('/api/swap-sol-usdc', adminAuth, async (req, res) => {
 
         tx.sign([keypair]);
         txid = await connection.sendRawTransaction(tx.serialize());
-        console.log(`[Swap SOL-USDC] Transacción enviada con éxito: ${txid}`);
+        console.log(`[Swap ${inputSymbol}-${outputSymbol}] Transacción enviada con éxito: ${txid}`);
         break; // Éxito, salir de la estructura de repetición
       } catch (err) {
         lastError = err;
@@ -4221,8 +4273,8 @@ app.post('/api/swap-sol-usdc', adminAuth, async (req, res) => {
 app.post('/api/transfer-funds', adminAuth, async (req, res) => {
   try {
     const { asset, destination, amount } = req.body;
-    if (!asset || !['SOL', 'USDC'].includes(asset)) {
-      return res.status(400).json({ error: 'Asset inválido (debe ser SOL o USDC)' });
+    if (!asset || !['SOL', 'USDC', 'USDT'].includes(asset)) {
+      return res.status(400).json({ error: 'Asset inválido (debe ser SOL, USDC o USDT)' });
     }
     if (!destination) {
       return res.status(400).json({ error: 'Dirección de destino es requerida' });
@@ -4249,6 +4301,7 @@ app.post('/api/transfer-funds', adminAuth, async (req, res) => {
 
     const SOL_MINT = 'So11111111111111111111111111111111111111112';
     const USDC_MINT = 'EPjFWdd5AufqSSqeM2qN1xzybapC8G4wEGGkZwyTDt1v';
+    const USDT_MINT = 'Es9vMFrzaCERmJfrF4H2FYD4KCoNkY11McCe8BenwNYB';
     const RESERVA_GAS_SOL = 0.001;
 
     const solBal = await getTokenUiBalance(connection, userPublicKey.toBase58(), SOL_MINT);
@@ -4274,18 +4327,19 @@ app.post('/api/transfer-funds', adminAuth, async (req, res) => {
       tx.feePayer = userPublicKey;
 
       txid = await sendAndConfirmTransaction(connection, tx, [keypair], { commitment: 'confirmed' });
-    } else if (asset === 'USDC') {
-      const usdcBal = await getTokenUiBalance(connection, userPublicKey.toBase58(), USDC_MINT);
-      if (amount > usdcBal) {
-        return res.status(400).json({ error: `Balance insuficiente de USDC. Tienes ${usdcBal.toFixed(2)} USDC, intentaste enviar ${amount.toFixed(2)} USDC.` });
+    } else if (asset === 'USDC' || asset === 'USDT') {
+      const targetMintStr = asset === 'USDC' ? USDC_MINT : USDT_MINT;
+      const tokenBal = await getTokenUiBalance(connection, userPublicKey.toBase58(), targetMintStr);
+      if (amount > tokenBal) {
+        return res.status(400).json({ error: `Balance insuficiente de ${asset}. Tienes ${tokenBal.toFixed(2)} ${asset}, intentaste enviar ${amount.toFixed(2)} ${asset}.` });
       }
       if (solBal < RESERVA_GAS_SOL) {
         return res.status(400).json({ error: `Balance SOL insuficiente para pagar el fee de red. Tienes ${solBal.toFixed(4)} SOL, necesitas al menos ${RESERVA_GAS_SOL} SOL.` });
       }
 
-      const usdcMint = new PublicKey(USDC_MINT);
-      const sourceTokenAccount = await getAssociatedTokenAddress(usdcMint, userPublicKey);
-      const destTokenAccount = await getAssociatedTokenAddress(usdcMint, destPublicKey);
+      const tokenMint = new PublicKey(targetMintStr);
+      const sourceTokenAccount = await getAssociatedTokenAddress(tokenMint, userPublicKey);
+      const destTokenAccount = await getAssociatedTokenAddress(tokenMint, destPublicKey);
 
       const tx = new Transaction();
       
@@ -4296,7 +4350,7 @@ app.post('/api/transfer-funds', adminAuth, async (req, res) => {
             userPublicKey,
             destTokenAccount,
             destPublicKey,
-            usdcMint
+            tokenMint
           )
         );
       }
@@ -4894,6 +4948,7 @@ app.get('/api/state', async (req, res) => {
       address: solanaWalletAddress,
       sol: solanaSolBalance,
       usdc: solanaUsdcBalance,
+      usdt: solanaUsdtBalance,
       baseToken: appConfig.solanaBaseToken || 'SOL'
     },
     solanaSwapLogs

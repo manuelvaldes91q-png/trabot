@@ -1606,16 +1606,21 @@ function updateSolanaVpsWalletUI(vpsSolWallet) {
   
   const solVal = vpsSolWallet && vpsSolWallet.sol !== undefined ? vpsSolWallet.sol : 0;
   const usdcVal = vpsSolWallet && vpsSolWallet.usdc !== undefined ? vpsSolWallet.usdc : 0;
+  const usdtVal = vpsSolWallet && vpsSolWallet.usdt !== undefined ? vpsSolWallet.usdt : 0;
   
   const swapBalSol = document.getElementById('swapBalSol');
   if (swapBalSol) swapBalSol.textContent = solVal.toFixed(4);
   const swapBalUsdc = document.getElementById('swapBalUsdc');
   if (swapBalUsdc) swapBalUsdc.textContent = usdcVal.toFixed(2);
+  const swapBalUsdt = document.getElementById('swapBalUsdt');
+  if (swapBalUsdt) swapBalUsdt.textContent = usdtVal.toFixed(2);
   
   const sendBalSol = document.getElementById('sendBalSol');
   if (sendBalSol) sendBalSol.textContent = solVal.toFixed(4);
   const sendBalUsdc = document.getElementById('sendBalUsdc');
   if (sendBalUsdc) sendBalUsdc.textContent = usdcVal.toFixed(2);
+  const sendBalUsdt = document.getElementById('sendBalUsdt');
+  if (sendBalUsdt) sendBalUsdt.textContent = usdtVal.toFixed(2);
   
   if (vpsSolWallet && vpsSolWallet.address) {
     el.style.display = 'inline-flex';
@@ -4684,33 +4689,57 @@ addLog('DIP HUNTER v6 listo — Escáner + Monitor 10s + Auto-Ejecución + Edito
     
     <!-- CARD 1: SWAP -->
     <div style="flex:1; min-width:300px; max-width:500px; background:var(--bg2); padding:30px; border-radius:12px; border:1px solid var(--bdr);">
-      <div style="font-size:18px; font-weight:700; margin-bottom:15px; color:var(--g)">🔄 Swap SOL ↔️ USDC</div>
-      <div style="display:flex; justify-content:space-between; margin-bottom:15px; font-size:13px; color:var(--t2); background:var(--bg); padding:10px; border-radius:6px; border:1px solid var(--bdr);">
-        <div>Balance SOL: <strong id="swapBalSol" style="color:var(--t);">0.0000</strong></div>
-        <div>Balance USDC: <strong id="swapBalUsdc" style="color:var(--t);">0.00</strong></div>
+      <div style="font-size:18px; font-weight:700; margin-bottom:15px; color:var(--g)">🔄 Swap de Tokens (Solana)</div>
+      
+      <div style="display:grid; grid-template-columns:1fr 1fr 1fr; gap:10px; margin-bottom:15px; font-size:12px; color:var(--t2); background:var(--bg); padding:10px; border-radius:6px; border:1px solid var(--bdr); text-align:center;">
+        <div>SOL: <strong id="swapBalSol" style="color:var(--t);">0.0000</strong></div>
+        <div>USDC: <strong id="swapBalUsdc" style="color:var(--t);">0.00</strong></div>
+        <div>USDT: <strong id="swapBalUsdt" style="color:var(--t);">0.00</strong></div>
       </div>
-      <div class="lbl" style="font-size:14px; margin-bottom:8px;">Monto (SOL para buy / USDC para sell)</div>
-      <input type="number" id="swapAmount" class="inp" placeholder="0.0" style="margin-bottom:10px; font-size:16px; padding:10px;" oninput="updateSwapQuote()">
+
+      <div style="display:flex; gap:10px; margin-bottom:15px;">
+        <div style="flex:1;">
+          <div class="lbl" style="font-size:13px; margin-bottom:4px;">De (Pagar)</div>
+          <select id="swapInputAsset" class="inp" style="font-size:14px; padding:8px; width:100%; background:var(--bg); color:var(--t); border:1px solid var(--bdr);" onchange="updateSwapQuote()">
+            <option value="SOL" selected>SOL</option>
+            <option value="USDC">USDC</option>
+            <option value="USDT">USDT</option>
+          </select>
+        </div>
+        <div style="flex:1;">
+          <div class="lbl" style="font-size:13px; margin-bottom:4px;">A (Recibir)</div>
+          <select id="swapOutputAsset" class="inp" style="font-size:14px; padding:8px; width:100%; background:var(--bg); color:var(--t); border:1px solid var(--bdr);" onchange="updateSwapQuote()">
+            <option value="SOL">SOL</option>
+            <option value="USDC" selected>USDC</option>
+            <option value="USDT">USDT</option>
+          </select>
+        </div>
+      </div>
+
+      <div class="lbl" style="font-size:13px; margin-bottom:6px;">Monto a Intercambiar</div>
+      <input type="number" id="swapAmount" class="inp" placeholder="0.0" step="any" style="margin-bottom:10px; font-size:16px; padding:10px; width:100%;" oninput="updateSwapQuote()">
+      
       <div id="swapQuoteResult" style="margin-bottom:15px; font-size:13px; color:var(--b); min-height: 20px;"></div>
-      <div style="display:flex; gap:10px;">
-        <button class="btn btn-g" style="flex:1; padding:12px; font-size:14px;" onclick="executeSwap('buy')">Swap SOL ➔ USDC</button>
-        <button class="btn btn-r" style="flex:1; padding:12px; font-size:14px;" onclick="executeSwap('sell')">Swap USDC ➔ SOL</button>
-      </div>
+      
+      <button class="btn btn-g" style="width:100%; padding:12px; font-size:14px;" onclick="executeSwap()">Intercambiar (Swap)</button>
       <div id="swapResult" style="margin-top:15px; font-size:12px; color:var(--t2);"></div>
     </div>
 
     <!-- CARD 2: TRANSFER -->
     <div style="flex:1; min-width:300px; max-width:500px; background:var(--bg2); padding:30px; border-radius:12px; border:1px solid var(--bdr);">
       <div style="font-size:18px; font-weight:700; margin-bottom:15px; color:var(--b)">💸 Transferir Fondos</div>
-      <div style="display:flex; justify-content:space-between; margin-bottom:15px; font-size:13px; color:var(--t2); background:var(--bg); padding:10px; border-radius:6px; border:1px solid var(--bdr);">
-        <div>Balance SOL: <strong id="sendBalSol" style="color:var(--t);">0.0000</strong></div>
-        <div>Balance USDC: <strong id="sendBalUsdc" style="color:var(--t);">0.00</strong></div>
+      
+      <div style="display:grid; grid-template-columns:1fr 1fr 1fr; gap:10px; margin-bottom:15px; font-size:12px; color:var(--t2); background:var(--bg); padding:10px; border-radius:6px; border:1px solid var(--bdr); text-align:center;">
+        <div>SOL: <strong id="sendBalSol" style="color:var(--t);">0.0000</strong></div>
+        <div>USDC: <strong id="sendBalUsdc" style="color:var(--t);">0.00</strong></div>
+        <div>USDT: <strong id="sendBalUsdt" style="color:var(--t);">0.00</strong></div>
       </div>
       
       <div class="lbl" style="font-size:14px; margin-bottom:8px;">Token a Enviar</div>
       <select id="sendAsset" class="inp" style="margin-bottom:15px; font-size:15px; padding:10px; width:100%; background:var(--bg); color:var(--t); border:1px solid var(--bdr);">
         <option value="SOL">SOL</option>
         <option value="USDC">USDC</option>
+        <option value="USDT">USDT</option>
       </select>
 
       <div class="lbl" style="font-size:14px; margin-bottom:8px;">Dirección de Destino (Solana Public Key)</div>
@@ -4731,9 +4760,16 @@ let quoteTimeout = null;
 async function updateSwapQuote() {
   const amount = parseFloat(document.getElementById('swapAmount').value);
   const quoteDiv = document.getElementById('swapQuoteResult');
+  const inputAsset = document.getElementById('swapInputAsset').value;
+  const outputAsset = document.getElementById('swapOutputAsset').value;
   
   if (isNaN(amount) || amount <= 0) {
     quoteDiv.textContent = '';
+    return;
+  }
+  
+  if (inputAsset === outputAsset) {
+    quoteDiv.innerHTML = '<span style="color:var(--r)">El token de origen y destino deben ser diferentes</span>';
     return;
   }
   
@@ -4742,46 +4778,52 @@ async function updateSwapQuote() {
   
   quoteTimeout = setTimeout(async () => {
     try {
-      // Intentamos estimar ambos (comprar USDC con SOL, y vender USDC por SOL)
-      // para mostrar la equivalencia aproximada
-      const r = await myFetch(`/api/quote-sol-usdc?amount=${amount}&side=buy`);
-      const r2 = await myFetch(`/api/quote-sol-usdc?amount=${amount}&side=sell`);
+      const r = await myFetch(`/api/quote-sol-usdc?amount=${amount}&input=${inputAsset}&output=${outputAsset}`);
       
       let text = '';
       if (r.ok) {
          const data = await r.json();
-         text += `<div style="margin-bottom:8px;">Recibirás aprox: <strong>${data.expectedOutput.toFixed(4)} USDC</strong> (Si vendes SOL)</div>`;
-         text += `<div style="font-size:11px; color:var(--t2); margin-bottom:5px;">• Impacto de precio: ${data.priceImpactPct}%</div>`;
+         text += `<div style="margin-bottom:8px;">Recibirás aprox: <strong>${data.expectedOutput.toFixed(outputAsset === 'SOL' ? 6 : 4)} ${outputAsset}</strong></div>`;
+         if (data.priceImpactPct) {
+           text += `<div style="font-size:11px; color:var(--t2); margin-bottom:5px;">• Impacto de precio: ${data.priceImpactPct}%</div>`;
+         }
          text += `<div style="font-size:11px; color:var(--t2);">• Red Solana (Aprox): ~0.00001 SOL + Priority fee</div>`;
+      } else {
+         text = 'No se pudo obtener estimación';
       }
-      if (r2.ok) {
-         const data2 = await r2.json();
-         text += `<div style="margin-top:8px; padding-top:8px; border-top:1px solid var(--bdr);">Recibirás aprox: <strong>${data2.expectedOutput.toFixed(6)} SOL</strong> (Si vendes USDC)</div>`;
-         text += `<div style="font-size:11px; color:var(--t2); margin-top:5px;">• Impacto de precio: ${data2.priceImpactPct}%</div>`;
-      }
-      quoteDiv.innerHTML = text || 'No se pudo obtener estimación';
+      quoteDiv.innerHTML = text;
     } catch (e) {
       quoteDiv.innerHTML = 'Error obteniendo estimación';
     }
   }, 600);
 }
 
-async function executeSwap(side, force = false) {
-  const amount = document.getElementById('swapAmount').value;
-  if (!amount || amount <= 0) return alert('Monto inválido');
+async function executeSwap(force = false) {
+  const amountInput = document.getElementById('swapAmount').value;
+  const amount = parseFloat(amountInput);
+  if (isNaN(amount) || amount <= 0) return alert('Monto inválido');
+
+  const inputAsset = document.getElementById('swapInputAsset').value;
+  const outputAsset = document.getElementById('swapOutputAsset').value;
+
+  if (inputAsset === outputAsset) {
+    return alert('El token de origen y destino deben ser diferentes');
+  }
 
   const balSol = parseFloat(document.getElementById('swapBalSol').textContent) || 0;
   const balUsdc = parseFloat(document.getElementById('swapBalUsdc').textContent) || 0;
+  const balUsdt = parseFloat(document.getElementById('swapBalUsdt').textContent) || 0;
   const RESERVA_GAS_SOL = 0.001;
 
-  if (side === 'buy') {
+  if (inputAsset === 'SOL') {
     const disponible = Math.max(0, balSol - RESERVA_GAS_SOL);
-    if (parseFloat(amount) > disponible) {
+    if (amount > disponible) {
       return alert(`❌ No tienes suficiente SOL. Balance: ${balSol.toFixed(4)} SOL (dejando ${RESERVA_GAS_SOL} SOL de colchón para el fee de red, disponible real: ${disponible.toFixed(4)} SOL).`);
     }
   } else {
-    if (parseFloat(amount) > balUsdc) {
-      return alert(`❌ No tienes suficiente USDC. Balance disponible: ${balUsdc.toFixed(2)} USDC.`);
+    const balanceToCheck = inputAsset === 'USDC' ? balUsdc : balUsdt;
+    if (amount > balanceToCheck) {
+      return alert(`❌ No tienes suficiente ${inputAsset}. Balance disponible: ${balanceToCheck.toFixed(2)} ${inputAsset}.`);
     }
     if (balSol < RESERVA_GAS_SOL) {
       return alert(`❌ Te falta SOL para pagar el fee de red de este swap. Balance SOL: ${balSol.toFixed(4)} (necesitas al menos ${RESERVA_GAS_SOL} SOL).`);
@@ -4792,13 +4834,13 @@ async function executeSwap(side, force = false) {
   try {
     const r = await myFetch('/api/swap-sol-usdc', {
       method: 'POST',
-      body: JSON.stringify({ amount: parseFloat(amount), side, force })
+      body: JSON.stringify({ amount, input: inputAsset, output: outputAsset, force })
     });
     
     if (r.status === 409) {
         const d = await r.json();
         if (confirm(d.error)) {
-            return executeSwap(side, true);
+            return executeSwap(true);
         } else {
             document.getElementById('swapResult').textContent = '❌ Abortado por el usuario';
             return;
@@ -4808,6 +4850,8 @@ async function executeSwap(side, force = false) {
     const d = await r.json();
     if (d.success) {
       document.getElementById('swapResult').textContent = '✅ Swap exitoso! TxID: ' + d.txid;
+      document.getElementById('swapAmount').value = '';
+      document.getElementById('swapQuoteResult').textContent = '';
     } else {
       document.getElementById('swapResult').textContent = '❌ Error: ' + d.error;
     }
@@ -4828,6 +4872,7 @@ async function executeTransfer() {
 
   const balSol = parseFloat(document.getElementById('sendBalSol').textContent) || 0;
   const balUsdc = parseFloat(document.getElementById('sendBalUsdc').textContent) || 0;
+  const balUsdt = parseFloat(document.getElementById('sendBalUsdt').textContent) || 0;
   const RESERVA_GAS_SOL = 0.001;
 
   if (asset === 'SOL') {
@@ -4836,8 +4881,9 @@ async function executeTransfer() {
       return alert(`❌ No tienes suficiente SOL. Balance: ${balSol.toFixed(4)} SOL (dejando ${RESERVA_GAS_SOL} SOL de colchón para el fee de red, disponible real: ${disponible.toFixed(4)} SOL).`);
     }
   } else {
-    if (amount > balUsdc) {
-      return alert(`❌ No tienes suficiente USDC. Balance disponible: ${balUsdc.toFixed(2)} USDC.`);
+    const balanceToCheck = asset === 'USDC' ? balUsdc : balUsdt;
+    if (amount > balanceToCheck) {
+      return alert(`❌ No tienes suficiente ${asset}. Balance disponible: ${balanceToCheck.toFixed(2)} ${asset}.`);
     }
     if (balSol < RESERVA_GAS_SOL) {
       return alert(`❌ Te falta SOL para pagar el fee de red. Balance SOL: ${balSol.toFixed(4)} (necesitas al menos ${RESERVA_GAS_SOL} SOL).`);
