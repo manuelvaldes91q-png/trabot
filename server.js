@@ -3486,6 +3486,19 @@ app.post('/api/action', adminAuth, async (req, res) => {
       const w = watchItems.find(item => item.symbol === payload.symbol || (payload.address && item.address === payload.address)) || watchItems[payload.wi];
       if (w && w.orders[payload.oi]) {
         Object.assign(w.orders[payload.oi], payload.updates);
+        const o = w.orders[payload.oi];
+        if (o.level === 1) {
+          const basePrice = o.filledPrice || o.price;
+          if (o.sl !== undefined) {
+            w.slPrice = basePrice * (1 - o.sl / 100);
+          }
+          if (o.tp1 !== undefined) {
+            w.tp1Price = basePrice * (1 + o.tp1 / 100);
+          }
+          if (o.tp2 !== undefined) {
+            w.tp2Price = basePrice * (1 + o.tp2 / 100);
+          }
+        }
       }
     } else if (action === 'manualFill') {
       const w = watchItems.find(item => item.symbol === payload.symbol || (payload.address && item.address === payload.address)) || watchItems[payload.wi];
