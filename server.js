@@ -4218,6 +4218,115 @@ app.post('/api/swap-sol-usdc', adminAuth, async (req, res) => {
   }
 });
 
+app.post('/api/transfer-funds', adminAuth, async (req, res) => {
+  try {
+    const { asset, destination, amount } = req.body;
+    if (!asset || !['SOL', 'USDC'].includes(asset)) {
+      return res.status(400).json({ error: 'Asset inválido (debe ser SOL o USDC)' });
+    }
+    if (!destination) {
+      return res.status(400).json({ error: 'Dirección de destino es requerida' });
+    }
+    if (!amount || amount <= 0) {
+      return res.status(400).json({ error: 'Monto debe ser mayor a 0' });
+    }
+
+    let destPublicKey;
+    try {
+      destPublicKey = new PublicKey(destination);
+    } catch (err) {
+      return res.status(400).json({ error: 'Dirección de destino con formato inválido' });
+    }
+
+    const pk = poolConfig.privateKey || appConfig.solanaPrivateKey || process.env.SOLANA_PRIVATE_KEY;
+    if (!pk) return res.status(400).json({ error: 'No se encontró la llave privada de la wallet' });
+    
+    const keypair = Keypair.fromSecretKey(bs58.decode(pk));
+    const userPublicKey = keypair.publicKey;
+
+    const rpcUrl = appConfig.solanaRpcUrl || process.env.SOLANA_RPC_URL || 'https://solana-rpc.publicnode.com';
+    const connection = new Connection(rpcUrl, 'confirmed');
+
+    const SOL_MINT = 'So11111111111111111111111111111111111111112';
+    const USDC_MINT = 'EPjFWdd5AufqSSqeM2qN1xzybapC8G4wEGGkZwyTDt1v';
+    const RESERVA_GAS_SOL = 0.001;
+
+    const solBal = await getTokenUiBalance(connection, userPublicKey.toBase58(), SOL_MINT);
+
+    let txid = null;
+
+    if (asset === 'SOL') {
+      const disponible = Math.max(0, solBal - RESERVA_GAS_SOL);
+      if (amount > disponible) {
+        return res.status(400).json({ error: `Balance insuficiente de SOL. Tienes ${solBal.toFixed(4)} SOL, disponible real dejando colchón para comisiones: ${disponible.toFixed(4)} SOL.` });
+      }
+
+      const tx = new Transaction().add(
+        SystemProgram.transfer({
+          fromPubkey: userPublicKey,
+          toPubkey: destPublicKey,
+          lamports: Math.floor(amount * 1e9),
+        })
+      );
+
+      const latestBlockHash = await connection.getLatestBlockhash();
+      tx.recentBlockhash = latestBlockHash.blockhash;
+      tx.feePayer = userPublicKey;
+
+      txid = await sendAndConfirmTransaction(connection, tx, [keypair], { commitment: 'confirmed' });
+    } else if (asset === 'USDC') {
+      const usdcBal = await getTokenUiBalance(connection, userPublicKey.toBase58(), USDC_MINT);
+      if (amount > usdcBal) {
+        return res.status(400).json({ error: `Balance insuficiente de USDC. Tienes ${usdcBal.toFixed(2)} USDC, intentaste enviar ${amount.toFixed(2)} USDC.` });
+      }
+      if (solBal < RESERVA_GAS_SOL) {
+        return res.status(400).json({ error: `Balance SOL insuficiente para pagar el fee de red. Tienes ${solBal.toFixed(4)} SOL, necesitas al menos ${RESERVA_GAS_SOL} SOL.` });
+      }
+
+      const usdcMint = new PublicKey(USDC_MINT);
+      const sourceTokenAccount = await getAssociatedTokenAddress(usdcMint, userPublicKey);
+      const destTokenAccount = await getAssociatedTokenAddress(usdcMint, destPublicKey);
+
+      const tx = new Transaction();
+      
+      const destAccountInfo = await connection.getAccountInfo(destTokenAccount);
+      if (!destAccountInfo) {
+        tx.add(
+          createAssociatedTokenAccountInstruction(
+            userPublicKey,
+            destTokenAccount,
+            destPublicKey,
+            usdcMint
+          )
+        );
+      }
+
+      const decimals = 6;
+      const rawAmount = Math.floor(amount * (10 ** decimals));
+
+      tx.add(
+        createTransferInstruction(
+          sourceTokenAccount,
+          destTokenAccount,
+          userPublicKey,
+          rawAmount
+        )
+      );
+
+      const latestBlockHash = await connection.getLatestBlockhash();
+      tx.recentBlockhash = latestBlockHash.blockhash;
+      tx.feePayer = userPublicKey;
+
+      txid = await sendAndConfirmTransaction(connection, tx, [keypair], { commitment: 'confirmed' });
+    }
+
+    res.json({ success: true, txid });
+  } catch (e) {
+    console.error('Error in transfer:', e);
+    res.status(500).json({ error: e.message });
+  }
+});
+
 app.post('/api/pool/rotate_wallet', adminAuth, async (req, res) => {
   try {
     const rpcUrl = appConfig.solanaRpcUrl || process.env.SOLANA_RPC_URL || 'https://solana-rpc.publicnode.com';

@@ -1612,6 +1612,11 @@ function updateSolanaVpsWalletUI(vpsSolWallet) {
   const swapBalUsdc = document.getElementById('swapBalUsdc');
   if (swapBalUsdc) swapBalUsdc.textContent = usdcVal.toFixed(2);
   
+  const sendBalSol = document.getElementById('sendBalSol');
+  if (sendBalSol) sendBalSol.textContent = solVal.toFixed(4);
+  const sendBalUsdc = document.getElementById('sendBalUsdc');
+  if (sendBalUsdc) sendBalUsdc.textContent = usdcVal.toFixed(2);
+  
   if (vpsSolWallet && vpsSolWallet.address) {
     el.style.display = 'inline-flex';
     const shortAddr = vpsSolWallet.address.slice(0, 4) + '...' + vpsSolWallet.address.slice(-4);
@@ -4675,20 +4680,49 @@ addLog('DIP HUNTER v6 listo — Escáner + Monitor 10s + Auto-Ejecución + Edito
 </div>
 
 <div class="tab-panel" id="tab-swap" style="display:none; padding:40px 20px; height:100%; overflow-y:auto;">
-  <div style="width:100%; max-width:500px; background:var(--bg2); padding:30px; border-radius:12px; border:1px solid var(--bdr); margin: 0 auto;">
-    <div style="font-size:18px; font-weight:700; margin-bottom:15px; color:var(--g)">🔄 Swap SOL ↔️ USDC</div>
-    <div style="display:flex; justify-content:space-between; margin-bottom:15px; font-size:13px; color:var(--t2); background:var(--bg); padding:10px; border-radius:6px; border:1px solid var(--bdr);">
-      <div>Balance SOL: <strong id="swapBalSol" style="color:var(--t);">0.0000</strong></div>
-      <div>Balance USDC: <strong id="swapBalUsdc" style="color:var(--t);">0.00</strong></div>
+  <div style="display:flex; flex-wrap:wrap; gap:20px; justify-content:center; max-width:1100px; margin:0 auto;">
+    
+    <!-- CARD 1: SWAP -->
+    <div style="flex:1; min-width:300px; max-width:500px; background:var(--bg2); padding:30px; border-radius:12px; border:1px solid var(--bdr);">
+      <div style="font-size:18px; font-weight:700; margin-bottom:15px; color:var(--g)">🔄 Swap SOL ↔️ USDC</div>
+      <div style="display:flex; justify-content:space-between; margin-bottom:15px; font-size:13px; color:var(--t2); background:var(--bg); padding:10px; border-radius:6px; border:1px solid var(--bdr);">
+        <div>Balance SOL: <strong id="swapBalSol" style="color:var(--t);">0.0000</strong></div>
+        <div>Balance USDC: <strong id="swapBalUsdc" style="color:var(--t);">0.00</strong></div>
+      </div>
+      <div class="lbl" style="font-size:14px; margin-bottom:8px;">Monto (SOL para buy / USDC para sell)</div>
+      <input type="number" id="swapAmount" class="inp" placeholder="0.0" style="margin-bottom:10px; font-size:16px; padding:10px;" oninput="updateSwapQuote()">
+      <div id="swapQuoteResult" style="margin-bottom:15px; font-size:13px; color:var(--b); min-height: 20px;"></div>
+      <div style="display:flex; gap:10px;">
+        <button class="btn btn-g" style="flex:1; padding:12px; font-size:14px;" onclick="executeSwap('buy')">Swap SOL ➔ USDC</button>
+        <button class="btn btn-r" style="flex:1; padding:12px; font-size:14px;" onclick="executeSwap('sell')">Swap USDC ➔ SOL</button>
+      </div>
+      <div id="swapResult" style="margin-top:15px; font-size:12px; color:var(--t2);"></div>
     </div>
-    <div class="lbl" style="font-size:14px; margin-bottom:8px;">Monto (SOL para buy / USDC para sell)</div>
-    <input type="number" id="swapAmount" class="inp" placeholder="0.0" style="margin-bottom:10px; font-size:16px; padding:10px;" oninput="updateSwapQuote()">
-    <div id="swapQuoteResult" style="margin-bottom:15px; font-size:13px; color:var(--b); min-height: 20px;"></div>
-    <div style="display:flex; gap:10px;">
-      <button class="btn btn-g" style="flex:1; padding:12px; font-size:14px;" onclick="executeSwap('buy')">Swap SOL ➔ USDC</button>
-      <button class="btn btn-r" style="flex:1; padding:12px; font-size:14px;" onclick="executeSwap('sell')">Swap USDC ➔ SOL</button>
+
+    <!-- CARD 2: TRANSFER -->
+    <div style="flex:1; min-width:300px; max-width:500px; background:var(--bg2); padding:30px; border-radius:12px; border:1px solid var(--bdr);">
+      <div style="font-size:18px; font-weight:700; margin-bottom:15px; color:var(--b)">💸 Transferir Fondos</div>
+      <div style="display:flex; justify-content:space-between; margin-bottom:15px; font-size:13px; color:var(--t2); background:var(--bg); padding:10px; border-radius:6px; border:1px solid var(--bdr);">
+        <div>Balance SOL: <strong id="sendBalSol" style="color:var(--t);">0.0000</strong></div>
+        <div>Balance USDC: <strong id="sendBalUsdc" style="color:var(--t);">0.00</strong></div>
+      </div>
+      
+      <div class="lbl" style="font-size:14px; margin-bottom:8px;">Token a Enviar</div>
+      <select id="sendAsset" class="inp" style="margin-bottom:15px; font-size:15px; padding:10px; width:100%; background:var(--bg); color:var(--t); border:1px solid var(--bdr);">
+        <option value="SOL">SOL</option>
+        <option value="USDC">USDC</option>
+      </select>
+
+      <div class="lbl" style="font-size:14px; margin-bottom:8px;">Dirección de Destino (Solana Public Key)</div>
+      <input type="text" id="sendDest" class="inp" placeholder="Dirección Solana (p. ej., Hx2...)" style="margin-bottom:15px; font-size:15px; padding:10px; width:100%;">
+
+      <div class="lbl" style="font-size:14px; margin-bottom:8px;">Monto</div>
+      <input type="number" id="sendAmount" class="inp" placeholder="0.0" step="any" style="margin-bottom:15px; font-size:15px; padding:10px; width:100%;">
+
+      <button class="btn btn-b" style="width:100%; padding:12px; font-size:14px;" onclick="executeTransfer()">Enviar Fondos</button>
+      <div id="sendResult" style="margin-top:15px; font-size:12px; color:var(--t2);"></div>
     </div>
-    <div id="swapResult" style="margin-top:15px; font-size:12px; color:var(--t2);"></div>
+
   </div>
 </div>
 
@@ -4779,6 +4813,58 @@ async function executeSwap(side, force = false) {
     }
   } catch (e) {
     document.getElementById('swapResult').textContent = '❌ Error: ' + e.message;
+  }
+}
+
+async function executeTransfer() {
+  const asset = document.getElementById('sendAsset').value;
+  const destination = document.getElementById('sendDest').value.trim();
+  const amountInput = document.getElementById('sendAmount').value;
+  const amount = parseFloat(amountInput);
+  const resultDiv = document.getElementById('sendResult');
+
+  if (!destination) return alert('Por favor ingresa una dirección de destino');
+  if (isNaN(amount) || amount <= 0) return alert('Monto inválido');
+
+  const balSol = parseFloat(document.getElementById('sendBalSol').textContent) || 0;
+  const balUsdc = parseFloat(document.getElementById('sendBalUsdc').textContent) || 0;
+  const RESERVA_GAS_SOL = 0.001;
+
+  if (asset === 'SOL') {
+    const disponible = Math.max(0, balSol - RESERVA_GAS_SOL);
+    if (amount > disponible) {
+      return alert(`❌ No tienes suficiente SOL. Balance: ${balSol.toFixed(4)} SOL (dejando ${RESERVA_GAS_SOL} SOL de colchón para el fee de red, disponible real: ${disponible.toFixed(4)} SOL).`);
+    }
+  } else {
+    if (amount > balUsdc) {
+      return alert(`❌ No tienes suficiente USDC. Balance disponible: ${balUsdc.toFixed(2)} USDC.`);
+    }
+    if (balSol < RESERVA_GAS_SOL) {
+      return alert(`❌ Te falta SOL para pagar el fee de red. Balance SOL: ${balSol.toFixed(4)} (necesitas al menos ${RESERVA_GAS_SOL} SOL).`);
+    }
+  }
+
+  if (!confirm(`¿Estás seguro de que deseas enviar ${amount} ${asset} a la dirección:\n${destination}?`)) {
+    return;
+  }
+
+  resultDiv.textContent = 'Enviando fondos...';
+  try {
+    const r = await myFetch('/api/transfer-funds', {
+      method: 'POST',
+      body: JSON.stringify({ asset, destination, amount })
+    });
+
+    const d = await r.json();
+    if (d.success) {
+      resultDiv.innerHTML = `<span style="color:var(--g)">✅ Envío exitoso! TxID: <a href="https://solscan.io/tx/${d.txid}" target="_blank" style="color:var(--b); text-decoration:underline;">${d.txid.slice(0, 8)}...${d.txid.slice(-8)}</a></span>`;
+      document.getElementById('sendDest').value = '';
+      document.getElementById('sendAmount').value = '';
+    } else {
+      resultDiv.textContent = '❌ Error: ' + d.error;
+    }
+  } catch (e) {
+    resultDiv.textContent = '❌ Error: ' + e.message;
   }
 }
 </script>
