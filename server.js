@@ -2034,7 +2034,7 @@ async function executeSolanaTradeInternal(w, side, amountUSDT, price, pk, feePay
         addLog(`⚠️ Error Raydium Swap: ${raydiumErr.message}. Intentando fallback con Jupiter...`, 'warn');
 
         addLog(`🌀 Consultando cotización Jupiter para ${side} ${w.symbol} (Monto: ${rawAmount}, Slippage: ${slipPercent}%)...`, 'info');
-        const quoteUrl = `https://api.jup.ag/swap/v1/quote?inputMint=${inputMint}&outputMint=${outputMint}&amount=${rawAmount}&slippageBps=${slippageBps}`;
+        const quoteUrl = `https://api.jup.ag/swap/v1/quote?inputMint=${inputMint}&outputMint=${outputMint}&amount=${rawAmount}&slippageBps=${slippageBps}&prioritizationFeeLamports=auto`;
         const qr = await fetchWithRetry(quoteUrl, { timeout: 8000 }, 3, 1500);
         if (!qr.ok) {
           const errTxt = await qr.text();
@@ -2047,7 +2047,7 @@ async function executeSolanaTradeInternal(w, side, amountUSDT, price, pk, feePay
           userPublicKey,
           wrapAndUnwrapSol: true,
           dynamicComputeUnitLimit: true,
-          prioritizationFeeLamports: escalatedPriorityFee
+          prioritizationFeeLamports: 'auto'
         };
         if (adminKeypair) bodyPayload.feePayer = adminKeypair.publicKey.toString();
 
@@ -2069,6 +2069,22 @@ async function executeSolanaTradeInternal(w, side, amountUSDT, price, pk, feePay
 
       const swapTransactionBuf = Buffer.from(swapTransaction, 'base64');
       const transaction = VersionedTransaction.deserialize(swapTransactionBuf);
+
+      try {
+        const feeLimitSOL = appConfig.solanaFeeLimit || 0.05;
+        const feeInfo = await connection.getFeeForMessage(transaction.message, 'confirmed');
+        if (feeInfo && feeInfo.value !== null) {
+           const feeSOL = feeInfo.value / 1e9;
+           if (feeSOL > feeLimitSOL) {
+              addLog(`⚠️ ALERTA: Swap fee estimado (${feeSOL.toFixed(6)} SOL) excede el umbral de ${feeLimitSOL} SOL. Abortando operación de Copiloto/Swap.`, 'warn');
+              return false;
+           } else {
+              addLog(`✅ Fee estimado aceptable: ${feeSOL.toFixed(6)} SOL.`, 'info');
+           }
+        }
+      } catch (feeCheckErr) {
+        addLog(`⚠️ No se pudo estimar el fee del swap, pero se continuará... (${feeCheckErr.message})`, 'info');
+      }
 
       const requiredSigners = transaction.message.staticAccountKeys
         .slice(0, transaction.message.header.numRequiredSignatures)
@@ -3894,6 +3910,69 @@ app.get('/api/pool/backup', adminAuth, (req, res) => {
   }
 });
 
+app.post('/api/swap-sol-usdc', adminAuth, async (req, res) => {
+  try {
+    const { amount, side, force } = req.body;
+    const pk = poolConfig.privateKey || appConfig.solanaPrivateKey || process.env.SOLANA_PRIVATE_KEY;
+    if (!pk) return res.status(400).json({ error: 'No se encontró la llave privada' });
+    
+    const keypair = Keypair.fromSecretKey(bs58.decode(pk));
+    const userPublicKey = keypair.publicKey.toString();
+
+    const inputMint = side === 'buy' ? 'So11111111111111111111111111111111111111112' : 'EPjFWdd5AufqSSqeM2qN1xzybapC8G4wEGGkZwyTDt1v';
+    const outputMint = side === 'buy' ? 'EPjFWdd5AufqSSqeM2qN1xzybapC8G4wEGGkZwyTDt1v' : 'So11111111111111111111111111111111111111112';
+    const rawAmount = Math.floor(amount * (side === 'buy' ? 1e9 : 1e6));
+
+    const quoteUrl = `https://api.jup.ag/swap/v1/quote?inputMint=${inputMint}&outputMint=${outputMint}&amount=${rawAmount}&slippageBps=50&prioritizationFeeLamports=auto`;
+    const qr = await fetchWithRetry(quoteUrl, { timeout: 8000 }, 3, 1500);
+    if (!qr.ok) return res.status(500).json({ error: 'Error obteniendo cotización' });
+    const quoteResponse = await qr.json();
+
+    const swapRes = await fetchWithRetry('https://api.jup.ag/swap/v1/swap', {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({
+        quoteResponse,
+        userPublicKey,
+        wrapAndUnwrapSol: true,
+        dynamicComputeUnitLimit: true,
+        prioritizationFeeLamports: 'auto'
+      })
+    });
+    const swapData = await swapRes.json();
+    if (!swapData.swapTransaction) return res.status(500).json({ error: 'Error ejecutando el swap' });
+
+    const tx = VersionedTransaction.deserialize(Buffer.from(swapData.swapTransaction, 'base64'));
+    
+    const rpcUrl = appConfig.solanaRpcUrl || process.env.SOLANA_RPC_URL || 'https://solana-rpc.publicnode.com';
+    const connection = new Connection(rpcUrl, 'confirmed');
+
+    if (!force) {
+      try {
+        const feeInfo = await connection.getFeeForMessage(tx.message, 'confirmed');
+        if (feeInfo && feeInfo.value !== null) {
+          const feeSol = feeInfo.value / 1e9;
+          const feeLimit = appConfig.solanaFeeLimit || 0.05;
+          if (feeSol > feeLimit) {
+            console.warn(`⚠️ ALERTA: Swap fee estimado (${feeSol.toFixed(6)} SOL) excede el umbral de ${feeLimit} SOL.`);
+            return res.status(409).json({ error: `La tarifa de gas es alta: ${feeSol.toFixed(6)} SOL. ¿Continuar?`, fee: feeSol });
+          }
+        }
+      } catch (e) {
+        console.warn('⚠️ No se pudo estimar el fee del swap, omitiendo chequeo.', e);
+      }
+    }
+
+    tx.sign([keypair]);
+    const txid = await connection.sendRawTransaction(tx.serialize());
+    
+    res.json({ success: true, txid });
+  } catch (e) {
+    console.error('Error in swap:', e);
+    res.status(500).json({ error: e.message });
+  }
+});
+
 app.post('/api/pool/rotate_wallet', adminAuth, async (req, res) => {
   try {
     const rpcUrl = appConfig.solanaRpcUrl || process.env.SOLANA_RPC_URL || 'https://solana-rpc.publicnode.com';
@@ -4887,7 +4966,7 @@ app.post('/api/config', adminAuth, (req, res) => {
     mexcApiKey, mexcApiSecret, tgBotToken, tgChatId, appPassword, 
     solanaPrivateKey, solanaRpcUrl, solanaBaseToken, solanaSlippage, 
     solanaPriorityFee, dextoolsApiKey, twitterBearerToken, solanaTrackerApiKey, 
-    safetyCheckEnabled, useJitoBundle,
+    safetyCheckEnabled, useJitoBundle, solanaFeeLimit,
     autoTraderEnabled, autoTraderAmount, autoTraderMin24HVol, 
     autoTraderMinMarketCap, autoTraderMaxMarketCap, autoTraderMinAge, 
     autoTraderMaxAge, autoTraderMinLiq, autoTraderStopLoss, 
@@ -4910,6 +4989,7 @@ app.post('/api/config', adminAuth, (req, res) => {
   if(solanaBaseToken !== undefined) appConfig.solanaBaseToken = solanaBaseToken;
   if(solanaSlippage !== undefined) appConfig.solanaSlippage = parseFloat(solanaSlippage) || 2.5;
   if(solanaPriorityFee !== undefined) appConfig.solanaPriorityFee = solanaPriorityFee;
+  if(solanaFeeLimit !== undefined) appConfig.solanaFeeLimit = parseFloat(solanaFeeLimit) || 0.05;
   if(dextoolsApiKey !== undefined) appConfig.dextoolsApiKey = dextoolsApiKey;
   if(twitterBearerToken !== undefined) appConfig.twitterBearerToken = twitterBearerToken;
   if(solanaTrackerApiKey !== undefined) appConfig.solanaTrackerApiKey = solanaTrackerApiKey;
