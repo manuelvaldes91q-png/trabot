@@ -2413,7 +2413,7 @@ async function runCycle() {
       if (filled.length && w.slPrice) {
         const inv = filled.reduce((a, o) => a + o.amount, 0);
         const avg = filled.reduce((a, o) => a + o.price * o.amount, 0) / inv;
-        const pnlP = (cp - avg) / avg * 100;
+        let pnlP = (cp - avg) / avg * 100;
         
         if (cp <= w.slPrice) {
           // Si cae a SL, tenemos que cancelar la orden Limit TP si existe antes de vender el SL! (solo MEXC)
@@ -2853,7 +2853,7 @@ async function runSolanaCycle() {
       if (filled.length && w.slPrice) {
         const inv = filled.reduce((a, o) => a + o.amount, 0);
         const avg = filled.reduce((a, o) => a + o.price * o.amount, 0) / inv;
-        const pnlP = (cp - avg) / avg * 100;
+        let pnlP = (cp - avg) / avg * 100;
         
         if (cp <= w.slPrice) {
           addLog(`⚡ [Solana Instant] Disparando Stop Loss para ${w.symbol} a $${fpZ(cp,cp)}...`, 'info');
@@ -3507,7 +3507,7 @@ app.post('/api/action', adminAuth, async (req, res) => {
           }
           if (!cp || cp <= 0) cp = w.currentPrice || avg;
           
-          const pnlP = ((cp - avg) / avg * 100);
+          let pnlP = ((cp - avg) / avg * 100);
           let pnl = inv * pnlP / 100;
           
           addLog(`⚡ [Cierre Manual] Disparando cierre de posición para ${w.symbol}...`, 'info');
@@ -4065,7 +4065,8 @@ app.get('/api/quote-sol-usdc', adminAuth, async (req, res) => {
     const outputMint = side === 'buy' ? 'EPjFWdd5AufqSSqeM2qN1xzybapC8G4wEGGkZwyTDt1v' : 'So11111111111111111111111111111111111111112';
     const rawAmount = Math.floor(amount * (side === 'buy' ? 1e9 : 1e6));
     
-    const quoteUrl = `https://api.jup.ag/swap/v1/quote?inputMint=${inputMint}&outputMint=${outputMint}&amount=${rawAmount}&slippageBps=50`;
+    const slippageBps = Math.round((appConfig.solanaSlippage || 2.5) * 100);
+    const quoteUrl = `https://api.jup.ag/swap/v1/quote?inputMint=${inputMint}&outputMint=${outputMint}&amount=${rawAmount}&slippageBps=${slippageBps}`;
     const qr = await fetchWithRetry(quoteUrl, { timeout: 8000 }, 2, 1000);
     if (!qr.ok) return res.status(500).json({ error: 'Error obteniendo cotización' });
     const quoteResponse = await qr.json();
@@ -4094,7 +4095,8 @@ app.post('/api/swap-sol-usdc', adminAuth, async (req, res) => {
     const outputMint = side === 'buy' ? 'EPjFWdd5AufqSSqeM2qN1xzybapC8G4wEGGkZwyTDt1v' : 'So11111111111111111111111111111111111111112';
     const rawAmount = Math.floor(amount * (side === 'buy' ? 1e9 : 1e6));
 
-    const quoteUrl = `https://api.jup.ag/swap/v1/quote?inputMint=${inputMint}&outputMint=${outputMint}&amount=${rawAmount}&slippageBps=50&prioritizationFeeLamports=auto`;
+    const slippageBps = Math.round((appConfig.solanaSlippage || 2.5) * 100);
+    const quoteUrl = `https://api.jup.ag/swap/v1/quote?inputMint=${inputMint}&outputMint=${outputMint}&amount=${rawAmount}&slippageBps=${slippageBps}&prioritizationFeeLamports=auto`;
     const qr = await fetchWithRetry(quoteUrl, { timeout: 8000 }, 3, 1500);
     if (!qr.ok) return res.status(500).json({ error: 'Error obteniendo cotización' });
     const quoteResponse = await qr.json();
