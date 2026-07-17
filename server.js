@@ -3910,6 +3910,30 @@ app.get('/api/pool/backup', adminAuth, (req, res) => {
   }
 });
 
+app.get('/api/quote-sol-usdc', adminAuth, async (req, res) => {
+  try {
+    const { amount, side } = req.query;
+    if (!amount || amount <= 0) return res.json({ expectedOutput: 0 });
+    const inputMint = side === 'buy' ? 'So11111111111111111111111111111111111111112' : 'EPjFWdd5AufqSSqeM2qN1xzybapC8G4wEGGkZwyTDt1v';
+    const outputMint = side === 'buy' ? 'EPjFWdd5AufqSSqeM2qN1xzybapC8G4wEGGkZwyTDt1v' : 'So11111111111111111111111111111111111111112';
+    const rawAmount = Math.floor(amount * (side === 'buy' ? 1e9 : 1e6));
+    
+    const quoteUrl = `https://api.jup.ag/swap/v1/quote?inputMint=${inputMint}&outputMint=${outputMint}&amount=${rawAmount}&slippageBps=50`;
+    const qr = await fetchWithRetry(quoteUrl, { timeout: 8000 }, 2, 1000);
+    if (!qr.ok) return res.status(500).json({ error: 'Error obteniendo cotización' });
+    const quoteResponse = await qr.json();
+    
+    const outAmount = quoteResponse.outAmount / (side === 'buy' ? 1e6 : 1e9);
+    res.json({ 
+        expectedOutput: outAmount,
+        priceImpactPct: quoteResponse.priceImpactPct,
+        routePlan: quoteResponse.routePlan
+    });
+  } catch (err) {
+    res.status(500).json({ error: err.message });
+  }
+});
+
 app.post('/api/swap-sol-usdc', adminAuth, async (req, res) => {
   try {
     const { amount, side, force } = req.body;

@@ -1596,6 +1596,14 @@ function updateSolanaVpsWalletUI(vpsSolWallet) {
   const el = document.getElementById('solanaVpsWallet');
   if (!el) return;
   
+  const solVal = vpsSolWallet && vpsSolWallet.sol !== undefined ? vpsSolWallet.sol : 0;
+  const usdcVal = vpsSolWallet && vpsSolWallet.usdc !== undefined ? vpsSolWallet.usdc : 0;
+  
+  const swapBalSol = document.getElementById('swapBalSol');
+  if (swapBalSol) swapBalSol.textContent = solVal.toFixed(4);
+  const swapBalUsdc = document.getElementById('swapBalUsdc');
+  if (swapBalUsdc) swapBalUsdc.textContent = usdcVal.toFixed(2);
+  
   if (vpsSolWallet && vpsSolWallet.address) {
     el.style.display = 'inline-flex';
     const shortAddr = vpsSolWallet.address.slice(0, 4) + '...' + vpsSolWallet.address.slice(-4);
@@ -1607,8 +1615,6 @@ function updateSolanaVpsWalletUI(vpsSolWallet) {
     
     let balText = '';
     const base = (vpsSolWallet.baseToken || 'SOL').toUpperCase();
-    const solVal = vpsSolWallet.sol !== undefined ? vpsSolWallet.sol : 0;
-    const usdcVal = vpsSolWallet.usdc !== undefined ? vpsSolWallet.usdc : 0;
     const solModeEl = document.getElementById('solModeSel');
     const solMode = solModeEl ? solModeEl.value : 'simulated';
     const solModeLabel = solMode === 'wallet' ? '🟣 Wallet' : (solMode === 'pool' ? '👥 Pool' : '💰 Simulado');
@@ -4575,22 +4581,64 @@ addLog('DIP HUNTER v6 listo — Escáner + Monitor 10s + Auto-Ejecución + Edito
   </div>
 </div>
 
-</div>
-
-<div class="tab-panel" id="tab-swap" style="display:none; padding:20px; height:100%; overflow-y:auto;">
-  <div style="max-width:400px; background:var(--bg2); padding:20px; border-radius:8px; border:1px solid var(--bdr);">
-    <div style="font-size:16px; font-weight:700; margin-bottom:15px; color:var(--g)">🔄 Swap SOL ↔️ USDC</div>
-    <div class="lbl">Monto (SOL para buy / USDC para sell)</div>
-    <input type="number" id="swapAmount" class="inp" placeholder="0.0" style="margin-bottom:10px;">
+<div class="tab-panel" id="tab-swap" style="display:none; padding:40px 20px; height:100%; overflow-y:auto;">
+  <div style="width:100%; max-width:500px; background:var(--bg2); padding:30px; border-radius:12px; border:1px solid var(--bdr); margin: 0 auto;">
+    <div style="font-size:18px; font-weight:700; margin-bottom:15px; color:var(--g)">🔄 Swap SOL ↔️ USDC</div>
+    <div style="display:flex; justify-content:space-between; margin-bottom:15px; font-size:13px; color:var(--t2); background:var(--bg); padding:10px; border-radius:6px; border:1px solid var(--bdr);">
+      <div>Balance SOL: <strong id="swapBalSol" style="color:var(--t);">0.0000</strong></div>
+      <div>Balance USDC: <strong id="swapBalUsdc" style="color:var(--t);">0.00</strong></div>
+    </div>
+    <div class="lbl" style="font-size:14px; margin-bottom:8px;">Monto (SOL para buy / USDC para sell)</div>
+    <input type="number" id="swapAmount" class="inp" placeholder="0.0" style="margin-bottom:10px; font-size:16px; padding:10px;" oninput="updateSwapQuote()">
+    <div id="swapQuoteResult" style="margin-bottom:15px; font-size:13px; color:var(--b); min-height: 20px;"></div>
     <div style="display:flex; gap:10px;">
-      <button class="btn btn-g" onclick="executeSwap('buy')">Swap SOL ➔ USDC</button>
-      <button class="btn btn-r" onclick="executeSwap('sell')">Swap USDC ➔ SOL</button>
+      <button class="btn btn-g" style="flex:1; padding:12px; font-size:14px;" onclick="executeSwap('buy')">Swap SOL ➔ USDC</button>
+      <button class="btn btn-r" style="flex:1; padding:12px; font-size:14px;" onclick="executeSwap('sell')">Swap USDC ➔ SOL</button>
     </div>
     <div id="swapResult" style="margin-top:15px; font-size:12px; color:var(--t2);"></div>
   </div>
 </div>
 
 <script>
+let quoteTimeout = null;
+async function updateSwapQuote() {
+  const amount = parseFloat(document.getElementById('swapAmount').value);
+  const quoteDiv = document.getElementById('swapQuoteResult');
+  
+  if (isNaN(amount) || amount <= 0) {
+    quoteDiv.textContent = '';
+    return;
+  }
+  
+  if (quoteTimeout) clearTimeout(quoteTimeout);
+  quoteDiv.textContent = 'Calculando estimado...';
+  
+  quoteTimeout = setTimeout(async () => {
+    try {
+      // Intentamos estimar ambos (comprar USDC con SOL, y vender USDC por SOL)
+      // para mostrar la equivalencia aproximada
+      const r = await myFetch(`/api/quote-sol-usdc?amount=${amount}&side=buy`);
+      const r2 = await myFetch(`/api/quote-sol-usdc?amount=${amount}&side=sell`);
+      
+      let text = '';
+      if (r.ok) {
+         const data = await r.json();
+         text += `<div style="margin-bottom:8px;">Recibirás aprox: <strong>${data.expectedOutput.toFixed(4)} USDC</strong> (Si vendes SOL)</div>`;
+         text += `<div style="font-size:11px; color:var(--t2); margin-bottom:5px;">• Impacto de precio: ${data.priceImpactPct}%</div>`;
+         text += `<div style="font-size:11px; color:var(--t2);">• Red Solana (Aprox): ~0.00001 SOL + Priority fee</div>`;
+      }
+      if (r2.ok) {
+         const data2 = await r2.json();
+         text += `<div style="margin-top:8px; padding-top:8px; border-top:1px solid var(--bdr);">Recibirás aprox: <strong>${data2.expectedOutput.toFixed(6)} SOL</strong> (Si vendes USDC)</div>`;
+         text += `<div style="font-size:11px; color:var(--t2); margin-top:5px;">• Impacto de precio: ${data2.priceImpactPct}%</div>`;
+      }
+      quoteDiv.innerHTML = text || 'No se pudo obtener estimación';
+    } catch (e) {
+      quoteDiv.innerHTML = 'Error obteniendo estimación';
+    }
+  }, 600);
+}
+
 async function executeSwap(side, force = false) {
   const amount = document.getElementById('swapAmount').value;
   if (!amount || amount <= 0) return alert('Monto inválido');
