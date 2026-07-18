@@ -2393,6 +2393,13 @@ async function runCycle() {
         
         // Verifica si el precio bajó hasta el punto de entrada
         if (cp <= o.price * 1.005) {
+          // Protección Anti-Rugpull
+          if (cp < o.price * 0.60) {
+            o.status = 'cancelled';
+            o.note = 'Cancelada por protección Anti-Rugpull';
+            addLog(`🚨 Orden de compra CANCELADA para ${w.symbol} - Precio cayó de golpe a $${fpZ(cp,cp)}`, 'warn');
+            continue;
+          }
           o.status = 'filled'; 
           o.filledAt = Date.now(); 
           o.filledPrice = cp;
@@ -2825,6 +2832,13 @@ async function runSolanaCycle() {
         
         // Verifica si el precio bajó hasta el punto de entrada
         if (cp <= o.price * 1.005) {
+          // Protección Anti-Rugpull
+          if (cp < o.price * 0.60) {
+            o.status = 'cancelled';
+            o.note = 'Cancelada por protección Anti-Rugpull';
+            addLog(`🚨 Orden de compra SOLANA CANCELADA para ${w.symbol} - Precio cayó de golpe a $${fpZ(cp,cp)}`, 'warn');
+            continue;
+          }
           o.status = 'filled'; 
           o.filledAt = Date.now(); 
           
