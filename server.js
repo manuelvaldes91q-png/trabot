@@ -459,20 +459,7 @@ const STATE_FILE = path.join(__dirname, 'bot-state.json');
 function saveState() {
   try {
     const tmp = STATE_FILE + '.tmp';
-    const safePoolConfig = { ...poolConfig };
-    delete safePoolConfig.privateKey;
-
-    const safeAppConfig = { ...appConfig };
-    delete safeAppConfig.solanaPrivateKey;
-    delete safeAppConfig.mexcApiSecret;
-    delete safeAppConfig.appPassword;
-    delete safeAppConfig.tgBotToken;
-    delete safeAppConfig.dextoolsApiKey;
-    delete safeAppConfig.twitterBearerToken;
-    delete safeAppConfig.solanaTrackerApiKey;
-    delete safeAppConfig.solanaRpcUrl;
-
-    fs.writeFileSync(tmp, JSON.stringify({ SIM, watchItems, autopilotTradedMints, autopilotRejectedMints, logs, monitorOn, monitorInterval, mode, solMode, appConfig: safeAppConfig, poolConfig: safePoolConfig }));
+    fs.writeFileSync(tmp, JSON.stringify({ SIM, watchItems, autopilotTradedMints, autopilotRejectedMints, logs, monitorOn, monitorInterval, mode, solMode, appConfig, poolConfig }));
     fs.renameSync(tmp, STATE_FILE);
   } catch (e) {
     console.error("Error guardando estado:", e);
@@ -495,7 +482,7 @@ function loadState() {
       if (data.appConfig) appConfig = {...appConfig, ...data.appConfig};
       if (data.poolConfig) {
         const envPrivateKey = process.env.POOL_PRIVATE_KEY || process.env.SOLANA_PRIVATE_KEY || '';
-        poolConfig = { ...data.poolConfig, privateKey: envPrivateKey };
+        poolConfig = { ...data.poolConfig, privateKey: envPrivateKey || data.poolConfig.privateKey || '' };
       }
       
       watchItems.forEach(w => {
