@@ -459,7 +459,20 @@ const STATE_FILE = path.join(__dirname, 'bot-state.json');
 function saveState() {
   try {
     const tmp = STATE_FILE + '.tmp';
-    fs.writeFileSync(tmp, JSON.stringify({ SIM, watchItems, autopilotTradedMints, autopilotRejectedMints, logs, monitorOn, monitorInterval, mode, solMode, appConfig, poolConfig }));
+    const safePoolConfig = { ...poolConfig };
+    delete safePoolConfig.privateKey;
+
+    const safeAppConfig = { ...appConfig };
+    delete safeAppConfig.solanaPrivateKey;
+    delete safeAppConfig.mexcApiSecret;
+    delete safeAppConfig.appPassword;
+    delete safeAppConfig.tgBotToken;
+    delete safeAppConfig.dextoolsApiKey;
+    delete safeAppConfig.twitterBearerToken;
+    delete safeAppConfig.solanaTrackerApiKey;
+    delete safeAppConfig.solanaRpcUrl;
+
+    fs.writeFileSync(tmp, JSON.stringify({ SIM, watchItems, autopilotTradedMints, autopilotRejectedMints, logs, monitorOn, monitorInterval, mode, solMode, appConfig: safeAppConfig, poolConfig: safePoolConfig }));
     fs.renameSync(tmp, STATE_FILE);
   } catch (e) {
     console.error("Error guardando estado:", e);
@@ -482,7 +495,7 @@ function loadState() {
       if (data.appConfig) appConfig = {...appConfig, ...data.appConfig};
       if (data.poolConfig) {
         const envPrivateKey = process.env.POOL_PRIVATE_KEY || process.env.SOLANA_PRIVATE_KEY || '';
-        poolConfig = { ...data.poolConfig, privateKey: envPrivateKey || data.poolConfig.privateKey || '' };
+        poolConfig = { ...data.poolConfig, privateKey: envPrivateKey };
       }
       
       watchItems.forEach(w => {
@@ -2252,8 +2265,16 @@ async function executeSolanaTradeInternal(w, side, amountUSDT, price, pk, feePay
         signature: txid
       }, 'confirmed');
 
-      const baseBalAfter = await getTokenBalance(connection, userPublicKey, baseMint);
-      const tokenBalAfter = await getTokenUiBalance(connection, userPublicKey, targetMint);
+      let baseBalAfter = baseBalBefore;
+      let tokenBalAfter = tokenBalBefore;
+      for (let i = 0; i < 5; i++) {
+        baseBalAfter = await getTokenBalance(connection, userPublicKey, baseMint);
+        tokenBalAfter = await getTokenUiBalance(connection, userPublicKey, targetMint);
+        if (Math.abs(baseBalAfter - baseBalBefore) > 0 || Math.abs(tokenBalAfter - tokenBalBefore) > 0) {
+           break;
+        }
+        await new Promise(r => setTimeout(r, 1500));
+      }
       
       const diffRaw = side === 'SELL' ? (baseBalAfter - baseBalBefore) : (baseBalBefore - baseBalAfter);
       let exactAmountUSDT = 0;
@@ -2416,7 +2437,7 @@ async function runCycle() {
           let pnl = inv * pnlP / 100;
           const realRes = await executeOrder(w, 'SELL', inv + pnl, cp);
           if (realRes && realRes.ok) {
-            if (realRes.exactAmountUSDT !== undefined) {
+            if (realRes.exactAmountUSDT !== undefined && realRes.exactAmountUSDT > 0) {
                pnl = realRes.exactAmountUSDT - inv;
                pnlP = (pnl / inv) * 100;
                addLog(`ℹ️ [Solana Real] PNL exacto ajustado post-swap: $${pnl.toFixed(2)}`, 'info');
@@ -2853,7 +2874,7 @@ async function runSolanaCycle() {
           let pnl = inv * pnlP / 100;
           const realRes = await executeOrder(w, 'SELL', inv + pnl, cp);
           if (realRes && realRes.ok) {
-            if (realRes.exactAmountUSDT !== undefined) {
+            if (realRes.exactAmountUSDT !== undefined && realRes.exactAmountUSDT > 0) {
                pnl = realRes.exactAmountUSDT - inv;
                pnlP = (pnl / inv) * 100;
                addLog(`ℹ️ [Solana Real] PNL exacto ajustado post-swap (SL): $${pnl.toFixed(2)}`, 'info');
@@ -2880,7 +2901,7 @@ async function runSolanaCycle() {
           let pnl = inv * pnlP / 100;
           const realRes = await executeOrder(w, 'SELL', inv + pnl, cp);
           if (realRes && realRes.ok) {
-            if (realRes.exactAmountUSDT !== undefined) {
+            if (realRes.exactAmountUSDT !== undefined && realRes.exactAmountUSDT > 0) {
                pnl = realRes.exactAmountUSDT - inv;
                pnlP = (pnl / inv) * 100;
                addLog(`ℹ️ [Solana Real] PNL exacto ajustado post-swap (TP1): $${pnl.toFixed(2)}`, 'info');
@@ -2908,7 +2929,7 @@ async function runSolanaCycle() {
           let pnl = inv * pnlP / 100;
           const realRes = await executeOrder(w, 'SELL', inv + pnl, cp);
           if (realRes && realRes.ok) {
-            if (realRes.exactAmountUSDT !== undefined) {
+            if (realRes.exactAmountUSDT !== undefined && realRes.exactAmountUSDT > 0) {
                pnl = realRes.exactAmountUSDT - inv;
                pnlP = (pnl / inv) * 100;
                addLog(`ℹ️ [Solana Real] PNL exacto ajustado post-swap (TP2): $${pnl.toFixed(2)}`, 'info');
@@ -3529,7 +3550,7 @@ app.post('/api/action', adminAuth, async (req, res) => {
           addLog(`⚡ [Cierre Manual] Disparando cierre de posición para ${w.symbol}...`, 'info');
           const realRes = await executeOrder(w, 'SELL', inv + pnl, cp);
           if (realRes && realRes.ok) {
-            if (realRes.exactAmountUSDT !== undefined) {
+            if (realRes.exactAmountUSDT !== undefined && realRes.exactAmountUSDT > 0) {
               pnl = realRes.exactAmountUSDT - inv;
               pnlP = (pnl / inv) * 100;
               addLog(`ℹ️ [Cierre Manual Real] PNL exacto ajustado post-swap: $${pnl.toFixed(2)}`, 'info');
