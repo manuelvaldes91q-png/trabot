@@ -2270,9 +2270,14 @@ async function executeSolanaTradeInternal(w, side, amountUSDT, price, pk, feePay
       for (let i = 0; i < 5; i++) {
         baseBalAfter = await getTokenBalance(connection, userPublicKey, baseMint);
         tokenBalAfter = await getTokenUiBalance(connection, userPublicKey, targetMint);
-        if (Math.abs(baseBalAfter - baseBalBefore) > 0 || Math.abs(tokenBalAfter - tokenBalBefore) > 0) {
-           break;
-        }
+        
+        const baseChanged = Math.abs(baseBalAfter - baseBalBefore) > 0;
+        const tokenChanged = Math.abs(tokenBalAfter - tokenBalBefore) > 0;
+        
+        if (side === 'BUY' && tokenChanged) break;
+        if (side === 'SELL' && baseChanged) break;
+        if (baseChanged && tokenChanged) break;
+        
         await new Promise(r => setTimeout(r, 1500));
       }
       
