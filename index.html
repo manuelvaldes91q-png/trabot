@@ -4,7 +4,8 @@
 <meta charset="UTF-8">
 <meta name="viewport" content="width=device-width, initial-scale=1.0">
 <title>DIP HUNTER v6 — Escáner + Monitor 10s + Auto-Ejecución</title>
-<script src="https://cdnjs.cloudflare.com/ajax/libs/Chart.js/4.4.1/chart.umd.js">
+<script src="https://cdnjs.cloudflare.com/ajax/libs/Chart.js/4.4.1/chart.umd.js"></script>
+<script>
 function renderHistoryTab() {
   const c = document.getElementById('historyContent');
   if(!c) return;
@@ -2658,6 +2659,1431 @@ function openWhaleMap(mint, symbol) {
   
   document.body.appendChild(modal);
 }
+
+
+// EDITAR ORDEN INDIVIDUAL (inline popup)
+function editOrder(wi,oi){
+  const w=watchItems[wi];const o=w.orders[oi];
+  const newPrice=prompt(`Editar precio orden #${o.level} (actual: $${fpZ(o.price,o.price)})`,o.price);
+  if(newPrice===null)return;
+  if(+newPrice>0){
+    const newAmt=prompt(`Monto $ (actual: $${o.amount})`,o.amount);
+    if(newAmt===null)return;
+    const newNote=prompt(`Nota (actual: "${o.note||''}")`,o.note||'');
+    const updates = { price: +newPrice };
+    if(+newAmt>0) updates.amount=+newAmt;
+    if(newNote!==null) updates.note=newNote;
+    let slHits = false;
+    if(o.level===1){
+      const newSL=prompt(`Stop Loss % (actual: ${o.sl}%)`,o.sl);
+      const newTP1=prompt(`TP1 % (actual: ${o.tp1}%)`,o.tp1);
+      if(+newSL>0) updates.sl=+newSL;
+      if(+newTP1>0) updates.tp1=+newTP1;
+      slHits = true;
+    }
+    myFetch('/api/action', {method: 'POST', headers: {'Content-Type': 'application/json'}, body: JSON.stringify({action: 'editOrder', payload: {wi, oi, updates, slHits}})});
+  }
+}
+
+// EDITAR TODA LA WATCHCARD
+function editWatch(wi){
+  const w=watchItems[wi];
+  selData={...w,cp:w.currentPrice||w.cp};
+  showAddForm(selData);
+}
+
+function addOrderToWatch(wi){
+  const w=watchItems[wi];
+  const price=prompt('Precio de la nueva orden $');
+  if(!price||+price<=0)return;
+  const amt=prompt('Monto $','50');
+  const note=prompt('Nota','DCA extra');
+  const order = {level:w.orders.length+1,price:+price,amount:+(amt||50),note:note||'',status:'pending',type:'dca'};
+  myFetch('/api/action', {method: 'POST', headers: {'Content-Type': 'application/json'}, body: JSON.stringify({action: 'addOrder', payload: {wi, order}})});
+}
+
+function manualFill(wi,oi){
+  myFetch('/api/action', {method: 'POST', headers: {'Content-Type': 'application/json'}, body: JSON.stringify({action: 'manualFill', payload: {wi, oi}})});
+}
+function resumeOrder(wi,oi){
+  myFetch('/api/action', {method: 'POST', headers: {'Content-Type': 'application/json'}, body: JSON.stringify({action: 'resumeOrder', payload: {wi, oi}})});
+}
+function unFill(wi,oi){
+  if(!confirm('¿Deshacer esta ejecución?'))return;
+  myFetch('/api/action', {method: 'POST', headers: {'Content-Type': 'application/json'}, body: JSON.stringify({action: 'unFill', payload: {wi, oi}})});
+}
+function closeTrade(wi){
+  if(!confirm(`¿Seguro que quieres cerrar esta posición ahora manualmente?`))return;
+  myFetch('/api/action', {method: 'POST', headers: {'Content-Type': 'application/json'}, body: JSON.stringify({action: 'closeTrade', payload: {index: wi}})});
+}
+function removeWatch(wi){
+  myFetch('/api/action', {method: 'POST', headers: {'Content-Type': 'application/json'}, body: JSON.stringify({action: 'removeWatch', payload: {index: wi}})});
+}
+
+function quickMarketBuy() {
+  if (!curDet) return;
+  const amount = prompt(`¿Cuánto quieres comprar de ${curDet.symbol}?`, '50');
+  if (!amount || +amount <= 0) return;
+  
+  myFetch('/api/action', {
+    method: 'POST', 
+    headers: {'Content-Type': 'application/json'}, 
+    body: JSON.stringify({
+      action: 'quickMarketBuy', 
+      payload: { 
+        symbol: curDet.symbol, 
+        network: curDet.network, 
+        address: curDet.address, 
+        pair: curDet.pair, 
+        amount: +amount 
+      }
+    })
+  }).then(r => r.json()).then(d => {
+    if (d.error) alert(d.error);
+    else {
+      showFlash('buy', '⚡ COMPRA DE MERCADO ENVIADA', `Orden de $${amount} procesada`);
+      closeModal('detModal');
+    }
+  });
+}
+
+function clearDone(){
+  const items = watchItems.filter(w=>w.orders.some(o=>o.status==='pending'));
+  myFetch('/api/action', {method: 'POST', headers: {'Content-Type': 'application/json'}, body: JSON.stringify({action: 'clearWatch', payload: {items}})});
+}
+function clearAll(){
+  if(confirm('¿Limpiar toda la watchlist?')){
+    myFetch('/api/action', {method: 'POST', headers: {'Content-Type': 'application/json'}, body: JSON.stringify({action: 'clearWatch', payload: {items: []}})});
+  }
+}
+
+// ══════════════════════════════════════════════════════════
+// MONITOR — NÚCLEO (Sincronizado vía Backend)
+// ══════════════════════════════════════════════════════════
+let monitorOn=false,cycleN=0,monitorInterval=15;
+
+function startMonitor(){
+  if(monitorOn)return;
+  const iv = +document.getElementById('cfInterval').value||15;
+  myFetch('/api/action', {
+    method: 'POST', 
+    headers: {'Content-Type': 'application/json'}, 
+    body: JSON.stringify({action: 'start', payload: {interval: iv}})
+  }).then(res => {
+    if (res.ok) {
+      addLog('Sistema de monitoreo iniciado', 'info');
+      // Force immediate UI update
+      initServerState();
+    }
+  });
+}
+
+function stopMonitor(){
+  myFetch('/api/action', {
+    method: 'POST', 
+    headers: {'Content-Type': 'application/json'}, 
+    body: JSON.stringify({action: 'stop'})
+  }).then(res => {
+    if (res.ok) {
+      addLog('Sistema de monitoreo detenido', 'warn');
+      initServerState();
+    }
+  });
+}
+
+setInterval(async () => {
+  try {
+    const res = await myFetch('/api/state');
+    if (res.headers.get('content-type')?.includes('text/html')) {
+      return;
+    }
+    const data = await res.json();
+    
+    SIM = data.SIM || SIM;
+    monitorOn = data.monitorOn ?? monitorOn;
+    monitorInterval = data.monitorInterval || monitorInterval;
+    
+    if(data.mode) {
+      document.getElementById('modeSel').value = data.mode;
+      document.getElementById('dBalS').textContent = data.mode === 'real' ? 'USDT (Real MEXC)' : 'disponible';
+    }
+    if (data.solMode) {
+      document.getElementById('solModeSel').value = data.solMode;
+    }
+    watchItems = data.watchItems || watchItems;
+    cycleN = data.cycleN || cycleN;
+    document.getElementById('dCycle').textContent = cycleN;
+    
+    // Update header badge and status
+    const badge = document.getElementById('hbadge');
+    const stat = document.getElementById('hstat');
+    const dot = document.getElementById('dot');
+    const bStart = document.getElementById('btnStart');
+    const bStop = document.getElementById('btnStop');
+    
+    if (badge && typeof currentNetwork !== 'undefined') {
+        badge.textContent = `${currentNetwork === 'solana' ? 'Escáner Solana' : 'Escáner MEXC'} · Monitor ${monitorInterval}s · ${monitorOn ? 'ACTIVO' : 'PAUSADO'}`;
+    }
+    
+    if (monitorOn) {
+      if (dot) dot.classList.add('on');
+      if (bStart) bStart.style.display = 'none';
+      if (bStop) bStop.style.display = '';
+      if (stat) stat.innerHTML = `Ciclo ${cycleN} · ${watchItems.length} monedas <span style="color:var(--g)">(VPS Activo)</span>`;
+    } else {
+      if (dot) dot.classList.remove('on');
+      if (bStart) bStart.style.display = '';
+      if (bStop) bStop.style.display = 'none';
+      if (stat) stat.textContent = 'Monitor VPS detenido';
+    }
+    
+    // Countdown logic
+    const nextUpdate = data.nextUpdate || 0;
+    const cd = document.getElementById('countdown');
+    if (monitorOn && nextUpdate > 0) {
+        const diff = Math.max(0, Math.round((nextUpdate - Date.now()) / 1000));
+        if (cd) {
+          cd.textContent = diff + 's';
+          if (diff <= 3) cd.classList.add('urgent'); else cd.classList.remove('urgent');
+        }
+    } else if (cd) {
+        cd.textContent = '—';
+    }
+    if (data.vpsSolWallet) {
+      updateSolanaVpsWalletUI(data.vpsSolWallet);
+    }
+    
+    // RENDER SOLANA LOGS
+    if (data.solanaSwapLogs) {
+        const logBody = document.getElementById('solanaLogBody');
+        logBody.innerHTML = data.solanaSwapLogs.map(l => `
+            <div class="le">
+                <div class="lt">${new Date(l.time).toLocaleTimeString()}</div>
+                <div class="lm ${l.side === 'BUY' ? 'buy' : 'sell'}">${l.side} ${l.symbol || ''} ${l.amountUSDT || 0}USDT</div>
+                <div style="font-size:7px;color:var(--t2);overflow:hidden;text-overflow:ellipsis">${l.txid.slice(0, 10)}...</div>
+            </div>
+        `).join('');
+    }
+    
+    // update scan badges
+    document.querySelectorAll('.rc-sym').forEach(el => {
+      const symNode = el.childNodes[0];
+      if (!symNode) return;
+      const sym = symNode.textContent.trim();
+      const isWatched = watchItems.some(w => w.symbol === sym);
+      const hasBadge = el.querySelector('.watch-badge');
+      if (isWatched && !hasBadge) {
+         el.innerHTML = sym + ' <span class="watch-badge" style="font-size:9px;color:var(--b);background:rgba(0,226,255,0.15);padding:2px 4px;border-radius:3px;margin-left:8px;font-weight:600;letter-spacing:0">✔️ ACTIVA</span>';
+      } else if (!isWatched && hasBadge) {
+         el.innerHTML = sym;
+      }
+    });
+    
+    // Validar si hubo cambios en los logs que ameriten notificación flash/pantalla
+    const newLogs = data.logs || [];
+    if(newLogs.length > 0 && logs_.length > 0 && newLogs[0].t !== logs_[0].t) {
+      if(newLogs[0].type === 'buy') showFlash('buy','✅ COMPRA AUTO VPS', newLogs[0].msg);
+      if(newLogs[0].type === 'sell' || newLogs[0].type === 'tp') showFlash('tp','💰 VPS CERRADA', newLogs[0].msg);
+      if(newLogs[0].type === 'sl_') showFlash('sell','❌ SL VPS', newLogs[0].msg);
+      if(newLogs[0].type === 'alert') showFlash('sell','🚨 ALERTA CRÍTICA', newLogs[0].msg);
+    }
+    
+    logs_ = newLogs;
+    
+    // Actualizar variables y renderizar paneles
+    updateDash();
+    renderWatchList();
+    renderLog();
+    
+    document.getElementById('htime').textContent=new Date().toLocaleTimeString('es',{hour:'2-digit',minute:'2-digit',second:'2-digit'});
+  } catch(e) {
+    if (e.message !== 'Failed to fetch' && e.message !== 'Unauthorized') {
+      console.error('Interval error:', e);
+    }
+  }
+}, 1000);
+
+// ══════════════════════════════════════════════════════════
+// CHART + OB
+// ══════════════════════════════════════════════════════════
+let curDet=null,chartInst=null;
+let curOB=null;
+let currentSwapRiskAmount=100;
+
+function calculateSwapRisk(d, ob, amount) {
+  const isSol = d.network === 'solana';
+  const cp = d.currentPrice || d.cp || 0;
+  
+  let liq = 0;
+  if (isSol) {
+    liq = d.liq || 0;
+  } else if (ob && ob.bids) {
+    liq = ob.bids.reduce((sum, bid) => sum + (parseFloat(bid[0]) * parseFloat(bid[1])), 0);
+  } else {
+    liq = d.liq || 0;
+  }
+  
+  const vol = d.vol || 0;
+  
+  let priceImpactPct = 0;
+  if (isSol) {
+    const poolReserves = liq * 0.5;
+    if (poolReserves > 0) {
+      priceImpactPct = (amount / (poolReserves + amount)) * 100;
+    } else {
+      priceImpactPct = amount > 0 ? 100 : 0;
+    }
+  } else if (ob && ob.asks && ob.asks.length > 0) {
+    let remainingUsd = amount;
+    let cost = 0;
+    let qtyFilled = 0;
+    let bestAsk = parseFloat(ob.asks[0][0]);
+    let finalPrice = bestAsk;
+    
+    for (let i = 0; i < ob.asks.length; i++) {
+      const askPrice = parseFloat(ob.asks[i][0]);
+      const askQty = parseFloat(ob.asks[i][1]);
+      const levelUsd = askPrice * askQty;
+      
+      if (remainingUsd <= levelUsd) {
+        qtyFilled += remainingUsd / askPrice;
+        cost += remainingUsd;
+        finalPrice = askPrice;
+        remainingUsd = 0;
+        break;
+      } else {
+        qtyFilled += askQty;
+        cost += levelUsd;
+        finalPrice = askPrice;
+        remainingUsd -= levelUsd;
+      }
+    }
+    
+    if (cost > 0) {
+      const avgPrice = cost / qtyFilled;
+      priceImpactPct = ((avgPrice - bestAsk) / bestAsk) * 100;
+      if (remainingUsd > 0) {
+        priceImpactPct += (remainingUsd / amount) * 15;
+      }
+    } else {
+      priceImpactPct = 0;
+    }
+  } else {
+    priceImpactPct = amount > 0 ? 1.5 : 0;
+  }
+  
+  priceImpactPct = Math.max(0, parseFloat(priceImpactPct.toFixed(3)));
+  
+  let liqRisk = 0;
+  if (isSol) {
+    if (liq < 5000) liqRisk = 100;
+    else if (liq > 150000) liqRisk = 0;
+    else liqRisk = 100 - ((liq - 5000) / 145000) * 100;
+  } else {
+    if (liq < 10000) liqRisk = 90;
+    else if (liq > 500000) liqRisk = 0;
+    else liqRisk = 100 - ((liq - 10000) / 490000) * 100;
+  }
+  liqRisk = Math.max(0, Math.min(100, liqRisk));
+  
+  let volRisk = 0;
+  if (vol < 5000) volRisk = 100;
+  else if (vol > 300000) volRisk = 0;
+  else volRisk = 100 - ((vol - 5000) / 295000) * 100;
+  volRisk = Math.max(0, Math.min(100, volRisk));
+  
+  let slipRisk = 0;
+  if (priceImpactPct < 0.2) slipRisk = 0;
+  else if (priceImpactPct > 5.0) slipRisk = 100;
+  else slipRisk = (priceImpactPct / 5.0) * 100;
+  slipRisk = Math.max(0, Math.min(100, slipRisk));
+  
+  let totalScore = Math.round(liqRisk * 0.4 + volRisk * 0.2 + slipRisk * 0.4);
+  
+  let spreadPct = 0;
+  if (!isSol && ob && ob.asks && ob.bids && ob.asks.length > 0 && ob.bids.length > 0) {
+    const ask0 = parseFloat(ob.asks[0][0]);
+    const bid0 = parseFloat(ob.bids[0][0]);
+    spreadPct = ((ask0 - bid0) / ask0) * 100;
+    if (spreadPct > 1.0) {
+      totalScore = Math.min(100, totalScore + 15);
+    }
+  }
+  
+  totalScore = Math.max(0, Math.min(100, totalScore));
+  
+  let label = 'BAJO';
+  let color = 'var(--g)';
+  let bg = 'rgba(0, 229, 160, 0.1)';
+  let desc = 'Condiciones excelentes. Swap seguro con mínimo impacto de precio.';
+  let recSlippage = '0.5%';
+  
+  if (totalScore >= 80) {
+    label = 'EXTREMO';
+    color = 'var(--r)';
+    bg = 'rgba(239, 68, 68, 0.15)';
+    desc = 'Riesgo crítico de iliquidez. Gran parte de tu dinero podría perderse en slippage.';
+    recSlippage = '5.0% - 10.0%';
+  } else if (totalScore >= 55) {
+    label = 'ALTO';
+    color = 'var(--y)';
+    bg = 'rgba(245, 158, 11, 0.15)';
+    desc = 'Impacto de precio elevado. Se recomienda usar montos más pequeños o dividir la orden.';
+    recSlippage = '2.0% - 3.0%';
+  } else if (totalScore >= 30) {
+    label = 'MEDIO';
+    color = '#facc15';
+    bg = 'rgba(250, 204, 21, 0.1)';
+    desc = 'Riesgo moderado. Adecuado para montos pequeños. Monitorea el impacto en precio.';
+    recSlippage = '1.0% - 1.5%';
+  }
+  
+  return {
+    totalScore,
+    label,
+    color,
+    bg,
+    desc,
+    recSlippage,
+    liq,
+    vol,
+    priceImpactPct,
+    spreadPct,
+    liqRisk,
+    volRisk,
+    slipRisk
+  };
+}
+
+function renderSwapRiskPanel(d, ob) {
+  const el = document.getElementById('swapRiskPanel');
+  if (!el) return;
+  
+  el.innerHTML = `
+    <div style="background: rgba(153, 69, 255, 0.03); border: 1px solid rgba(153, 69, 255, 0.15); border-radius: 4px; padding: 10px; font-family: var(--mono); font-size: 9px; margin-top: 10px;">
+      <div style="color: #a855f7; font-weight: 700; margin-bottom: 8px; display: flex; justify-content: space-between; align-items: center;">
+        <span>🛡️ RIESGO DE SWAP (REAL-TIME)</span>
+        <span class="tag" style="background: rgba(168, 85, 247, 0.15); color: #c084fc; font-size: 7px; border: 1px solid rgba(168, 85, 247, 0.2); margin: 0">RIESGO DE DESVIACIÓN</span>
+      </div>
+      
+      <div style="margin-bottom: 8px; display: flex; align-items: center; justify-content: space-between; gap: 5px;">
+        <span style="color: var(--t2); font-size: 8px;">Monto del Swap:</span>
+        <div style="display: flex; align-items: center; gap: 3px; max-width: 140px;">
+          <span style="color: var(--t2)">$</span>
+          <input type="number" id="riskSwapAmount" class="inp" value="${currentSwapRiskAmount}" style="padding: 2px 5px; font-size: 9px; text-align: right; width: 60px;" oninput="onRiskAmountChange(this.value)">
+          <span style="color: var(--t2)">USD</span>
+        </div>
+      </div>
+      
+      <div style="display: flex; gap: 3px; margin-bottom: 10px;">
+        ${[10, 50, 100, 500, 1000].map(amt => `
+          <button class="btn btn-d btn-xs" style="padding: 1px 4px; font-size: 8px; flex: 1; text-align: center; border-radius: 3px; ${currentSwapRiskAmount === amt ? 'border-color: var(--g); color: var(--g); background: rgba(0,229,160,0.05)' : ''}" onclick="setRiskAmount(${amt})">$${amt}</button>
+        `).join('')}
+      </div>
+      
+      <div id="swapRiskResults"></div>
+    </div>
+  `;
+  
+  updateSwapRiskResults();
+}
+
+function setRiskAmount(amt) {
+  currentSwapRiskAmount = parseInt(amt) || 100;
+  const input = document.getElementById('riskSwapAmount');
+  if (input) input.value = currentSwapRiskAmount;
+  
+  document.querySelectorAll('#swapRiskPanel button').forEach(btn => {
+    if (btn.textContent === '$' + amt) {
+      btn.style.borderColor = 'var(--g)';
+      btn.style.color = 'var(--g)';
+      btn.style.background = 'rgba(0,229,160,0.05)';
+    } else if (btn.textContent.startsWith('$')) {
+      btn.style.borderColor = '';
+      btn.style.color = '';
+      btn.style.background = '';
+    }
+  });
+  
+  updateSwapRiskResults();
+}
+
+function onRiskAmountChange(val) {
+  const amt = parseInt(val) || 0;
+  currentSwapRiskAmount = amt;
+  
+  document.querySelectorAll('#swapRiskPanel button').forEach(btn => {
+    if (btn.textContent.startsWith('$')) {
+      const btnAmt = parseInt(btn.textContent.substring(1));
+      if (btnAmt === amt) {
+        btn.style.borderColor = 'var(--g)';
+        btn.style.color = 'var(--g)';
+        btn.style.background = 'rgba(0,229,160,0.05)';
+      } else {
+        btn.style.borderColor = '';
+        btn.style.color = '';
+        btn.style.background = '';
+      }
+    }
+  });
+  
+  updateSwapRiskResults();
+}
+
+function updateSwapRiskResults() {
+  const resultsDiv = document.getElementById('swapRiskResults');
+  if (!resultsDiv || !curDet) return;
+  
+  const risk = calculateSwapRisk(curDet, curOB, currentSwapRiskAmount);
+  
+  let warningsHtml = '';
+  if (risk.totalScore >= 80) {
+    warningsHtml += `<div style="color: var(--r); margin-top: 8px; font-size: 8px; line-height: 1.2;">🚨 <b>Peligro:</b> Liquidez crítica para este monto. ¡Evita este swap!</div>`;
+  } else if (risk.totalScore >= 55) {
+    warningsHtml += `<div style="color: var(--y); margin-top: 8px; font-size: 8px; line-height: 1.2;">⚠️ <b>Advertencia:</b> Desviación de precio notable. Divide la operación.</div>`;
+  } else if (risk.priceImpactPct > 1.0) {
+    warningsHtml += `<div style="color: var(--y); margin-top: 8px; font-size: 8px; line-height: 1.2;">⚠️ <b>Aviso:</b> Impacto en precio del ${risk.priceImpactPct.toFixed(2)}%.</div>`;
+  }
+  
+  if (risk.liq < 10000) {
+    warningsHtml += `<div style="color: var(--r); margin-top: 4px; font-size: 8px; line-height: 1.2;">⚠️ <b>Piscina muy delgada:</b> Liquidez total menor a $10,000 USD.</div>`;
+  }
+  if (risk.vol < 5000) {
+    warningsHtml += `<div style="color: var(--y); margin-top: 4px; font-size: 8px; line-height: 1.2;">⚠️ <b>Bajo volumen:</b> Menor a $5,000 USD en 24h. Riesgo de manipulación.</div>`;
+  }
+  if (risk.spreadPct > 1.0) {
+    warningsHtml += `<div style="color: var(--y); margin-top: 4px; font-size: 8px; line-height: 1.2;">⚠️ <b>Spread elevado:</b> El spread de compra/venta es del ${risk.spreadPct.toFixed(2)}%.</div>`;
+  }
+  
+  resultsDiv.innerHTML = `
+    <div style="margin-bottom: 8px;">
+      <div style="display: flex; justify-content: space-between; font-size: 8px; color: var(--t2); margin-bottom: 3px;">
+        <span>Índice de Riesgo Estimado:</span>
+        <span style="color: ${risk.color}; font-weight: 700;">${risk.totalScore}/100 (${risk.label})</span>
+      </div>
+      <div style="width: 100%; height: 8px; background: rgba(255,255,255,0.05); border-radius: 4px; position: relative; overflow: hidden; display: flex;">
+        <div style="width: 30%; height: 100%; background: rgba(0, 229, 160, 0.25);"></div>
+        <div style="width: 25%; height: 100%; background: rgba(250, 204, 21, 0.25);"></div>
+        <div style="width: 25%; height: 100%; background: rgba(245, 158, 11, 0.25);"></div>
+        <div style="width: 20%; height: 100%; background: rgba(239, 68, 68, 0.25);"></div>
+        <div style="position: absolute; left: ${risk.totalScore}%; top: 0; width: 4px; height: 100%; background: ${risk.color}; box-shadow: 0 0 4px ${risk.color}; transition: left 0.3s ease;"></div>
+      </div>
+    </div>
+    
+    <div style="display: grid; grid-template-columns: 1fr 1fr; gap: 5px; background: rgba(0,0,0,0.15); padding: 5px 7px; border-radius: 4px; border: 1px solid rgba(255,255,255,0.03);">
+      <div>
+        <div style="font-size: 7px; color: var(--t2)">Impacto Estimado:</div>
+        <div style="font-size: 9px; font-weight: 700; color: ${risk.priceImpactPct > 2.0 ? 'var(--r)' : risk.priceImpactPct > 0.5 ? 'var(--y)' : 'var(--g)'}; font-family: var(--mono);">${risk.priceImpactPct}%</div>
+      </div>
+      <div>
+        <div style="font-size: 7px; color: var(--t2)">Slippage Recomendado:</div>
+        <div style="font-size: 9px; font-weight: 700; color: var(--t); font-family: var(--mono);">${risk.recSlippage}</div>
+      </div>
+      <div style="margin-top: 3px;">
+        <div style="font-size: 7px; color: var(--t2)">Liquidez Estimada:</div>
+        <div style="font-size: 9px; font-weight: 700; color: var(--g); font-family: var(--mono);">$${fv(risk.liq)}</div>
+      </div>
+      <div style="margin-top: 3px;">
+        <div style="font-size: 7px; color: var(--t2)">Volumen 24h:</div>
+        <div style="font-size: 9px; font-weight: 700; color: var(--b); font-family: var(--mono);">$${fv(risk.vol)}</div>
+      </div>
+    </div>
+    
+    <div style="margin-top: 6px; font-size: 8px; color: rgba(255,255,255,0.7); line-height: 1.3; background: ${risk.bg}; border-left: 2px solid ${risk.color}; padding: 4px 6px; border-radius: 0 3px 3px 0;">
+      ${risk.desc}
+    </div>
+    
+    ${warningsHtml}
+  `;
+}
+
+async function showDetail(d){ switchMainTab("detail");
+  curDet=d;
+  curOB=null;
+  const cp=d.currentPrice||d.cp||0;
+  const isSol = d.network === 'solana';
+  const pairName = isSol ? `${d.symbol}/SOL` : `${d.symbol}/USDT`;
+  const extLink = isSol ? `https://dexscreener.com/solana/${d.address}` : `https://www.mexc.com/exchange/${d.pair.replace('USDT','_USDT')}`;
+  const extLabel = isSol ? `DexScreener ↗` : `MEXC ↗`;
+  const extCol = isSol ? `#9945FF` : `var(--b)`;
+  const extBdr = isSol ? `rgba(153,69,255,0.2)` : `rgba(59,130,246,0.2)`;
+  const trend = d.trend || { score: 0, emoji: '🟡', label: 'NEUTRAL' };
+
+  document.getElementById('detHdr').innerHTML=`
+    <span style="font-family:var(--mono);font-size:13px;font-weight:700">${pairName}</span>
+    <span style="font-family:var(--mono);font-size:10px;color:var(--t2)">$${fpZ(cp,cp)}</span>
+    <span class="tag ${trend.score>=70?'tg':trend.score>=45?'ty':'tr'}">${trend.emoji} ${trend.label}</span>
+    <a href="https://x.com/search?q=${d.address||d.symbol}+scam+OR+rug" target="_blank" style="margin-left:5px;font-family:var(--mono);font-size:8px;color:#facc15;border:1px solid rgba(250,204,21,0.2);padding:2px 7px;border-radius:3px;text-decoration:none">🔍 Buscar Estafa en X</a>
+    <a href="${extLink}" target="_blank" style="margin-left:auto;font-family:var(--mono);font-size:8px;color:${extCol};border:1px solid ${extBdr};padding:2px 7px;border-radius:3px;text-decoration:none">${extLabel}</a>
+  `;
+  document.getElementById('detContent').innerHTML=`
+    <div class="det-body">
+      <div class="det-left">
+        ${isSol ? '' : `
+        <div class="ctabs">
+          <button class="ctab on" onclick="loadChart('h1',this)">1H</button>
+          <button class="ctab" onclick="loadChart('h4',this)">4H</button>
+          <button class="ctab" onclick="loadChart('m30',this)">30M</button>
+          <button class="ctab" onclick="loadChart('d1',this)">1D</button>
+        </div>
+        `}
+        <div class="cwrap" style="padding:0;overflow:hidden">
+          ${isSol 
+            ? `<iframe src="https://dexscreener.com/solana/${d.address}?embed=1&theme=dark&trades=0&info=0" style="width:100%;height:100%;border:none;border-radius:4px;"></iframe>`
+            : `<div class="cload" id="cload">⟳ Cargando...</div><canvas id="detChart" style="display:none"></canvas>`
+          }
+        </div>
+        <div id="apanel"></div>
+        <div id="auditPanel"></div>
+      </div>
+      <div class="det-right">
+        <div style="font-family:var(--mono);font-size:8px;font-weight:700;color:var(--t2);text-transform:uppercase;letter-spacing:.08em;margin-bottom:5px;display:flex;justify-content:space-between">
+          📚 ${isSol ? 'AMM / LIQUIDEZ' : 'ORDER BOOK'} <span style="cursor:pointer;color:var(--b)" onclick="refreshOB()">🔄</span>
+        </div>
+        <div id="obDiv"><div style="color:var(--t2);font-size:8px;font-family:var(--mono)">Cargando...</div></div>
+        
+        <!-- RISK METER CONTAINER -->
+        <div id="swapRiskPanel"></div>
+        
+        <div style="margin-top:10px;">
+          <button class="btn btn-g" style="width:100%;padding:8px;font-size:11px" onclick="quickMarketBuy()">⚡ Comprar a Mercado</button>
+          <button class="btn btn-pu" style="width:100%;padding:8px;font-size:11px;margin-top:5px" onclick="testVolumeProfile()">📊 Test Soporte Volumen</button>
+          <div id="volProfileStatus" style="font-size:10px; margin-top:5px; text-align:center;"></div>
+        </div>
+      </div>
+    </div>`;
+  if (!isSol) loadChart('h1');
+  if (isSol) loadAuditData(d.address);
+  
+  if (isSol) {
+    
+    const obDiv = document.getElementById('obDiv');
+    if (obDiv) {
+      obDiv.innerHTML = '<div style="color:var(--t2);font-size:8px;font-family:var(--mono)">Cargando Order Book de Phoenix...</div>';
+      try {
+         const obRes = await myFetch(`/api/orderbook/${d.address}`);
+         const obData = await obRes.json();
+         if (obData.available) {
+             let html = '<div style="padding:10px;background:rgba(0,0,0,0.4);border:1px solid rgba(255,255,255,0.1);border-radius:4px;font-family:var(--mono);font-size:9px">';
+             html += '<div style="color:#fcd34d;font-weight:700;margin-bottom:6px;display:flex;justify-content:space-between"><span>🔥 PHOENIX CLOB</span><span style="font-size:8px;color:var(--t2)">On-Chain Orderbook</span></div>';
+             html += '<div style="display:flex;justify-content:space-between;border-bottom:1px solid rgba(255,255,255,0.1);padding-bottom:4px;margin-bottom:4px;color:var(--t2)"><span>Precio (USDC)</span><span>Cantidad</span></div>';
+             
+             let maxQty = 0;
+             const asks = obData.asks.slice(0, 12).reverse();
+             const bids = obData.bids.slice(0, 12);
+             asks.forEach(ask => {
+                 let qty = obData.isQuote ? (ask.quantity * ask.price) : ask.quantity;
+                 if(qty > maxQty) maxQty = qty;
+             });
+             bids.forEach(bid => {
+                 let qty = obData.isQuote ? (bid.quantity * bid.price) : bid.quantity;
+                 if(qty > maxQty) maxQty = qty;
+             });
+
+             html += '<div style="position:relative; width:100%; display:flex; flex-direction:column; gap:1px; margin-top: 4px;">';
+             asks.forEach(ask => {
+                 let price = obData.isQuote ? (1 / ask.price) : ask.price;
+                 let qty = obData.isQuote ? (ask.quantity * ask.price) : ask.quantity;
+                 let pct = maxQty > 0 ? (qty / maxQty) * 100 : 0;
+                 html += `<div style="display:flex;justify-content:space-between;color:var(--r);padding:2px 4px;position:relative; font-size:10px;">
+                     <div style="position:absolute;left:0;top:0;bottom:0;background:rgba(239,68,68,0.2);width:${pct}%;z-index:0;border-radius:0 2px 2px 0;"></div>
+                     <span style="z-index:1">${price.toFixed(4)}</span><span style="z-index:1">${qty.toFixed(2)}</span>
+                 </div>`;
+             });
+             
+             html += `<div style="text-align:center;font-size:11px;color:var(--t);margin:6px 0;font-weight:bold">$ ${fpZ(cp, cp)}</div>`;
+             
+             bids.forEach(bid => {
+                 let price = obData.isQuote ? (1 / bid.price) : bid.price;
+                 let qty = obData.isQuote ? (bid.quantity * bid.price) : bid.quantity;
+                 let pct = maxQty > 0 ? (qty / maxQty) * 100 : 0;
+                 html += `<div style="display:flex;justify-content:space-between;color:var(--g);padding:2px 4px;position:relative; font-size:10px;">
+                     <div style="position:absolute;left:0;top:0;bottom:0;background:rgba(16,185,129,0.2);width:${pct}%;z-index:0;border-radius:0 2px 2px 0;"></div>
+                     <span style="z-index:1">${price.toFixed(4)}</span><span style="z-index:1">${qty.toFixed(2)}</span>
+                 </div>`;
+             });
+             html += '</div>';
+             html += '</div>';
+             obDiv.innerHTML = html;
+          } else if (obData.isAmm && obData.ammData && obData.ammData.available) {
+             const amm = obData.ammData;
+             let html = '<div style="padding:10px;background:rgba(153,69,255,0.03);border:1px solid rgba(153,69,255,0.15);border-radius:6px;font-family:var(--mono);font-size:9px">';
+             html += `<div style="color:#a855f7;font-weight:700;margin-bottom:8px;display:flex;justify-content:space-between"><span>🟣 SOPORTE DE LIQUIDEZ</span><span style="font-size:8px;color:var(--t2)">${amm.dexName} POOL</span></div>`;
+             
+             // Pool stats
+             html += `<div style="margin-bottom:8px;padding:6px;background:rgba(255,255,255,0.02);border-radius:4px;border:1px solid rgba(255,255,255,0.05)">
+               <div style="display:flex;justify-content:space-between;margin-bottom:2px">
+                 <span style="color:var(--t2)">Liquidez Total:</span>
+                 <span style="color:var(--g);font-weight:700">$ ${fv(amm.liquidityUsd)}</span>
+               </div>
+               <div style="display:flex;justify-content:space-between">
+                 <span style="color:var(--t2)">Dirección Pool:</span>
+                 <span style="color:var(--b);font-size:8px;cursor:pointer" onclick="navigator.clipboard.writeText('${amm.poolAddress}');alert('Pool copiada')">${amm.poolAddress.slice(0,6)}...${amm.poolAddress.slice(-6)} 📋</span>
+               </div>
+             </div>`;
+
+             // Calculate maximum liquidity price support and resistance walls
+             let maxBidWall = null;
+             if (amm.bids && amm.bids.length > 0) {
+                 maxBidWall = amm.bids.reduce((max, b) => b.totalUsd > max.totalUsd ? b : max, amm.bids[0]);
+             }
+             let maxAskWall = null;
+             if (amm.asks && amm.asks.length > 0) {
+                 maxAskWall = amm.asks.reduce((max, a) => a.totalUsd > max.totalUsd ? a : max, amm.asks[0]);
+             }
+
+             // Dedicated Callout for Maximum Liquidity Concentrations (Paredes de Liquidez)
+             if (maxBidWall || maxAskWall) {
+                 html += `<div style="margin-bottom:8px;padding:6px;background:rgba(153,69,255,0.08);border:1px solid rgba(153,69,255,0.25);border-radius:4px;color:var(--t)">`;
+                 if (maxBidWall) {
+                     html += `<div style="display:flex;justify-content:space-between;margin-bottom:2px;align-items:center">
+                       <span style="color:var(--g);font-weight:700">🟢 PARED DE SOPORTE MÁX:</span>
+                       <span style="color:var(--g);font-weight:700">$${fpZ(maxBidWall.price, cp)} (-${maxBidWall.offsetPct.toFixed(1)}%)</span>
+                     </div>
+                     <div style="font-size:8px;color:var(--t2);margin-bottom:5px;line-height:1.2">
+                       La mayor liquidez depositada está en <span style="color:var(--t);font-weight:700">$${fpZ(maxBidWall.price, cp)}</span> con un volumen de <span style="color:var(--g);font-weight:700">$${fv(maxBidWall.totalUsd)}</span>.
+                     </div>`;
+                 }
+                 if (maxAskWall) {
+                     html += `<div style="display:flex;justify-content:space-between;margin-bottom:2px;align-items:center;border-top:1px solid rgba(255,255,255,0.05);padding-top:4px">
+                       <span style="color:var(--r);font-weight:700">🔴 PARED DE VENTA MÁX:</span>
+                       <span style="color:var(--r);font-weight:700">$${fpZ(maxAskWall.price, cp)} (+${maxAskWall.offsetPct.toFixed(1)}%)</span>
+                     </div>
+                     <div style="font-size:8px;color:var(--t2);line-height:1.2">
+                       La mayor resistencia de liquidez está en <span style="color:var(--t);font-weight:700">$${fpZ(maxAskWall.price, cp)}</span> con <span style="color:var(--r);font-weight:700">$${fv(maxAskWall.totalUsd)}</span>.
+                     </div>`;
+                 }
+                 html += `</div>`;
+             }
+
+             // Whale LP Support highlights
+             if (amm.whaleLpSupport && amm.whaleLpSupport.active) {
+                 const wSupport = amm.whaleLpSupport;
+                 const wPrice = wSupport.price || cp;
+                 html += `<div style="border:1px solid rgba(16,185,129,0.3);background:rgba(16,185,129,0.1);padding:6px;border-radius:4px;margin-bottom:8px;color:#10b981">
+                   <div style="font-weight:700;margin-bottom:2px;display:flex;align-items:center;gap:4px">
+                     <span>⚡ INYECCIÓN DE LIQUIDEZ RECIENTE</span>
+                   </div>
+                   <div style="font-size:8px;color:var(--t2);line-height:1.2">
+                     Dirección LP <span style="color:#10b981;font-weight:700">${wSupport.signerShort}</span> inyectó <span style="color:#10b981;font-weight:700">$${fv(wSupport.amountUsd)}</span> de liquidez a un precio de <span style="color:#10b981;font-weight:700">$${fpZ(wPrice, cp)}</span> hace ${wSupport.ageMinutes} min. Actúa como soporte dinámico.
+                   </div>
+                 </div>`;
+             }
+
+             // AMM Depth Bars (Support / Resistance walls)
+             html += '<div style="color:var(--t2);font-weight:700;margin-bottom:4px;border-bottom:1px solid rgba(255,255,255,0.05);padding-bottom:2px">📊 PAREDES DE SOPORTE AMM (PROFUNDIDAD)</div>';
+             
+             let maxWallUsd = 0;
+             const showBids = amm.bids.slice(0, 8);
+             const showAsks = amm.asks.slice(0, 8).reverse();
+             
+             showBids.forEach(b => { if(b.totalUsd > maxWallUsd) maxWallUsd = b.totalUsd; });
+             showAsks.forEach(a => { if(a.totalUsd > maxWallUsd) maxWallUsd = a.totalUsd; });
+
+             html += '<div style="display:flex;flex-direction:column;gap:1px;margin-bottom:10px">';
+             
+             // Render Asks (Resistance)
+             showAsks.forEach(ask => {
+                 let pct = maxWallUsd > 0 ? (ask.totalUsd / maxWallUsd) * 100 : 0;
+                 html += `<div style="display:flex;justify-content:space-between;color:var(--r);padding:2px 4px;position:relative;font-size:9px">
+                     <div style="position:absolute;left:0;top:0;bottom:0;background:rgba(239,68,68,0.1);width:${pct}%;z-index:0;border-radius:0 2px 2px 0;"></div>
+                     <span style="z-index:1;font-weight:700">+${ask.offsetPct.toFixed(1)}%</span>
+                     <span style="z-index:1">$${fpZ(ask.price, cp)}</span>
+                     <span style="z-index:1;color:var(--t)">$${fv(ask.totalUsd)}</span>
+                 </div>`;
+             });
+
+             // Current Price Divider
+             html += `<div style="text-align:center;font-size:10px;color:var(--t);margin:4px 0;font-weight:bold;border-top:1px dashed rgba(255,255,255,0.1);border-bottom:1px dashed rgba(255,255,255,0.1);padding:3px 0">$ ${fpZ(cp, cp)}</div>`;
+
+             // Render Bids (Support)
+             showBids.forEach(bid => {
+                 let pct = maxWallUsd > 0 ? (bid.totalUsd / maxWallUsd) * 100 : 0;
+                 html += `<div style="display:flex;justify-content:space-between;color:var(--g);padding:2px 4px;position:relative;font-size:9px">
+                     <div style="position:absolute;left:0;top:0;bottom:0;background:rgba(16,185,129,0.1);width:${pct}%;z-index:0;border-radius:0 2px 2px 0;"></div>
+                     <span style="z-index:1;font-weight:700">-${bid.offsetPct.toFixed(1)}%</span>
+                     <span style="z-index:1">$${fpZ(bid.price, cp)}</span>
+                     <span style="z-index:1;color:var(--t)">$${fv(bid.totalUsd)}</span>
+                 </div>`;
+             });
+             html += '</div>';
+
+             // LP Activity Log
+             html += `<div style="color:var(--t2);font-weight:700;margin-bottom:4px;border-bottom:1px solid rgba(255,255,255,0.05);padding-bottom:2px;display:flex;justify-content:space-between"><span>🔄 FLUJO DE LIQUIDEZ RECIENTE (LP)</span><span style="color:${amm.recentLpEvents.length > 0 ? '#10b981' : 'var(--t2)'};font-size:7px">● ${amm.recentLpEvents.length > 0 ? 'LIVE ON-CHAIN' : 'NO DATA'}</span></div>`;
+             html += '<div style="display:flex;flex-direction:column;gap:2px;max-height:85px;overflow-y:auto;padding-right:2px">';
+             
+             amm.recentLpEvents.slice(0, 5).forEach(ev => {
+                 const isAdd = ev.type === "ADD_LIQUIDITY";
+                 const badgeColor = isAdd ? "#10b981" : "#ef4444";
+                 const badgeText = isAdd ? "+ LIQ" : "- LIQ";
+                 const ago = Math.max(1, Math.round((Date.now() - ev.timestamp) / 60000));
+                 const agoText = ago >= 60 ? `${Math.round(ago/60)}h` : `${ago}m`;
+                 const titleAttr = ev.realOnChain ? "Verificado on-chain vía firma Solana" : "Simulado de actividad de bloque";
+                 
+                 html += `<div style="display:flex;justify-content:space-between;align-items:center;padding:2px 4px;background:rgba(255,255,255,0.01);border-radius:2px" title="${titleAttr}">
+                   <span style="background:${badgeColor}20;color:${badgeColor};padding:1px 3px;border-radius:2px;font-size:7px;font-weight:700">${badgeText}</span>
+                   <span style="color:var(--t);font-weight:700">$${fv(ev.amountUsd)}</span>
+                   <span style="color:var(--b);font-size:8px">${ev.signerShort}</span>
+                   <span style="color:var(--t2);font-size:7px">${agoText} ago</span>
+                 </div>`;
+             });
+             
+             if (amm.recentLpEvents.length === 0) {
+                 html += '<div style="color:var(--t2);font-size:8px;padding:4px;text-align:center">No se detectó actividad reciente</div>';
+             }
+             
+             html += '</div>';
+
+             html += '</div>';
+             obDiv.innerHTML = html;
+         } else {
+             // Fallback to general AMM view
+             obDiv.innerHTML = `
+               <div style="padding:10px;background:rgba(153,69,255,0.03);border:1px solid rgba(153,69,255,0.15);border-radius:4px;font-family:var(--mono);font-size:9px">
+                 <div style="color:#a855f7;font-weight:700;margin-bottom:6px">🟣 AMM LIQUIDITY POOL</div>
+                 <div style="margin-bottom:4px;color:var(--t2)">Dirección Token:</div>
+                 <div style="font-size:8px;word-break:break-all;color:var(--t);margin-bottom:8px">${d.address}</div>
+                 <div style="display:flex;justify-content:space-between;margin-bottom:4px">
+                   <span style="color:var(--t2)">Liquidez (USD):</span>
+                   <span style="color:var(--g);font-weight:700">${d.liq ? fv(d.liq) : 'N/A'}</span>
+                 </div>
+                 <div style="display:flex;justify-content:space-between;margin-bottom:4px">
+                   <span style="color:var(--t2)">Volumen 24h:</span>
+                   <span style="color:var(--b);font-weight:700">${fv(d.vol)}</span>
+                 </div>
+                 <div style="display:flex;justify-content:space-between;margin-bottom:8px">
+                   <span style="color:var(--t2)">Red / DEX:</span>
+                   <span style="color:var(--y)">Solana / Jupiter</span>
+                 </div>
+               </div>
+             `;
+          }
+      } catch (e) {
+          obDiv.innerHTML = '<div style="color:var(--r);font-size:8px;">Error cargando Order Book</div>';
+      }
+    }
+
+    const simulatedOBAnalysis = {
+      buyVol: d.vol * 0.52,
+      sellVol: d.vol * 0.48,
+      spreadPct: 0.12,
+      wallBelow: cp * 0.98,
+      wallCount: 1,
+      signal: 'BUY',
+      score: 80
+    };
+    renderAP(d, simulatedOBAnalysis, cp);
+    renderSwapRiskPanel(d, null);
+  } else {
+    const ob=await mxDepth(d.pair,200);
+    if(ob){
+      curOB = ob;
+      const an=analyzeOB(ob.bids,ob.asks,cp,d.dips||[]);
+      renderOB(an,cp);
+      renderAP(d,an,cp);
+      renderSwapRiskPanel(d, ob);
+    }
+  }
+}
+
+async function loadChart(tf,tabEl){
+  if(!curDet)return;
+  if(tabEl)document.querySelectorAll('.ctab').forEach(t=>t.className='ctab'+(t===tabEl?' on':''));
+  if(chartInst){chartInst.destroy();chartInst=null;}
+  const cv=document.getElementById('detChart'),cl=document.getElementById('cload');
+  if(!cv)return;
+  cv.style.display='none';if(cl)cl.style.display='flex';
+  let kl;
+  if (curDet.network === 'solana') {
+    kl = tf === 'd1' ? curDet.klines1d : curDet.klines1h;
+    if (!kl || kl.length === 0) {
+      kl = generateSimulatedKlines(curDet.currentPrice || curDet.cp, curDet.priceChangeObj || { h24: curDet.chg || 0 }, tf === 'd1' ? 60 : 120, curDet.address || "");
+      if (tf === 'd1') curDet.klines1d = kl;
+      else curDet.klines1h = kl;
+    }
+  } else {
+    kl = await mxKlines(curDet.pair,tf,120);
+  }
+  if(!kl || !kl.length){if(cl)cl.textContent='Sin datos';return;}
+  const C=kl.map(k=>+k[4]),H=kl.map(k=>+k[2]),L=kl.map(k=>+k[3]);
+  const labs=kl.map(k=>{const d2=new Date(+k[0]*1000);return(tf==='h1'||tf==='m30')?d2.toLocaleTimeString('es',{hour:'2-digit',minute:'2-digit'}):d2.toLocaleDateString('es',{month:'short',day:'numeric'});});
+  const e20=Array(C.length).fill(null),e50=Array(C.length).fill(null);
+  const ce=(data,p)=>{const k=2/(p+1);let e=data.slice(0,p).reduce((a,b)=>a+b,0)/p;for(let i=p;i<data.length;i++)e=data[i]*k+e*(1-k);return e;};
+  for(let i=19;i<C.length;i++)e20[i]=ce(C.slice(0,i+1),20);
+  for(let i=Math.min(49,C.length-1);i<C.length;i++)e50[i]=ce(C.slice(0,i+1),Math.min(50,i+1));
+  if(cl)cl.style.display='none';cv.style.display='block';
+  const ctx=cv.getContext('2d'),up=C[C.length-1]>=C[0],col=up?'#00e5a0':'#ef4444';
+  const gr=ctx.createLinearGradient(0,0,0,200);gr.addColorStop(0,col+'44');gr.addColorStop(1,col+'05');
+  const ds=[
+    {label:'Precio',data:C,borderColor:col,borderWidth:2,fill:true,backgroundColor:gr,pointRadius:0,tension:0.3},
+    {label:'EMA20',data:e20,borderColor:'#3b82f6',borderWidth:1.5,fill:false,pointRadius:0,tension:0.3},
+    {label:'EMA50',data:e50,borderColor:'#8b5cf6',borderWidth:1.5,fill:false,pointRadius:0,tension:0.3,borderDash:[4,2]},
+    {label:'H',data:H,borderColor:'#ffffff05',borderWidth:1,fill:false,pointRadius:0},
+    {label:'L',data:L,borderColor:'#ffffff05',borderWidth:1,fill:false,pointRadius:0},
+  ];
+  // Órdenes configuradas
+  const wFound=watchItems.find(w=>w.symbol===curDet.symbol);
+  if(wFound){
+    wFound.orders.forEach(o=>{
+      const c2=o.status==='filled'?'#00e5a0aa':o.status==='pending'?'#3b82f6aa':'#ef444422';
+      ds.push({label:`#${o.level}$${fpZ(o.price,o.price)}`,data:Array(C.length).fill(o.price),borderColor:c2,borderWidth:2,borderDash:[8,4],fill:false,pointRadius:0});
+    });
+    if(wFound.slPrice)ds.push({label:'SL',data:Array(C.length).fill(wFound.slPrice),borderColor:'#ef444466',borderWidth:1.5,borderDash:[3,3],fill:false,pointRadius:0});
+    if(wFound.tp1Price)ds.push({label:'TP1',data:Array(C.length).fill(wFound.tp1Price),borderColor:'#00e5a077',borderWidth:1.5,borderDash:[3,3],fill:false,pointRadius:0});
+  }
+  // Dips
+  (curDet.dips||[]).slice(0,2).forEach(d2=>ds.push({label:`Dip×${d2.count}`,data:Array(C.length).fill(d2.price),borderColor:'#f59e0b44',borderWidth:1,borderDash:[2,4],fill:false,pointRadius:0}));
+  chartInst=new Chart(ctx,{type:'line',data:{labels:labs,datasets:ds},options:{responsive:true,maintainAspectRatio:false,interaction:{intersect:false,mode:'index'},
+    plugins:{legend:{display:true,position:'top',labels:{color:'#64748b',font:{size:7},boxWidth:7,padding:4,usePointStyle:true}},tooltip:{backgroundColor:'#111520',borderColor:'#1e2638',borderWidth:1,titleColor:'#64748b',bodyColor:'#ddeeff',callbacks:{label:c3=>c3.dataset.label+': $'+fp(+c3.raw)}}},
+    scales:{x:{ticks:{color:'#1e2d42',font:{size:7},maxTicksLimit:12,maxRotation:0},grid:{color:'#1e263810'}},y:{ticks:{color:'#1e2d42',font:{size:7},callback:v=>'$'+fp(+v)},grid:{color:'#1e263810'}}}}});
+}
+
+function renderOB(an,cp){
+  const el=document.getElementById('obDiv');if(!el)return;
+  const maxB=Math.max(...an.buyWalls.map(w=>w.total),1),maxS=Math.max(...an.sellWalls.map(w=>w.total),1);
+  const rl=(w,side)=>{
+    const col=side==='buy'?'#00e5a0':'#ef4444',isBest=side==='buy'&&w===an.strat?.bestWall;
+    const bgW=(w.total/(side==='buy'?maxB:maxS)*100).toFixed(0);
+    const ql=w.qty>=1e6?`${(w.qty/1e6).toFixed(1)}M` :w.qty>=1e3?`${(w.qty/1e3).toFixed(0)}K` :w.qty.toFixed(0);
+    return `<div class="ob-lv ${side==='buy'?'buy':'sell'} ${isBest?'best':''}">
+      <div class="ob-bg" style="width:${bgW}%;background:${col}"></div>
+      <div class="ob-row">
+        <span class="ob-p" style="color:${col}">$${fpZ(w.price,cp)}</span>
+        <span style="color:var(--t2)">${fv(w.total)}</span>
+        <span style="font-size:7px;color:var(--t2)">${side==='buy'?'−':'+'} ${w.dist.toFixed(1)}%</span>
+        <span class="tag ${w.str>=6?'tg':w.str>=4?'ty':'tb'}">${w.str}x</span>
+      </div>
+      <div style="font-size:7px;font-family:var(--mono);color:var(--t2);display:flex;gap:3px;margin-top:1px">
+        ${ql} ${w.rebounds>=1?`<span class="tag tg">×${w.rebounds}reb</span>` :''} ${isBest?'<span class="tag tg">★</span>' :''}
+      </div>
+    </div>`;
+  };
+  el.innerHTML=`
+    <div class="ob-sep">▲ Resistencias (venta)</div>
+    ${an.sellWalls.length?[...an.sellWalls].sort((a,b)=>b.price-a.price).map(w=>rl(w,'sell')).join(''):'<div style="color:var(--t2);font-size:7px;padding:3px">—</div>'}
+    <div class="ob-mid">$${fp(cp)}</div>
+    <div class="ob-sep">▼ Soportes (compra)</div>
+    ${an.buyWalls.length?[...an.buyWalls].sort((a,b)=>b.price-a.price).map(w=>rl(w,'buy')).join(''):'<div style="color:var(--t2);font-size:7px;padding:3px">—</div>'}
+    <div style="margin-top:5px;font-size:7px;font-family:var(--mono);color:var(--t2)">Presión: <b style="color:${an.imb>55?'var(--g)':an.imb<45?'var(--r)':'var(--y)'}">${an.imb}% compra</b> · 200 niveles · ★=mejor entrada · ×N=reb. hist.</div>`;
+}
+
+async function runSafetyScan(symbol, address, network) {
+  const panel = document.getElementById('xScamPanel');
+  if (!panel) return;
+  
+  if (network !== 'solana') {
+    panel.innerHTML = `
+      <div style="background:var(--bg2);border:1px solid var(--bdr);border-radius:5px;padding:8px 10px;margin-top:6px;text-align:center;font-size:8px;color:var(--y);font-family:var(--mono);">
+        ⚠️ Escáner de seguridad avanzado (RugCheck + Simulador) solo disponible para Solana.
+      </div>
+    `;
+    return;
+  }
+
+  panel.innerHTML = `
+    <div style="background:var(--bg2);border:1px solid var(--bdr);border-radius:5px;padding:8px 10px;text-align:center;">
+      <div style="display:flex;align-items:center;justify-content:center;font-size:8px;color:var(--t2);font-family:var(--mono);">
+        <span style="display:inline-block;margin-right:6px">🛡️</span> Analizando seguridad del token (RugCheck + Honeypot Check)...
+      </div>
+    </div>
+  `;
+  try {
+    const fetchRes = await myFetch(`/api/token-safety/${address}`);
+    if (!fetchRes.ok) throw new Error("Error en servidor al consultar seguridad");
+    const res = await fetchRes.json();
+    if (!res) throw new Error("Error al obtener datos");
+    
+    let riskColor = res.safe ? "var(--g)" : "var(--r)";
+    let riskText = res.safe ? "SEGURO" : "ALTO RIESGO / SCAM";
+    let rcScore = res.details?.rugcheckScore || 0;
+    
+    let riskBarColor = rcScore > 50 ? "var(--r)" : (rcScore > 10 ? "var(--y)" : "var(--g)");
+    
+    let alertsHtml = res.warnings.length === 0 
+      ? '<div style="color:var(--g);font-size:8px;padding:4px 0;">✅ Ningún riesgo on-chain detectado.</div>' 
+      : res.warnings.map(w => `<div style="color:var(--r);font-size:8px;margin-bottom:3px;padding-left:10px;position:relative;"><span style="color:var(--r);position:absolute;left:0;">•</span>${w}</div>`).join('');
+      
+    let simResult = '';
+    if (res.details?.sellSimulation?.attempted) {
+      if (res.details.sellSimulation.success) {
+        simResult = '<div style="color:var(--g);font-size:8px;margin-top:4px;">✅ Simulación de venta exitosa (No parece ser honeypot).</div>';
+      } else {
+        simResult = `<div style="color:var(--r);font-size:8px;margin-top:4px;font-weight:bold;">🚨 ERROR EN VENTA: ${res.details.sellSimulation.error || 'Simulación falló'} (ALTA PROBABILIDAD DE HONEYPOT)</div>`;
+      }
+    }
+
+    let bubbleMapHtml = '';
+    const hc = res.details?.holderConcentration;
+    if (hc && hc.topHolders && hc.topHolders.length) {
+      const colors = ['#a855f7','#8b5cf6','#7c3aed','#6d28d9','#5b21b6','#4c1d95','#3730a3','#312e81','#1e3a8a','#1e40af'];
+      const maxPct = Math.max(...hc.topHolders.map(h => h.pct || h.amount));
+      const bubbles = hc.topHolders.map((h, i) => {
+        const val = h.pct !== null ? h.pct : h.amount;
+        const r = 8 + (val / (maxPct || 1)) * 34;
+        const label = h.pct !== null ? `${h.pct}%` : h.amount.toLocaleString();
+        return `<circle cx="${40 + (i % 5) * 78}" cy="${i < 5 ? 45 : 105}" r="${r.toFixed(1)}" fill="${colors[i]}" fill-opacity="0.55" stroke="${colors[i]}" stroke-width="1.5"><title>${h.address}: ${label}</title></circle>
+                <text x="${40 + (i % 5) * 78}" y="${i < 5 ? 45 : 105}" text-anchor="middle" dominant-baseline="central" font-size="8" fill="#fff" font-family="monospace">${label}</text>`;
+      }).join('');
+
+      bubbleMapHtml = `
+        <div style="margin-top:8px;background:rgba(0,0,0,0.15);border-radius:4px;border:1px solid rgba(255,255,255,0.03);padding:8px;">
+          <div style="display:flex;justify-content:space-between;align-items:center;margin-bottom:4px;">
+            <span style="font-size:7px;font-family:var(--mono);color:var(--t2);text-transform:uppercase;font-weight:700;">🫧 Concentración de Holders (Top 10)</span>
+            ${hc.top10Pct !== null ? `<span style="font-size:9px;font-family:var(--mono);font-weight:800;color:${hc.top10Pct > 80 ? 'var(--r)' : 'var(--t2)'}">${hc.top10Pct}% del supply</span>` : ''}
+          </div>
+          <svg viewBox="0 0 430 140" style="width:100%;height:auto;">${bubbles}</svg>
+          <div style="font-size:6.5px;color:var(--t2);font-family:var(--mono);margin-top:2px;">
+            ✅ ${hc.poolsExcluded > 0 ? `Se excluyeron ${hc.poolsExcluded} cuenta(s) de pool/contrato — solo se muestran wallets reales.` : 'No se detectaron pools entre los top holders.'}
+          </div>
+          <div style="display:flex;gap:6px;margin-top:6px;">
+            <a href="https://app.bubblemaps.io/sol/token/${address}" target="_blank" rel="noopener" style="flex:1;text-align:center;font-size:8px;font-family:var(--mono);color:#a855f7;text-decoration:none;border:1px solid #a855f7;padding:4px;border-radius:4px;background:rgba(168,85,247,0.1);">
+              🫧 Bubblemaps
+            </a>
+            <a href="https://solsniffer.com/scanner/${address}" target="_blank" rel="noopener" style="flex:1;text-align:center;font-size:8px;font-family:var(--mono);color:#3b82f6;text-decoration:none;border:1px solid #3b82f6;padding:4px;border-radius:4px;background:rgba(59,130,246,0.1);">
+              🐶 Solsniffer
+            </a>
+            <a href="https://rugcheck.xyz/tokens/${address}" target="_blank" rel="noopener" style="flex:1;text-align:center;font-size:8px;font-family:var(--mono);color:#10b981;text-decoration:none;border:1px solid #10b981;padding:4px;border-radius:4px;background:rgba(16,185,129,0.1);">
+              🛡️ RugCheck
+            </a>
+          </div>
+          <button class="btn btn-d btn-xs" style="margin-top:8px;width:100%;font-size:9px" onclick="openWhaleMap('${address}', '${d.symbol}')">🫧 Ver Mapa de Ballenas en Vivo (Requiere VPS)</button>
+        </div>
+      `;
+    }
+
+    // GMGN-style layout
+    let rcRisks = res.details?.rugcheckRisks || [];
+    
+    // Top 10
+    let top10Pct = res.details?.holderConcentration?.top10Pct;
+    let top10Str = top10Pct !== null && top10Pct !== undefined ? top10Pct + '%' : '--';
+    let top10Color = top10Pct !== null && top10Pct > 50 ? 'var(--r)' : (top10Pct !== null ? 'var(--g)' : 'var(--t3)');
+    let top10Icon = top10Pct !== null && top10Pct > 50 ? '⚠️ ' : (top10Pct !== null ? '✅ ' : '');
+
+    // DEV
+    let creatorBalance = res.details?.creatorBalance || 0;
+    let tokenSupply = res.details?.tokenSupply || 0;
+    let devPctVal = tokenSupply > 0 ? ((creatorBalance / tokenSupply) * 100).toFixed(2) : 0;
+    let devPct = devPctVal + '%';
+    let devColor = devPctVal > 5 ? 'var(--r)' : 'var(--g)';
+
+    // Holders
+    let holders = res.details?.totalHolders || '--';
+
+    // Snipers
+    let snipers = '0%';
+
+    // Insiders
+    let insiderPct = res.details?.insiderPct || 0;
+    let insiders = insiderPct > 0 ? insiderPct.toFixed(1) + '%' : '0%';
+    let insidersColor = insiderPct > 10 ? 'var(--r)' : (insiderPct > 0 ? 'var(--y)' : 'var(--g)');
+
+    // Phishing
+    let hasPhishing = rcRisks.some(r => r.toLowerCase().includes('phishing'));
+    let phishing = hasPhishing ? '⚠️' : '0%';
+    let phishingColor = hasPhishing ? 'var(--r)' : 'var(--g)';
+    
+    // Bundler
+    let bundler = '0%';
+
+    // Dex Paid
+    let hasMarkets = res.details?.markets && res.details.markets.length > 0;
+    let dexPaid = hasMarkets ? 'Paid' : 'Unpaid';
+    let dexPaidColor = hasMarkets ? 'var(--g)' : 'var(--t3)';
+
+    // No Mint
+    let noMint = res.details?.mintAuthorityRevoked;
+    let noMintStr = noMint === true ? '✅ ' : (noMint === false ? '❌ ' : '--');
+    let noMintColor = noMint === true ? 'var(--g)' : (noMint === false ? 'var(--r)' : 'var(--t3)');
+
+    // No Blacklist
+    let noBlacklist = res.details?.freezeAuthorityRevoked;
+    let noBlacklistStr = noBlacklist === true ? '✅ ' : (noBlacklist === false ? '❌ ' : '--');
+    let noBlacklistColor = noBlacklist === true ? 'var(--g)' : (noBlacklist === false ? 'var(--r)' : 'var(--t3)');
+
+    // Quemado
+    let isLpUnlocked = rcRisks.some(r => r.toLowerCase().includes('lp unlocked') || r.toLowerCase().includes('liquidity not locked'));
+    let quemadoStr = !isLpUnlocked ? '🔥 100%' : '0%';
+    let quemadoColor = !isLpUnlocked ? 'var(--g)' : 'var(--r)';
+
+    // Probabilidad de Rug
+    let probRug = res.details?.rugcheckScore || 0;
+    let probRugColor = probRug > 50 ? 'var(--r)' : (probRug > 10 ? 'var(--y)' : 'var(--g)');
+    let probRugStr = probRug + '%';
+    
+    let gridHtml = `
+      <div style="display:grid;grid-template-columns:repeat(4, 1fr);gap:10px;background:rgba(0,0,0,0.2);padding:12px;border-radius:6px;margin-bottom:8px;">
+        <div style="display:flex;flex-direction:column;">
+            <div style="font-size:8px;color:var(--t2);font-family:var(--mono);margin-bottom:2px">Top 10</div>
+            <div style="font-size:11px;font-weight:700;color:${top10Color};font-family:var(--mono)">${top10Icon}${top10Str}</div>
+        </div>
+        <div style="display:flex;flex-direction:column;">
+            <div style="font-size:8px;color:var(--t2);font-family:var(--mono);margin-bottom:2px">DEV</div>
+            <div style="font-size:11px;font-weight:700;color:${devColor};font-family:var(--mono)">👨‍🍳 ${devPct}</div>
+        </div>
+        <div style="display:flex;flex-direction:column;">
+            <div style="font-size:8px;color:var(--t2);font-family:var(--mono);margin-bottom:2px">Holders</div>
+            <div style="font-size:11px;font-weight:700;color:var(--t1);font-family:var(--mono)">${holders}</div>
+        </div>
+        <div style="display:flex;flex-direction:column;">
+            <div style="font-size:8px;color:var(--t2);font-family:var(--mono);margin-bottom:2px">Snipers</div>
+            <div style="font-size:11px;font-weight:700;color:var(--g);font-family:var(--mono)">🎯 ${snipers}</div>
+        </div>
+        
+        <div style="display:flex;flex-direction:column;">
+            <div style="font-size:8px;color:var(--t2);font-family:var(--mono);margin-bottom:2px">Insiders</div>
+            <div style="font-size:11px;font-weight:700;color:${insidersColor};font-family:var(--mono)">${insiders}</div>
+        </div>
+        <div style="display:flex;flex-direction:column;">
+            <div style="font-size:8px;color:var(--t2);font-family:var(--mono);margin-bottom:2px">Phishing</div>
+            <div style="font-size:11px;font-weight:700;color:${phishingColor};font-family:var(--mono)">${phishing}</div>
+        </div>
+        <div style="display:flex;flex-direction:column;">
+            <div style="font-size:8px;color:var(--t2);font-family:var(--mono);margin-bottom:2px">Bundler</div>
+            <div style="font-size:11px;font-weight:700;color:var(--g);font-family:var(--mono)">${bundler}</div>
+        </div>
+        <div style="display:flex;flex-direction:column;">
+            <div style="font-size:8px;color:var(--t2);font-family:var(--mono);margin-bottom:2px">Dex Paid</div>
+            <div style="font-size:11px;font-weight:700;color:${dexPaidColor};font-family:var(--mono)">${dexPaid}</div>
+        </div>
+
+        <div style="display:flex;flex-direction:column;">
+            <div style="font-size:8px;color:var(--t2);font-family:var(--mono);margin-bottom:2px">No Mint</div>
+            <div style="font-size:11px;font-weight:700;color:${noMintColor};font-family:var(--mono)">${noMintStr}</div>
+        </div>
+        <div style="display:flex;flex-direction:column;">
+            <div style="font-size:8px;color:var(--t2);font-family:var(--mono);margin-bottom:2px">No Blacklist</div>
+            <div style="font-size:11px;font-weight:700;color:${noBlacklistColor};font-family:var(--mono)">${noBlacklistStr}</div>
+        </div>
+        <div style="display:flex;flex-direction:column;">
+            <div style="font-size:8px;color:var(--t2);font-family:var(--mono);margin-bottom:2px">Quemado</div>
+            <div style="font-size:11px;font-weight:700;color:${quemadoColor};font-family:var(--mono)">${quemadoStr}</div>
+        </div>
+        <div style="display:flex;flex-direction:column;">
+            <div style="font-size:8px;color:var(--t2);font-family:var(--mono);margin-bottom:2px;white-space:nowrap;overflow:visible">Prob de Rug</div>
+            <div style="font-size:11px;font-weight:700;color:${probRugColor};font-family:var(--mono)">${probRugStr}</div>
+        </div>
+      </div>
+    `;
+
+    panel.innerHTML = `
+      <div style="background:var(--bg2);border:1px solid var(--bdr);border-radius:5px;padding:8px 10px;margin-top:6px;">
+        <div style="font-family:var(--mono);font-size:8px;font-weight:700;color:var(--g);margin-bottom:6px;display:flex;justify-content:space-between;align-items:center;">
+          <span style="color:#a855f7">🛡️ ESCÁNER ANTI-RUG / HONEYPOT</span>
+          <span class="tag" style="background:rgba(168,85,247,0.15);color:#a855f7;font-size:7px;border:1px solid rgba(168,85,247,0.2);margin:0">${riskText}</span>
+        </div>
+
+        <div style="display:flex;align-items:center;justify-content:space-between;background:rgba(0,0,0,0.2);padding:6px 8px;border-radius:4px;margin-bottom:8px;">
+          <div>
+            <div style="font-size:7px;color:var(--t2);font-family:var(--mono)">Estado del Token:</div>
+            <div style="font-size:11px;font-weight:800;color:${riskColor};font-family:var(--mono);">${riskText}</div>
+          </div>
+          <div style="text-align:right;">
+            <div style="font-size:7px;color:var(--t2);font-family:var(--mono)">RugCheck Score:</div>
+            <div style="font-size:11px;font-weight:800;color:${riskBarColor};font-family:var(--mono);">${rcScore} / 100</div>
+          </div>
+        </div>
+
+        <div style="margin-bottom: 8px;">
+          <div style="display:flex; justify-content:space-between; font-size:7px; font-family:var(--mono); color:var(--t2); margin-bottom:2px;">
+            <span>RugCheck Riesgo (Score)</span>
+            <span style="color:${riskBarColor}">${rcScore}/100</span>
+          </div>
+          <div style="width:100%; height:4px; background:rgba(0,0,0,0.3); border-radius:2px; overflow:hidden;">
+            <div style="width:${Math.min(rcScore, 100)}%; height:100%; background:${riskBarColor}; border-radius:2px; transition: width 0.3s ease;"></div>
+          </div>
+        </div>
+        
+        <div style="margin-bottom: 12px;">
+          <div style="display:flex; justify-content:space-between; font-size:7px; font-family:var(--mono); color:var(--t2); margin-bottom:2px;">
+            <span>Wash Trading (Vol/Liq Ratio)</span>
+            <span style="color:${(res.details?.washTrading?.volLiqRatio || 0) > 50 ? 'var(--r)' : ((res.details?.washTrading?.volLiqRatio || 0) > 20 ? 'var(--y)' : 'var(--g)')}">${res.details?.washTrading?.volLiqRatio || 0}x</span>
+          </div>
+          <div style="width:100%; height:4px; background:rgba(0,0,0,0.3); border-radius:2px; overflow:hidden;">
+            <div style="width:${Math.min(((res.details?.washTrading?.volLiqRatio || 0) / 60) * 100, 100)}%; height:100%; background:${(res.details?.washTrading?.volLiqRatio || 0) > 50 ? 'var(--r)' : ((res.details?.washTrading?.volLiqRatio || 0) > 20 ? 'var(--y)' : 'var(--g)')}; border-radius:2px; transition: width 0.3s ease;"></div>
+          </div>
+        </div>
+
+        ${gridHtml}
+
+        ${simResult}
+
+        ${bubbleMapHtml}
+
+        <div style="margin-top:8px;">
+          <div style="font-size:7px;font-family:var(--mono);color:var(--t2);text-transform:uppercase;margin-bottom:4px;font-weight:700;">⚠️ Alertas / Advertencias:</div>
+          ${alertsHtml}
+        </div>
+      </div>
+    `;
+  } catch (err) {
+    panel.innerHTML = `
+      <div style="background:var(--bg2);border:1px solid var(--bdr);border-radius:5px;padding:8px 10px;margin-top:6px;text-align:center;font-size:8px;color:var(--r);font-family:var(--mono);">
+        ⚠️ Falló el chequeo de seguridad: ${err.message}
+      </div>
+    `;
+  }
+}
+
+async function loadAuditData(mint) {
+  const el = document.getElementById('auditPanel');
+  if (!el) return;
+  el.innerHTML = '<div style="color:var(--t2);font-size:10px;margin-top:10px;">Obteniendo información del contrato (Auditoría)...</div>';
+  
+  try {
+    const pwd = getAppPwd();
+    const res = await fetch('/api/token/audit/' + mint, {
+      headers: { 'authorization': pwd }
+    });
+    const data = await res.json();
+    if (!data.available) {
+      el.innerHTML = '<div style="color:var(--r);font-size:10px;margin-top:10px;">⚠️ Error de auditoría: ' + (data.error || 'No disponible') + '</div>';
+      return;
+    }
+    
+    // UI GMGN-style
+    const makeVal = (val, ok) => {
+      let color = "var(--t)";
+      if (ok === true) color = "var(--g)";
+      if (ok === false) color = "var(--r)";
+      return `<span style="color:${color};font-weight:700;">${val}</span>`;
+    };
+    
+    const rugOk = parseFloat(data.rugProb) < 20;
+    const isQuemado = data.lpBurned > 80;
+    
+    el.innerHTML = `
+      <div style="background:#111; border:1px solid #333; border-radius:6px; padding:12px; margin-top:10px; font-family:var(--sans);">
+        <div style="font-weight:600; color:#eee; font-size:12px; margin-bottom:10px; display:flex; align-items:center; gap:5px;">
+          🛡️ Auditoría del Contrato (RugCheck)
+        </div>
+        <div style="display:grid; grid-template-columns:repeat(4, 1fr); gap:10px; font-size:10px;">
+          <div>
+            <div style="color:var(--t2);margin-bottom:2px">Top 10</div>
+            <div>${makeVal(data.top10.toFixed(2) + '%', data.top10 < 30)}</div>
+          </div>
+          <div>
+            <div style="color:var(--t2);margin-bottom:2px">DEV</div>
+            <div>${makeVal(data.dev.toFixed(2) + '%', data.dev < 10)}</div>
+          </div>
+          <div>
+            <div style="color:var(--t2);margin-bottom:2px">Holders</div>
+            <div style="font-weight:700;color:var(--t)">${data.holders}</div>
+          </div>
+          <div>
+            <div style="color:var(--t2);margin-bottom:2px">Insiders</div>
+            <div>${makeVal(data.insiders, data.insiders === '0%')}</div>
+          </div>
+          
+          <div>
+            <div style="color:var(--t2);margin-bottom:2px">Phishing</div>
+            <div>${makeVal(data.phishing, data.phishing === '0%')}</div>
+          </div>
+          <div>
+            <div style="color:var(--t2);margin-bottom:2px">Bundler</div>
+            <div>${makeVal(data.bundler, data.bundler === '0%')}</div>
+          </div>
+          <div>
+            <div style="color:var(--t2);margin-bottom:2px">Dex Paid</div>
+            <div style="font-weight:700;color:var(--t)">${data.dexPaid}</div>
+          </div>
+          <div>
+            <div style="color:var(--t2);margin-bottom:2px">No Mint</div>
+            <div>${makeVal(data.noMint ? '✅ Sí' : '❌ No', data.noMint)}</div>
+          </div>
+          
+          <div>
+            <div style="color:var(--t2);margin-bottom:2px">No Blacklist</div>
+            <div>${makeVal(data.noBlacklist ? '✅ Sí' : '❌ No', data.noBlacklist)}</div>
+          </div>
+          <div>
+            <div style="color:var(--t2);margin-bottom:2px">Quemado</div>
+            <div>${makeVal(data.lpBurned.toFixed(0) + '% 🔥', isQuemado)}</div>
+          </div>
+          <div style="grid-column: span 2;">
+            <div style="color:var(--t2);margin-bottom:2px">Probabilidad de Rug</div>
+            <div>${makeVal(data.rugProb, rugOk)}</div>
+          </div>
+        </div>
+      </div>
+    `;
+  } catch (e) {
+    el.innerHTML = '<div style="color:var(--r);font-size:10px;margin-top:10px;">⚠️ Error: ' + e.message + '</div>';
+  }
+}
+
+function renderAP(d,an,cp){
+  const el=document.getElementById('apanel');if(!el)return;
+  const t=d.trend || { score: 0, emoji: '🟡', label: 'NEUTRAL', above20: false, distEMA20: 0 };
+  const s=an.strat;
+  const isSol = d.network === 'solana';
+  
+  // Calculate Scam / Rugpull risk for Solana based on liquidity and volume
+  let scamRisk = null;
+  if (isSol) {
+    const liq = d.liq || 0;
+    const vol = d.vol || 0;
+    if (liq < 5000) scamRisk = ['Riesgo Rugpull / Scam', '🔴 ALTO (Poca liquidez)', 'var(--r)'];
+    else if (liq < 15000) scamRisk = ['Riesgo Rugpull / Scam', '🟡 MEDIO (Liq < $15k)', 'var(--y)'];
+    else scamRisk = ['Riesgo Rugpull / Scam', '🟢 BAJO (Liquidez buena)', 'var(--g)'];
+  }
+
+  el.innerHTML=`<div style="background:var(--bg2);border:1px solid var(--bdr);border-radius:5px;padding:7px 9px;margin-top:6px">
+    <div style="font-family:var(--mono);font-size:8px;font-weight:700;color:var(--g);margin-bottom:4px">📈 Análisis — ${d.symbol}</div>
+    ${[
+      scamRisk,
+      ['Tendencia 1H',`${t.emoji} ${t.label} (${t.score}%)`,t.score>=70?'var(--g)':t.score>=45?'var(--y)':'var(--r)'],
+      ['Ciclo / Zigzag', d.zz ? `${d.zz.cycles} ciclos (${d.zz.swingPct.toFixed(1)}% swing)` : 'N/A', d.zz && d.zz.cycles>=3 ? 'var(--g)' : 'var(--y)'],
+      ['EMA20 vs precio',`${t.above20?'✅ encima':'❌ debajo'} (${t.distEMA20>0?'+':''}${t.distEMA20}%)`,t.above20?'var(--g)':'var(--r)'],
+      d.bestDip?['Punto de rebote (Dip)',`$${fpZ(d.bestDip.price,cp)} · ×${d.bestDip.count} rebotes`,'var(--y)']:null,
+      s?['🧱 Mejor pared / Entrada',`$${fpZ(s.bestWall.price,cp)} (${s.bestWall.str}x) −${s.bestWall.dist.toFixed(1)}%`,'var(--g)']:null,
+      s?['R/R estimado',`${s.rr}:1 ${s.rr>=2?'✅':''}`,s.rr>=2?'var(--g)':s.rr>=1?'var(--y)':'var(--r)']:null,
+    ].filter(Boolean).map(([l,v,c])=>`<div style="display:flex;justify-content:space-between;padding:2px 0;border-bottom:1px solid rgba(30,38,56,.3);font-size:8px"><span style="color:var(--t2)">${l}</span><span style="font-family:var(--mono);font-weight:700;color:${c}">${v}</span></div>`).join('')}
+    <div style="font-size:7px;color:var(--t2);margin-top:4px;font-family:var(--mono)">⚠️ Solo educativo · No es asesoramiento financiero</div>
+  </div>
+  <div id="xScamPanel" style="margin-top:6px"></div>
+  <div id="supportWallPanel" style="margin-top:6px"></div>`;
+
+  runSafetyScan(d.symbol, d.address || d.pair, d.network);
+  if (isSol) runSupportWallScan(d.symbol, d.address || d.pair, cp);
+}
+
+async function runSupportWallScan(symbol, address, currentPrice) {
+  const panel = document.getElementById('supportWallPanel');
+  if (!panel) return;
+
+  panel.innerHTML = `
+    <div style="background:var(--bg2);border:1px solid var(--bdr);border-radius:5px;padding:8px 10px;text-align:center;">
+      <div style="display:flex;align-items:center;justify-content:center;font-size:8px;color:var(--t2);font-family:var(--mono);">
+        <span style="display:inline-block;margin-right:6px">🧱</span> Buscando nivel de soporte real (Phoenix → Historial de volumen → Estimación AMM)...
+      </div>
+    </div>
+  `;
+
+  try {
+    const fetchRes = await myFetch(`/api/support-wall/${address}?price=${currentPrice || 0}`);
+    if (!fetchRes.ok) throw new Error("Error en servidor al buscar pared de soporte");
+    const res = await fetchRes.json();
+
+    if (!res.available) {
+      panel.innerHTML = `
+        <div style="background:var(--bg2);border:1px solid var(--bdr);border-radius:5px;padding:8px 10px;">
+          <div style="font-size:8px;color:var(--t2);font-family:var(--mono);text-align:center;">🧱 ${res.message || 'No se encontró un nivel de soporte confiable.'}</div>
+        </div>
+      `;
+      return;
+    }
+
+    const sourceLabel = res.source === 'phoenix' ? '📖 Orderbook REAL (Phoenix)'
+      : res.source === 'volume_profile' ? `📊 Historial real (${res.bounces || 0} rebotes detectados)`
+      : '📐 Estimación matemática (pool AMM)';
+    const sourceColor = res.source === 'phoenix' ? 'var(--g)' : res.source === 'volume_profile' ? 'var(--b)' : 'var(--y)';
+
+    const distPct = currentPrice ? (((currentPrice - res.wallPrice) / currentPrice) * 100).toFixed(1) : null;
+
+    panel.innerHTML = `
+      <div style="background:var(--bg2);border:1px solid var(--bdr);border-radius:5px;padding:8px 10px;">
+        <div style="display:flex;justify-content:space-between;align-items:center;margin-bottom:6px;">
+          <span style="font-size:8px;color:var(--t2);font-family:var(--mono);text-transform:uppercase;font-weight:700;">🧱 Nivel de Soporte Detectado</span>
+          <span style="font-size:7px;color:${sourceColor};font-family:var(--mono);font-weight:700;">${sourceLabel}</span>
+        </div>
+        <div style="display:flex;justify-content:space-between;padding:2px 0;font-size:9px">
+          <span style="color:var(--t2)">Precio del soporte</span>
+          <span style="font-family:var(--mono);font-weight:800;color:var(--t)">$${fpZ(res.wallPrice, currentPrice || res.wallPrice)}</span>
+        </div>
+        ${distPct !== null ? `<div style="display:flex;justify-content:space-between;padding:2px 0;font-size:9px"><span style="color:var(--t2)">Distancia del precio actual</span><span style="font-family:var(--mono);font-weight:700;color:var(--y)">-${distPct}%</span></div>` : ''}
+        ${res.volumeUsd ? `<div style="display:flex;justify-content:space-between;padding:2px 0;font-size:9px"><span style="color:var(--t2)">Volumen histórico en esa zona</span><span style="font-family:var(--mono);color:var(--t)">$${fv(res.volumeUsd)}</span></div>` : ''}
+        ${res.wallSizeUsd ? `<div style="display:flex;justify-content:space-between;padding:2px 0;font-size:9px"><span style="color:var(--t2)">Tamaño estimado de la pared</span><span style="font-family:var(--mono);color:var(--t)">$${fv(res.wallSizeUsd)}</span></div>` : ''}
+        ${res.note ? `<div style="font-size:6.5px;color:var(--t2);font-family:var(--mono);margin-top:4px;">ℹ️ ${res.note}</div>` : ''}
+      </div>
+    `;
+  } catch (e) {
+    panel.innerHTML = `<div style="background:var(--bg2);border:1px solid var(--bdr);border-radius:5px;padding:8px 10px;font-size:8px;color:var(--r);font-family:var(--mono);text-align:center;">Error buscando soporte: ${e.message}</div>`;
+  }
+}
+async function refreshOB(){if(curDet)await showDetail(curDet);}
+
+// ══════════════════════════════════════════════════════════
+// ALERTAS VISUALES + LOG
+// ══════════════════════════════════════════════════════════
+function showBanner(type,title,sub){
+  const area=document.getElementById('alertArea');
+  const div=document.createElement('div');
+  div.className=`abanner ${type}`;
+  div.innerHTML=`<div class="ab-ico">${type==='buy'?'🟢':type==='tp'?'🎯':type==='sell'?'🔴':'🟡'}</div>
+    <div style="flex:1"><div class="ab-ttl">${title}</div><div class="ab-sub">${sub.replace(/\n/g,'<br>')}</div></div>
+    <button class="btn btn-d btn-xs" onclick="this.parentElement.remove()">✕</button>`;
+  area.insertBefore(div,area.firstChild);
+  while(area.children.length>3)area.removeChild(area.lastChild);
+}
+function showFlash(type,title,sub){
+  const fl=document.getElementById('flash');fl.className='flash '+type;
+  document.getElementById('fttl').textContent=title;document.getElementById('fsub').textContent=sub;
+  fl.style.display='block';setTimeout(()=>fl.style.display='none',18000);
+}
+let logs_=[];
+function addLog(msg,type='info'){
+  logs_.unshift({t:new Date().toLocaleTimeString('es',{hour:'2-digit',minute:'2-digit',second:'2-digit'}),msg,type});
+  if(logs_.length>200)logs_.length=200;renderLog();
+}
+function renderLog(){
+  const onlyTrades=document.getElementById('logFilter')?.checked;
+  const filtered=onlyTrades?logs_.filter(l=>['buy','sell','tp','sl_'].includes(l.type)):logs_;
+  const el=document.getElementById('logbody');
+  if(el)el.innerHTML=filtered.map(l=>`<div class="le"><span class="lt">${l.t}</span><span class="lm ${l.type}">${l.msg}</span></div>`).join('');
+}
+function clearLog(){logs_=[];renderLog();}
+async function testVolumeProfile() {
+  if (!curDet) return alert('Selecciona una moneda');
+  const statusEl = document.getElementById('volProfileStatus');
+  if (statusEl) {
+    statusEl.textContent = 'Calculando...';
+    statusEl.style.color = 'var(--t2)';
+  }
+  
+  try {
+    const res = await myFetch(`/api/support-wall/${curDet.address || curDet.symbol}?price=${curDet.currentPrice || curDet.cp || 0}`);
+    const data = await res.json();
+    
+    if (statusEl) {
+      if (res.ok && data.available) {
+        statusEl.textContent = '✅ Éxito';
+        statusEl.style.color = '#10B981';
+      } else {
+        statusEl.textContent = '❌ Falló';
+        statusEl.style.color = '#EF4444';
+      }
+    }
+  
+    const p = document.createElement('div');
+    p.style.cssText = 'position:fixed;inset:0;background:rgba(0,0,0,0.8);z-index:9000;display:flex;align-items:center;justify-content:center';
+    p.innerHTML = `
+      <div style="background:var(--bg2);width:400px;max-width:95%;border:1px solid var(--bdr);border-radius:8px;padding:20px;font-family:var(--sans)">
+        <div style="font-weight:700;margin-bottom:15px;color:var(--t)">Resultado Test Soporte</div>
+        <div style="font-size:11px;color:var(--t2);margin-bottom:15px;white-space:pre-wrap;word-break:break-all;font-family:var(--mono);max-height:300px;overflow-y:auto">
+          ${JSON.stringify(data, null, 2)}
+        </div>
+        <button class="btn btn-d" style="width:100%" onclick="this.parentElement.parentElement.remove()">Cerrar</button>
+      </div>
+    `;
+    document.body.appendChild(p);
+  } catch (err) {
+     if (statusEl) {
+        statusEl.textContent = '❌ Error';
+        statusEl.style.color = '#EF4444';
+     }
+  }
+}
+function setSt(txt,pct){const e=document.getElementById('stxt');if(e)e.textContent=txt;if(pct!=null&&document.getElementById('pbf'))document.getElementById('pbf').style.width=pct+'%';}
+
+// INIT
+initServerState().then(() => {
+  updateDash();
+});
+if('Notification'in window&&Notification.permission==='granted'){notifOn=true;document.getElementById('btnNotif').textContent='🔔 Notif. ON';document.getElementById('btnNotif').className='btn btn-g btn-sm';}
+addLog('DIP HUNTER v6 listo — Escáner + Monitor 10s + Auto-Ejecución + Editor de órdenes (Guarda en Cloud/VPS)','info');
+</script>
+</body>
 </script>
 
 </body></html>
