@@ -2566,7 +2566,7 @@ function renderWatchList(){
     let pnlLive=0,pnlPct=0,totalInv=0,avgEntry=0;
     if(filledOrds.length){
       totalInv=filledOrds.reduce((a,o)=>a+o.amount,0);
-      avgEntry=filledOrds.reduce((a,o)=>a+o.price*o.amount,0)/totalInv;
+      avgEntry=filledOrds.reduce((a,o)=>a+(o.filledPrice||o.price)*o.amount,0)/totalInv;
       pnlLive=totalInv*(cp-avgEntry)/avgEntry;
       pnlPct=(cp-avgEntry)/avgEntry*100;
     }
