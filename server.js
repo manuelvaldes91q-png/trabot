@@ -1908,10 +1908,10 @@ async function getJitoTipLamports() {
       const data = await r.json();
       const entry = Array.isArray(data) ? data[0] : data;
       const solTip = entry?.landed_tips_75th_percentile || 0.0001;
-      return Math.max(Math.floor(solTip * 1e9), 1000);
+      return Math.max(Math.floor(solTip * 1e9), 100000);
     }
   } catch (e) {}
-  return 10000;
+  return 100000;
 }
 
 async function sendViaJitoBundle(connection, signedTransaction, keypair) {
@@ -2248,29 +2248,58 @@ async function executeSolanaTradeInternal(w, side, amountUSDT, price, pk, feePay
       const signersToUse = potentialSigners.filter(kp => requiredSigners.includes(kp.publicKey.toString()));
       transaction.sign(signersToUse);
 
+      // Check if we want Jito
       let txid;
+      let signatureBuf;
+      if (transaction.signatures && transaction.signatures.length > 0) {
+        signatureBuf = transaction.signatures[0];
+      } else if (transaction.signatures) {
+        signatureBuf = transaction.signatures[0];
+      }
+      
+      // If versioned transaction (Jupiter) the signatures array is Uint8Array[]
+      txid = bs58.encode(signatureBuf);
+
+      let bundleUuid = null;
       if (appConfig.useJitoBundle) {
         try {
-          await sendViaJitoBundle(connection, transaction, keypair);
-          txid = bs58.encode(transaction.signatures[0]);
-          addLog(`🚀 Transacción enviada vía Jito Bundle (protección anti-sandwich) para ${w.symbol}...`, 'info');
+          bundleUuid = await sendViaJitoBundle(connection, transaction, keypair);
+          addLog(`🚀 Transacción enviada vía Jito Bundle (protección anti-sandwich) para ${w.symbol}... (${txid.slice(0,8)})`, 'info');
         } catch (jitoErr) {
           addLog(`⚠️ Jito bundle falló (${jitoErr.message}). Enviando por RPC normal como respaldo...`, 'warn');
-          txid = await connection.sendRawTransaction(transaction.serialize(), { skipPreflight: false, maxRetries: 2 });
+          await connection.sendRawTransaction(transaction.serialize(), { skipPreflight: false, maxRetries: 2 });
         }
       } else {
-        addLog(`🚀 Enviando transacción real de Solana para ${w.symbol}...`, 'info');
-        txid = await connection.sendRawTransaction(transaction.serialize(), { skipPreflight: false, maxRetries: 2 });
+        addLog(`🚀 Enviando transacción real de Solana para ${w.symbol}... (${txid.slice(0,8)})`, 'info');
+        await connection.sendRawTransaction(transaction.serialize(), { skipPreflight: false, maxRetries: 2 });
       }
 
       addLog(`✅ Transacción enviada: ${txid.slice(0, 8)}... Esperando confirmación...`, 'info');
 
-      const latestBlockHash = await connection.getLatestBlockhash();
-      await connection.confirmTransaction({
-        blockhash: latestBlockHash.blockhash,
-        lastValidBlockHeight: latestBlockHash.lastValidBlockHeight,
-        signature: txid
-      }, 'confirmed');
+      // Robust polling for confirmation, works even without knowing the exact lastValidBlockHeight
+      let confirmed = false;
+      const startTime = Date.now();
+      const MAX_WAIT_MS = 60000; // 60 seconds max wait
+      
+      while (Date.now() - startTime < MAX_WAIT_MS) {
+        const statuses = await connection.getSignatureStatuses([txid]);
+        const status = statuses && statuses.value && statuses.value[0];
+        
+        if (status) {
+          if (status.err) {
+            throw new Error(`Transacción falló on-chain: ${JSON.stringify(status.err)}`);
+          }
+          if (status.confirmationStatus === 'confirmed' || status.confirmationStatus === 'finalized') {
+            confirmed = true;
+            break;
+          }
+        }
+        await new Promise(r => setTimeout(r, 2000));
+      }
+
+      if (!confirmed) {
+        throw new Error(`Timeout: La transacción ${txid} no se confirmó en ${MAX_WAIT_MS/1000}s. Probablemente expiró.`);
+      }
 
       let baseBalAfter = baseBalBefore;
       let tokenBalAfter = tokenBalBefore;
