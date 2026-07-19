@@ -590,7 +590,8 @@ async function getSolanaPrices(addresses) {
     // Check which addresses need a refresh (older than 2 seconds or not in cache, unless actively subscribed via WS)
     for (const addr of uniqueAddresses) {
       const cached = solanaPricesCache[addr];
-      const hasActiveSub = activeVaultSubs.has(addr) && !activeVaultSubs.get(addr).pending;
+      const sub = activeVaultSubs.get(addr);
+      const hasActiveSub = sub && sub.poolAddress && !sub.pending;
       if (cached && (hasActiveSub || (now - cached.lastFetch < 2000))) {
         results[addr] = { price: cached.price, liquidity: cached.liquidity };
       } else {
@@ -2859,7 +2860,13 @@ async function trackRaydiumVaults(addresses) {
   }
 
   for (const token of addresses) {
-    if (activeVaultSubs.has(token) || token.toLowerCase() === 'so11111111111111111111111111111111111111112') continue;
+    if (token.toLowerCase() === 'so11111111111111111111111111111111111111112') continue;
+    const sub = activeVaultSubs.get(token);
+    if (sub) {
+      if (sub.pending) continue;
+      if (sub.poolAddress) continue; // already active
+      if (sub.failedAt && (Date.now() - sub.failedAt < 60000)) continue; // wait 1 minute before retrying failed setups
+    }
     
     // We mark it as pending so we don't fire multiple requests
     activeVaultSubs.set(token, { pending: true });
@@ -2944,6 +2951,23 @@ async function trackRaydiumVaults(addresses) {
          }
       };
 
+      // Fetch initial balances asynchronously so updatePrice runs immediately with non-zero values
+      try {
+        const [baseAcc, quoteAcc] = await Promise.all([
+          solanaWsConnection.getAccountInfo(new PublicKey(baseVault)),
+          solanaWsConnection.getAccountInfo(new PublicKey(quoteVault))
+        ]);
+        if (baseAcc && baseAcc.data && baseAcc.data.length >= 72) {
+          baseBalance = Number(baseAcc.data.readBigUInt64LE(64));
+        }
+        if (quoteAcc && quoteAcc.data && quoteAcc.data.length >= 72) {
+          quoteBalance = Number(quoteAcc.data.readBigUInt64LE(64));
+        }
+        updatePrice();
+      } catch (err) {
+        // console.error("Error fetching initial vault balances:", err);
+      }
+
       const baseSubId = solanaWsConnection.onAccountChange(new PublicKey(baseVault), (info) => {
           // Read token balance from token account data
           // Token balance is at offset 64 (uint64) in standard SPL Token Account
@@ -2960,7 +2984,7 @@ async function trackRaydiumVaults(addresses) {
       
     } catch (e) {
       // console.error("Error setting up vault ws", e);
-      activeVaultSubs.delete(token); // allow retry
+      activeVaultSubs.set(token, { failedAt: Date.now() }); // mark as failed to avoid spamming DexScreener/RPC
     }
   }
 }
@@ -5137,41 +5161,56 @@ app.get('/api/state', async (req, res) => {
   res.setHeader('Pragma', 'no-cache');
   res.setHeader('Expires', '0');
   
-  // Forzar actualización de precios de Solana solo si el monitor está apagado o las posiciones están desactualizadas (evita tormentas de peticiones a DexScreener)
+  // 1. Immediately and synchronously copy all latest real-time prices from caches so response is 0ms latency
+  const nowMs = Date.now();
+  for (let w of watchItems) {
+    if (w.network === 'solana') {
+      const cached = solanaPricesCache[w.address];
+      if (cached && cached.price > 0) {
+        w.prevPrice = w.currentPrice || cached.price;
+        w.currentPrice = cached.price;
+      }
+    } else if (w.network === 'mexc') {
+      if (mexcPricesCache) {
+        const cp = mexcPricesCache[`${w.symbol}USDT`] || 0;
+        if (cp > 0) {
+          w.prevPrice = w.currentPrice || cp;
+          w.currentPrice = cp;
+        }
+      }
+    }
+  }
+
+  // 2. ONLY if the monitor is OFF (loops not running), trigger asynchronous background updates so we don't block the UI request
   const solanaItems = watchItems.filter(w => w.network === 'solana');
-  if (solanaItems.length > 0) {
-    try {
-      const nowMs = Date.now();
-      // Si el monitor está encendido, ya actualiza en background cada 1s, por lo que no es necesario forzar
-      // la petición aquí a menos que lleve más de 2 segundos desactualizado.
-      const needsSync = !monitorOn || solanaItems.some(w => !w.lastUpdate || (nowMs - w.lastUpdate > 2000));
-      
-      if (needsSync) {
-        const addresses = solanaItems.map(w => w.address).filter(Boolean);
-        const prices = await getSolanaPrices(addresses);
+  if (!monitorOn && solanaItems.length > 0) {
+    const needsSync = solanaItems.some(w => !w.lastUpdate || (nowMs - w.lastUpdate > 4000));
+    if (needsSync) {
+      const addresses = solanaItems.map(w => w.address).filter(Boolean);
+      getSolanaPrices(addresses).then(prices => {
         for (let w of watchItems) {
           if (w.network === 'solana' && prices[w.address]) {
             w.prevPrice = w.currentPrice || prices[w.address].price;
             w.currentPrice = prices[w.address].price;
-            w.lastUpdate = nowMs;
+            w.lastUpdate = Date.now();
           }
         }
-      }
-    } catch (e) { console.error('Error sync solana in state:', e); }
+      }).catch(() => {});
+    }
   }
 
-  // Actualizar MEXC si llevan más de 1s sin actualizar
-  const now = Date.now();
-  for (let w of watchItems) {
-    if (w.network === 'mexc' && (now - (w.lastUpdate || 0) > 1000)) {
-       try {
-         const cp = await mxPrice(w.symbol);
-         if (cp > 0) {
-           w.prevPrice = w.currentPrice || cp;
-           w.currentPrice = cp;
-           w.lastUpdate = now;
-         }
-       } catch (e) {}
+  const mexcItems = watchItems.filter(w => w.network === 'mexc');
+  if (!monitorOn && mexcItems.length > 0) {
+    const needsMexcSync = mexcItems.some(w => !w.lastUpdate || (nowMs - w.lastUpdate > 4000));
+    if (needsMexcSync) {
+      Promise.all(mexcItems.map(async w => {
+        const cp = await mxPrice(w.symbol);
+        if (cp > 0) {
+          w.prevPrice = w.currentPrice || cp;
+          w.currentPrice = cp;
+          w.lastUpdate = Date.now();
+        }
+      })).catch(() => {});
     }
   }
 
