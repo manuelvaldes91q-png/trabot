@@ -587,12 +587,12 @@ async function getSolanaPrices(addresses) {
     const uniqueAddresses = Array.from(new Set(addresses.map(a => a.trim()).filter(Boolean)));
     if (!uniqueAddresses.length) return {};
 
-    // Check which addresses need a refresh (older than 2 seconds or not in cache, unless actively subscribed via WS)
+    // Check which addresses need a refresh (older than 1.2 seconds or not in cache, unless actively subscribed via WS)
     for (const addr of uniqueAddresses) {
       const cached = solanaPricesCache[addr];
       const sub = activeVaultSubs.get(addr);
       const hasActiveSub = sub && sub.poolAddress && !sub.pending;
-      if (cached && (hasActiveSub || (now - cached.lastFetch < 2000))) {
+      if (cached && (hasActiveSub || (now - cached.lastFetch < 1200))) {
         results[addr] = { price: cached.price, liquidity: cached.liquidity };
       } else {
         toFetch.push(addr);
@@ -2875,11 +2875,17 @@ async function trackRaydiumVaults(addresses) {
       // 1. Get the pool address from DexScreener
       const url = `https://api.dexscreener.com/latest/dex/tokens/${token}`;
       const res = await fetch(url, { signal: AbortSignal.timeout(4000) });
-      if (!res.ok) continue;
+      if (!res.ok) {
+        activeVaultSubs.set(token, { failedAt: Date.now() });
+        continue;
+      }
       const data = await res.json();
       
       const raydiumPairs = data.pairs?.filter(p => p.chainId === 'solana' && p.dexId === 'raydium');
-      if (!raydiumPairs || raydiumPairs.length === 0) continue;
+      if (!raydiumPairs || raydiumPairs.length === 0) {
+        activeVaultSubs.set(token, { failedAt: Date.now() });
+        continue;
+      }
       
       // Get the pair with highest liquidity
       raydiumPairs.sort((a, b) => (b.liquidity?.usd || 0) - (a.liquidity?.usd || 0));
@@ -2889,11 +2895,17 @@ async function trackRaydiumVaults(addresses) {
       
       // 2. Fetch pool data to get vaults using official decoder
       const poolInfo = await solanaWsConnection.getAccountInfo(poolAddress);
-      if (!poolInfo || !poolInfo.data) continue;
+      if (!poolInfo || !poolInfo.data) {
+        activeVaultSubs.set(token, { failedAt: Date.now() });
+        continue;
+      }
       
       const layout = LIQUIDITY_VERSION_TO_STATE_LAYOUT[4];
       // Only decode if it's V4 AMM (data size 752)
-      if (poolInfo.data.length !== 752) continue;
+      if (poolInfo.data.length !== 752) {
+        activeVaultSubs.set(token, { failedAt: Date.now() });
+        continue;
+      }
       
       const decoded = layout.decode(poolInfo.data);
       const baseVault = decoded.baseVault.toString();
@@ -3575,13 +3587,13 @@ function startLoop() {
       
       if (appConfig.autoTraderEnabled) {
         autoTraderCounter++;
-        if (autoTraderCounter >= 12) { // Cada 60 segundos (12 * 5s)
+        if (autoTraderCounter >= 30) { // Cada 60 segundos (30 * 2s)
           autoTraderCounter = 0;
           executeAutoTraderCycle().catch(err => console.error("Error in executeAutoTraderCycle:", err));
         }
       }
     }
-  }, 5000); // Relajado a 5 segundos gracias a WebSocket en tiempo real
+  }, 2000); // Frecuencia de fallback aumentada a 2 segundos para actualizaciones rápidas
   
   if (depositTimer) clearInterval(depositTimer);
   depositTimer = setInterval(() => {
