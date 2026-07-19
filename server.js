@@ -575,6 +575,7 @@ async function mxPrice(sym) {
 // SOLANA INTEGRATION (LIVE PRICE, BALANCES, JUPITER API)
 // ============================================
 let solanaPricesCache = {}; // maps address -> { price, liquidity, lastFetch }
+let lastDexScreenerFetch = {}; // maps address -> timestamp
 
 async function getSolanaPrices(addresses) {
   if (!addresses || !addresses.length) return {};
@@ -667,47 +668,62 @@ async function getSolanaPrices(addresses) {
                   }
                 }
                 
-                // For any address Jupiter missed, try DexScreener (chunk of max 30)
+                // For any address Jupiter missed, try DexScreener (chunk of max 30) with safety cooldown of 8 seconds per token
                 const missed = chunk.filter(a => !chunkResults[a]);
                 if (missed.length > 0) {
-                  for (let i = 0; i < missed.length; i += 30) {
-                    const dexChunk = missed.slice(i, i + 30);
-                    const dexScrUrl = `https://api.dexscreener.com/latest/dex/tokens/${dexChunk.join(',')}`;
-                    try {
-                      const dexRes = await fetch(dexScrUrl, { signal: AbortSignal.timeout(4000) });
-                      if (dexRes.ok) {
-                        const dexData = await dexRes.json();
-                        const dexParsed = {};
-                        if (dexData && dexData.pairs) {
-                           dexData.pairs.forEach(p => {
-                             if (p.chainId === 'solana' && p.baseToken) {
-                               const a = p.baseToken.address;
-                               if (!dexParsed[a] || (p.liquidity?.usd || 0) > (dexParsed[a].liquidity || 0)) {
-                                 dexParsed[a] = { price: +p.priceUsd, liquidity: p.liquidity?.usd || 0 };
+                  const allowedMissed = missed.filter(a => {
+                    const lastFetch = lastDexScreenerFetch[a] || 0;
+                    return (now - lastFetch) > 8000;
+                  });
+
+                  if (allowedMissed.length > 0) {
+                    for (const a of allowedMissed) {
+                      lastDexScreenerFetch[a] = now;
+                    }
+                    for (let i = 0; i < allowedMissed.length; i += 30) {
+                      const dexChunk = allowedMissed.slice(i, i + 30);
+                      const dexScrUrl = `https://api.dexscreener.com/latest/dex/tokens/${dexChunk.join(',')}`;
+                      try {
+                        const dexRes = await fetch(dexScrUrl, { signal: AbortSignal.timeout(4000) });
+                        if (dexRes.ok) {
+                          const dexData = await dexRes.json();
+                          const dexParsed = {};
+                          if (dexData && dexData.pairs) {
+                             dexData.pairs.forEach(p => {
+                               if (p.chainId === 'solana' && p.baseToken) {
+                                 const a = p.baseToken.address;
+                                 if (!dexParsed[a] || (p.liquidity?.usd || 0) > (dexParsed[a].liquidity || 0)) {
+                                   dexParsed[a] = { price: +p.priceUsd, liquidity: p.liquidity?.usd || 0 };
+                                 }
                                }
+                             });
+                          }
+                          for (const a of dexChunk) {
+                             let matched = dexParsed[a];
+                             if (!matched) {
+                               const lowerA = a.toLowerCase();
+                               const fKey = Object.keys(dexParsed).find(k => k.toLowerCase() === lowerA);
+                               if (fKey) matched = dexParsed[fKey];
                              }
-                           });
+                             if (matched) {
+                               solanaPricesCache[a] = { price: matched.price, liquidity: matched.liquidity, lastFetch: now };
+                               results[a] = { price: matched.price, liquidity: matched.liquidity };
+                             } else {
+                               const cached = solanaPricesCache[a];
+                               if (cached) results[a] = { price: cached.price, liquidity: cached.liquidity };
+                             }
+                          }
                         }
+                      } catch (e) {
                         for (const a of dexChunk) {
-                           let matched = dexParsed[a];
-                           if (!matched) {
-                             const lowerA = a.toLowerCase();
-                             const fKey = Object.keys(dexParsed).find(k => k.toLowerCase() === lowerA);
-                             if (fKey) matched = dexParsed[fKey];
-                           }
-                           if (matched) {
-                             solanaPricesCache[a] = { price: matched.price, liquidity: matched.liquidity, lastFetch: now };
-                             results[a] = { price: matched.price, liquidity: matched.liquidity };
-                           } else {
-                             const cached = solanaPricesCache[a];
-                             if (cached) results[a] = { price: cached.price, liquidity: cached.liquidity };
-                           }
+                          if (solanaPricesCache[a]) results[a] = { price: solanaPricesCache[a].price, liquidity: solanaPricesCache[a].liquidity };
                         }
                       }
-                    } catch (e) {
-                      for (const a of dexChunk) {
-                        if (solanaPricesCache[a]) results[a] = { price: solanaPricesCache[a].price, liquidity: solanaPricesCache[a].liquidity };
-                      }
+                    }
+                  } else {
+                    for (const a of missed) {
+                      const cached = solanaPricesCache[a];
+                      if (cached) results[a] = { price: cached.price, liquidity: cached.liquidity };
                     }
                   }
                 }
@@ -720,45 +736,60 @@ async function getSolanaPrices(addresses) {
           }
 
           if (!jupiterSuccess) {
-            // Full fallback to Dexscreener in chunks of 30 if Jupiter completely failed
-            for (let i = 0; i < chunk.length; i += 30) {
-              const dexChunk = chunk.slice(i, i + 30);
-              const dexScrUrl = `https://api.dexscreener.com/latest/dex/tokens/${dexChunk.join(',')}`;
-              try {
-                const dexRes = await fetch(dexScrUrl, { signal: AbortSignal.timeout(5000) });
-                if (dexRes.ok) {
-                  const dexData = await dexRes.json();
-                  const dexParsed = {};
-                  if (dexData && dexData.pairs) {
-                    dexData.pairs.forEach(p => {
-                      if (p.chainId === 'solana' && p.baseToken) {
-                        const a = p.baseToken.address;
-                        if (!dexParsed[a] || (p.liquidity?.usd || 0) > (dexParsed[a].liquidity || 0)) {
-                          dexParsed[a] = { price: +p.priceUsd, liquidity: p.liquidity?.usd || 0 };
+            const allowedChunk = chunk.filter(a => {
+              const lastFetch = lastDexScreenerFetch[a] || 0;
+              return (now - lastFetch) > 8000;
+            });
+
+            if (allowedChunk.length > 0) {
+              for (const a of allowedChunk) {
+                lastDexScreenerFetch[a] = now;
+              }
+              // Full fallback to Dexscreener in chunks of 30 if Jupiter completely failed
+              for (let i = 0; i < allowedChunk.length; i += 30) {
+                const dexChunk = allowedChunk.slice(i, i + 30);
+                const dexScrUrl = `https://api.dexscreener.com/latest/dex/tokens/${dexChunk.join(',')}`;
+                try {
+                  const dexRes = await fetch(dexScrUrl, { signal: AbortSignal.timeout(5000) });
+                  if (dexRes.ok) {
+                    const dexData = await dexRes.json();
+                    const dexParsed = {};
+                    if (dexData && dexData.pairs) {
+                      dexData.pairs.forEach(p => {
+                        if (p.chainId === 'solana' && p.baseToken) {
+                          const a = p.baseToken.address;
+                          if (!dexParsed[a] || (p.liquidity?.usd || 0) > (dexParsed[a].liquidity || 0)) {
+                            dexParsed[a] = { price: +p.priceUsd, liquidity: p.liquidity?.usd || 0 };
+                          }
                         }
+                      });
+                    }
+                    for (const a of dexChunk) {
+                      let matched = dexParsed[a];
+                      if (!matched) {
+                        const lowerA = a.toLowerCase();
+                        const fKey = Object.keys(dexParsed).find(k => k.toLowerCase() === lowerA);
+                        if (fKey) matched = dexParsed[fKey];
                       }
-                    });
-                  }
-                  for (const a of dexChunk) {
-                    let matched = dexParsed[a];
-                    if (!matched) {
-                      const lowerA = a.toLowerCase();
-                      const fKey = Object.keys(dexParsed).find(k => k.toLowerCase() === lowerA);
-                      if (fKey) matched = dexParsed[fKey];
-                    }
-                    if (matched) {
-                      solanaPricesCache[a] = { price: matched.price, liquidity: matched.liquidity, lastFetch: now };
-                      results[a] = { price: matched.price, liquidity: matched.liquidity };
-                    } else {
-                      const cached = solanaPricesCache[a];
-                      if (cached) results[a] = { price: cached.price, liquidity: cached.liquidity };
+                      if (matched) {
+                        solanaPricesCache[a] = { price: matched.price, liquidity: matched.liquidity, lastFetch: now };
+                        results[a] = { price: matched.price, liquidity: matched.liquidity };
+                      } else {
+                        const cached = solanaPricesCache[a];
+                        if (cached) results[a] = { price: cached.price, liquidity: cached.liquidity };
+                      }
                     }
                   }
+                } catch (e) {
+                   for (const a of dexChunk) {
+                      if (solanaPricesCache[a]) results[a] = { price: solanaPricesCache[a].price, liquidity: solanaPricesCache[a].liquidity };
+                   }
                 }
-              } catch (e) {
-                 for (const a of dexChunk) {
-                    if (solanaPricesCache[a]) results[a] = { price: solanaPricesCache[a].price, liquidity: solanaPricesCache[a].liquidity };
-                 }
+              }
+            } else {
+              for (const a of chunk) {
+                const cached = solanaPricesCache[a];
+                if (cached) results[a] = { price: cached.price, liquidity: cached.liquidity };
               }
             }
           }
@@ -2871,49 +2902,85 @@ async function trackRaydiumVaults(addresses) {
     // We mark it as pending so we don't fire multiple requests
     activeVaultSubs.set(token, { pending: true });
 
+    let poolAddress, baseVault, quoteVault, baseDecimals, quoteDecimals, isBaseSol, baseMint, quoteMint;
+    let cachedInfoAvailable = false;
+
+    const w = watchItems.find(item => item.address === token);
+    if (w && w.poolAddress && w.baseVault && w.quoteVault) {
+       try {
+         poolAddress = new PublicKey(w.poolAddress);
+         baseVault = w.baseVault;
+         quoteVault = w.quoteVault;
+         baseDecimals = w.baseDecimals || 9;
+         quoteDecimals = w.quoteDecimals || 9;
+         isBaseSol = !!w.isBaseSol;
+         baseMint = w.baseMint || '';
+         quoteMint = w.quoteMint || '';
+         cachedInfoAvailable = true;
+       } catch (err) {
+         cachedInfoAvailable = false;
+       }
+    }
+
     try {
-      // 1. Get the pool address from DexScreener
-      const url = `https://api.dexscreener.com/latest/dex/tokens/${token}`;
-      const res = await fetch(url, { signal: AbortSignal.timeout(4000) });
-      if (!res.ok) {
-        activeVaultSubs.set(token, { failedAt: Date.now() });
-        continue;
+      if (!cachedInfoAvailable) {
+        // 1. Get the pool address from DexScreener
+        const url = `https://api.dexscreener.com/latest/dex/tokens/${token}`;
+        const res = await fetch(url, { signal: AbortSignal.timeout(4000) });
+        if (!res.ok) {
+          activeVaultSubs.set(token, { failedAt: Date.now() });
+          continue;
+        }
+        const data = await res.json();
+        
+        const raydiumPairs = data.pairs?.filter(p => p.chainId === 'solana' && p.dexId === 'raydium');
+        if (!raydiumPairs || raydiumPairs.length === 0) {
+          activeVaultSubs.set(token, { failedAt: Date.now() });
+          continue;
+        }
+        
+        // Get the pair with highest liquidity
+        raydiumPairs.sort((a, b) => (b.liquidity?.usd || 0) - (a.liquidity?.usd || 0));
+        const bestPair = raydiumPairs[0];
+        
+        poolAddress = new PublicKey(bestPair.pairAddress);
+        
+        // 2. Fetch pool data to get vaults using official decoder
+        const poolInfo = await solanaWsConnection.getAccountInfo(poolAddress);
+        if (!poolInfo || !poolInfo.data) {
+          activeVaultSubs.set(token, { failedAt: Date.now() });
+          continue;
+        }
+        
+        const layout = LIQUIDITY_VERSION_TO_STATE_LAYOUT[4];
+        // Only decode if it's V4 AMM (data size 752)
+        if (poolInfo.data.length !== 752) {
+          activeVaultSubs.set(token, { failedAt: Date.now() });
+          continue;
+        }
+        
+        const decoded = layout.decode(poolInfo.data);
+        baseVault = decoded.baseVault.toString();
+        quoteVault = decoded.quoteVault.toString();
+        baseDecimals = decoded.baseDecimal.toNumber();
+        quoteDecimals = decoded.quoteDecimal.toNumber();
+        baseMint = decoded.baseMint.toString();
+        quoteMint = decoded.quoteMint.toString();
+        
+        isBaseSol = baseMint.toLowerCase() === 'so11111111111111111111111111111111111111112';
+
+        if (w) {
+          w.poolAddress = poolAddress.toString();
+          w.baseVault = baseVault;
+          w.quoteVault = quoteVault;
+          w.baseDecimals = baseDecimals;
+          w.quoteDecimals = quoteDecimals;
+          w.isBaseSol = isBaseSol;
+          w.baseMint = baseMint;
+          w.quoteMint = quoteMint;
+          saveState();
+        }
       }
-      const data = await res.json();
-      
-      const raydiumPairs = data.pairs?.filter(p => p.chainId === 'solana' && p.dexId === 'raydium');
-      if (!raydiumPairs || raydiumPairs.length === 0) {
-        activeVaultSubs.set(token, { failedAt: Date.now() });
-        continue;
-      }
-      
-      // Get the pair with highest liquidity
-      raydiumPairs.sort((a, b) => (b.liquidity?.usd || 0) - (a.liquidity?.usd || 0));
-      const bestPair = raydiumPairs[0];
-      
-      const poolAddress = new PublicKey(bestPair.pairAddress);
-      
-      // 2. Fetch pool data to get vaults using official decoder
-      const poolInfo = await solanaWsConnection.getAccountInfo(poolAddress);
-      if (!poolInfo || !poolInfo.data) {
-        activeVaultSubs.set(token, { failedAt: Date.now() });
-        continue;
-      }
-      
-      const layout = LIQUIDITY_VERSION_TO_STATE_LAYOUT[4];
-      // Only decode if it's V4 AMM (data size 752)
-      if (poolInfo.data.length !== 752) {
-        activeVaultSubs.set(token, { failedAt: Date.now() });
-        continue;
-      }
-      
-      const decoded = layout.decode(poolInfo.data);
-      const baseVault = decoded.baseVault.toString();
-      const quoteVault = decoded.quoteVault.toString();
-      const baseDecimals = decoded.baseDecimal.toNumber();
-      const quoteDecimals = decoded.quoteDecimal.toNumber();
-      
-      const isBaseSol = decoded.baseMint.toString().toLowerCase() === 'so11111111111111111111111111111111111111112';
       
       let baseBalance = 0;
       let quoteBalance = 0;
@@ -2921,10 +2988,10 @@ async function trackRaydiumVaults(addresses) {
       const updatePrice = () => {
          if (baseBalance > 0 && quoteBalance > 0) {
             let priceInSol = 0;
-            const quoteIsSol = decoded.quoteMint.toString().toLowerCase() === 'so11111111111111111111111111111111111111112';
-            const baseIsSol = decoded.baseMint.toString().toLowerCase() === 'so11111111111111111111111111111111111111112';
-            const quoteIsUsdc = decoded.quoteMint.toString() === 'EPjFWdd5AufqSSqeM2qN1xzybapC8G4wEGGkZwyTDt1v';
-            const baseIsUsdc = decoded.baseMint.toString() === 'EPjFWdd5AufqSSqeM2qN1xzybapC8G4wEGGkZwyTDt1v';
+            const quoteIsSol = quoteMint.toLowerCase() === 'so11111111111111111111111111111111111111112';
+            const baseIsSol = baseMint.toLowerCase() === 'so11111111111111111111111111111111111111112';
+            const quoteIsUsdc = quoteMint === 'EPjFWdd5AufqSSqeM2qN1xzybapC8G4wEGGkZwyTDt1v';
+            const baseIsUsdc = baseMint === 'EPjFWdd5AufqSSqeM2qN1xzybapC8G4wEGGkZwyTDt1v';
 
             let priceInBaseCurrency = 0;
             let finalPrice = 0;
