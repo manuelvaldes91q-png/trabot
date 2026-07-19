@@ -2427,6 +2427,13 @@ async function runCycle() {
         const o = w.orders[oi];
         if (o.status !== 'pending') continue;
         
+        if (o.expireAt && Date.now() > o.expireAt) {
+          o.status = 'cancelled';
+          o.note = 'Expiró (tiempo)';
+          addLog(`⏱️ Orden de ${w.symbol} expirada (límite alcanzado)`, 'warn');
+          continue;
+        }
+        
         // Verifica si el precio bajó hasta el punto de entrada
         if (cp <= o.price * 1.005) {
           // Protección Anti-Rugpull
@@ -2980,6 +2987,13 @@ async function runSolanaCycle() {
       for (let oi = 0; oi < w.orders.length; oi++) {
         const o = w.orders[oi];
         if (o.status !== 'pending') continue;
+        
+        if (o.expireAt && Date.now() > o.expireAt) {
+          o.status = 'cancelled';
+          o.note = 'Expiró (tiempo)';
+          addLog(`⏱️ Orden de ${w.symbol} expirada (límite alcanzado)`, 'warn');
+          continue;
+        }
         
         // Verifica si el precio bajó hasta el punto de entrada
         if (cp <= o.price * 1.005) {
@@ -4196,6 +4210,20 @@ app.post('/api/investor/recover_rent', investorAuth, async (req, res) => {
   }
 });
 
+
+app.get('/api/mexc/*', async (req, res) => {
+  try {
+    const endpoint = req.params[0];
+    const qs = new URLSearchParams(req.query).toString();
+    const url = `https://api.mexc.com/api/v3/${endpoint}${qs ? '?' + qs : ''}`;
+    const r = await fetch(url, { signal: AbortSignal.timeout(10000) });
+    if (!r.ok) return res.status(r.status).json({error: `MEXC err: ${r.statusText}`});
+    const data = await r.json();
+    res.json(data);
+  } catch (err) {
+    res.status(500).json({error: err.message});
+  }
+});
 
 // ============================================
 // ADMIN MIDDLEWARE
@@ -5722,19 +5750,7 @@ app.get('/api/dexscreener/*', async (req, res) => {
   }
 });
 
-app.get('/api/mexc/*', async (req, res) => {
-  try {
-    const endpoint = req.params[0];
-    const qs = new URLSearchParams(req.query).toString();
-    const url = `https://api.mexc.com/api/v3/${endpoint}${qs ? '?' + qs : ''}`;
-    const r = await fetch(url, { signal: AbortSignal.timeout(10000) });
-    if (!r.ok) return res.status(r.status).json({error: `MEXC err: ${r.statusText}`});
-    const data = await r.json();
-    res.json(data);
-  } catch (err) {
-    res.status(500).json({error: err.message});
-  }
-});
+
 
 app.get('/api/token-safety/:mint', adminAuth, async (req, res) => {
   try {
