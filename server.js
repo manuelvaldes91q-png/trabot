@@ -2934,9 +2934,6 @@ async function trackRaydiumVaults(addresses) {
             // Write directly to the cache that runSolanaCycle uses
             const existingLiq = solanaPricesCache[token]?.liquidity || 0;
             solanaPricesCache[token] = { price: finalPrice, liquidity: existingLiq, lastFetch: Date.now() };
-            
-            // Also write the SOL price itself if it's not the token
-            solanaPricesCache[token.toLowerCase()] = { price: finalPrice, liquidity: existingLiq, lastFetch: Date.now() };
          }
       };
 
@@ -2961,6 +2958,16 @@ async function trackRaydiumVaults(addresses) {
   }
 }
 // --- END RAYDIUM VAULT WS TRACKING ---
+
+function unsubscribeVaultTracking(tokenAddress) {
+  const sub = activeVaultSubs.get(tokenAddress);
+  if (!sub || sub.pending) { activeVaultSubs.delete(tokenAddress); return; }
+  try {
+    if (solanaWsConnection && sub.baseSubId !== undefined) solanaWsConnection.removeAccountChangeListener(sub.baseSubId).catch(() => {});
+    if (solanaWsConnection && sub.quoteSubId !== undefined) solanaWsConnection.removeAccountChangeListener(sub.quoteSubId).catch(() => {});
+  } catch (e) { console.warn(`[unsubscribeVaultTracking] Error: ${e.message}`); }
+  activeVaultSubs.delete(tokenAddress);
+}
 
 async function runSolanaCycle() {
   if (!monitorOn) return;
@@ -3662,11 +3669,24 @@ app.post('/api/action', adminAuth, async (req, res) => {
     } else if (action === 'removeWatch') {
       const idx = watchItems.findIndex(item => item.symbol === payload.symbol || (payload.address && item.address === payload.address));
       if (idx !== -1) {
+        const item = watchItems[idx];
+        if (item && item.address) {
+          unsubscribeVaultTracking(item.address);
+        }
         watchItems.splice(idx, 1);
       } else {
+        const item = watchItems[payload.index];
+        if (item && item.address) {
+          unsubscribeVaultTracking(item.address);
+        }
         watchItems.splice(payload.index, 1);
       }
     } else if (action === 'clearWatch') {
+      watchItems.forEach(w => {
+        if (w && w.address) {
+          unsubscribeVaultTracking(w.address);
+        }
+      });
       watchItems = payload.items || [];
       addLog(`🧹 Watchlist limpiada`, 'info');
     } else if (action === 'addOrder') {

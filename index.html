@@ -574,7 +574,14 @@ window.addEventListener('DOMContentLoaded', () => {
     <div class="logbox">
       <div class="log-hdr">🤖 Log del Bot
         <div style="display:flex;gap:6px;align-items:center">
-          <label style="font-size:7px;cursor:pointer"><input type="checkbox" id="logFilter" onchange="renderLog()"> Solo compras/ventas</label>
+          <span style="font-size:7px;color:var(--t2)">Filtrar:</span>
+          <select id="logTypeFilter" onchange="renderLog()" class="inp" style="padding:1px 4px;font-size:8px;background:rgba(255,255,255,.05);border-color:var(--bdr2);color:var(--t);outline:none;cursor:pointer;">
+            <option value="all">Todos</option>
+            <option value="buy">🟢 Compra</option>
+            <option value="sell">🔴 Venta</option>
+            <option value="error">⚠️ Error</option>
+            <option value="system">⚙️ Sistema</option>
+          </select>
           <span style="cursor:pointer" onclick="clearLog()">limpiar</span>
         </div>
       </div>
@@ -4303,8 +4310,17 @@ function addLog(msg,type='info'){
   if(logs_.length>200)logs_.length=200;renderLog();
 }
 function renderLog(){
-  const onlyTrades=document.getElementById('logFilter')?.checked;
-  const filtered=onlyTrades?logs_.filter(l=>['buy','sell','tp','sl_'].includes(l.type)):logs_;
+  const typeFilter=document.getElementById('logTypeFilter')?.value || 'all';
+  let filtered = logs_;
+  if (typeFilter === 'buy') {
+    filtered = logs_.filter(l => l.type === 'buy');
+  } else if (typeFilter === 'sell') {
+    filtered = logs_.filter(l => ['sell', 'tp', 'sl_'].includes(l.type));
+  } else if (typeFilter === 'error') {
+    filtered = logs_.filter(l => ['warn', 'error'].includes(l.type));
+  } else if (typeFilter === 'system') {
+    filtered = logs_.filter(l => !['buy', 'sell', 'tp', 'sl_', 'warn', 'error'].includes(l.type));
+  }
   const el=document.getElementById('logbody');
   if(el)el.innerHTML=filtered.map(l=>`<div class="le"><span class="lt">${l.t}</span><span class="lm ${l.type}">${l.msg}</span></div>`).join('');
 }
