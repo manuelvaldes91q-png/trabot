@@ -581,7 +581,7 @@ async function getSolanaPrices(addresses) {
   if (!addresses || !addresses.length) return {};
   try {
     const now = Date.now();
-    const toFetch = [];
+    let toFetch = [];
     const results = {};
 
     // Deduplicate and trim incoming addresses
@@ -603,6 +603,53 @@ async function getSolanaPrices(addresses) {
     // START RAYDIUM VAULTS
     trackRaydiumVaults(uniqueAddresses).catch(() => {});
     // END RAYDIUM VAULTS
+
+    if (toFetch.length > 0) {
+      if (!solanaWsConnection && appConfig.solanaRpcUrl) {
+        try {
+          solanaWsConnection = new Connection(appConfig.solanaRpcUrl, 'processed');
+        } catch (e) {}
+      }
+
+      if (solanaWsConnection) {
+        const remaining = [];
+        for (const addr of toFetch) {
+          if (addr.toLowerCase().endsWith('pump')) {
+            try {
+              const pumpProgramId = new PublicKey("6EF8f6332FXmPD816eA7Z7K3M4pMDsm37S71uDX3qf2s");
+              const [bondingCurve] = PublicKey.findProgramAddressSync(
+                [Buffer.from("bonding-curve"), new PublicKey(addr).toBuffer()],
+                pumpProgramId
+              );
+              const info = await solanaWsConnection.getAccountInfo(bondingCurve);
+              if (info && info.data && info.data.length >= 49) {
+                const isComplete = info.data[48] === 1;
+                if (!isComplete) {
+                  const virtualTokenReserves = Number(info.data.readBigUInt64LE(8));
+                  const virtualSolReserves = Number(info.data.readBigUInt64LE(16));
+                  const realSolReserves = Number(info.data.readBigUInt64LE(32));
+                  
+                  if (virtualTokenReserves > 0 && virtualSolReserves > 0) {
+                    const priceInSol = (virtualSolReserves / virtualTokenReserves) / 1000;
+                    const solPrice = solanaPricesCache['So11111111111111111111111111111111111111112']?.price || 140;
+                    const finalPrice = priceInSol * solPrice;
+                    const finalLiquidity = (realSolReserves / 1e9) * solPrice;
+                    
+                    solanaPricesCache[addr] = { price: finalPrice, liquidity: finalLiquidity, lastFetch: now };
+                    results[addr] = { price: finalPrice, liquidity: finalLiquidity };
+                    continue;
+                  }
+                }
+              }
+            } catch (e) {
+              // Ignore and let it fall back
+            }
+          }
+          remaining.push(addr);
+        }
+        toFetch = remaining;
+      }
+    }
 
     if (toFetch.length > 0) {
       // If we have a DexTools API key configured, we can fetch from DexTools, otherwise we use GeckoTerminal/DexScreener
@@ -2901,6 +2948,65 @@ async function trackRaydiumVaults(addresses) {
     
     // We mark it as pending so we don't fire multiple requests
     activeVaultSubs.set(token, { pending: true });
+
+    if (token.toLowerCase().endsWith('pump')) {
+      try {
+        const pumpProgramId = new PublicKey("6EF8f6332FXmPD816eA7Z7K3M4pMDsm37S71uDX3qf2s");
+        const [bondingCurve] = PublicKey.findProgramAddressSync(
+          [Buffer.from("bonding-curve"), new PublicKey(token).toBuffer()],
+          pumpProgramId
+        );
+
+        const bondingCurveInfo = await solanaWsConnection.getAccountInfo(bondingCurve);
+        if (bondingCurveInfo && bondingCurveInfo.data && bondingCurveInfo.data.length >= 49) {
+          const isComplete = bondingCurveInfo.data[48] === 1;
+          if (!isComplete) {
+            let virtualTokenReserves = Number(bondingCurveInfo.data.readBigUInt64LE(8));
+            let virtualSolReserves = Number(bondingCurveInfo.data.readBigUInt64LE(16));
+            let realSolReserves = Number(bondingCurveInfo.data.readBigUInt64LE(32));
+
+            const updatePumpPrice = () => {
+              if (virtualTokenReserves > 0 && virtualSolReserves > 0) {
+                const priceInSol = (virtualSolReserves / virtualTokenReserves) / 1000;
+                const solPrice = solanaPricesCache['So11111111111111111111111111111111111111112']?.price || 140;
+                const finalPrice = priceInSol * solPrice;
+                const finalLiquidity = (realSolReserves / 1e9) * solPrice;
+
+                solanaPricesCache[token] = { price: finalPrice, liquidity: finalLiquidity, lastFetch: Date.now() };
+
+                if (monitorOn) {
+                  setImmediate(() => {
+                    runSolanaCycle().catch(() => {});
+                  });
+                }
+              }
+            };
+
+            updatePumpPrice();
+
+            const subId = solanaWsConnection.onAccountChange(bondingCurve, (info) => {
+              if (info && info.data && info.data.length >= 49) {
+                const nowComplete = info.data[48] === 1;
+                if (nowComplete) {
+                  console.log(`[Pump.fun] Token ${token} has completed bonding curve! Transitioning to Raydium...`);
+                  unsubscribeVaultTracking(token);
+                  return;
+                }
+                virtualTokenReserves = Number(info.data.readBigUInt64LE(8));
+                virtualSolReserves = Number(info.data.readBigUInt64LE(16));
+                realSolReserves = Number(info.data.readBigUInt64LE(32));
+                updatePumpPrice();
+              }
+            }, 'processed');
+
+            activeVaultSubs.set(token, { poolAddress: bondingCurve, baseVault: bondingCurve.toString(), quoteVault: bondingCurve.toString(), baseSubId: subId });
+            continue;
+          }
+        }
+      } catch (err) {
+        console.warn(`[Pump.fun] Error setting up bonding curve tracking for ${token}:`, err.message);
+      }
+    }
 
     let poolAddress, baseVault, quoteVault, baseDecimals, quoteDecimals, isBaseSol, baseMint, quoteMint;
     let cachedInfoAvailable = false;
