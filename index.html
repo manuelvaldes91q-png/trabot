@@ -111,25 +111,25 @@ select.inp{cursor:pointer}
 
 /* WATCH CARD BODY */
 .wc-hdr{display:flex;align-items:center;justify-content:space-between;padding:8px 10px;border-bottom:1px solid var(--bdr)}
-.wc-sym{font-family:var(--mono);font-size:13px;font-weight:700}
+.wc-sym{font-family:var(--mono);font-size:15px;font-weight:700}
 .wc-body{padding:7px 10px}
 .wc-price-row{display:flex;justify-content:space-between;align-items:center;margin-bottom:4px}
-.wc-price{font-family:var(--mono);font-size:13px;font-weight:700}
+.wc-price{font-family:var(--mono);font-size:15px;font-weight:700}
 .wc-pnl{font-family:var(--mono);font-size:12px;font-weight:700}
-.wc-info{font-size:8px;color:var(--t2);font-family:var(--mono);margin-bottom:5px}
+.wc-info{font-size:12px;color:var(--t2);font-family:var(--mono);margin-bottom:6px}
 .wc-bar{height:3px;background:var(--bg4);border-radius:99px;overflow:hidden;margin-bottom:5px}
 .wc-fill{height:100%;border-radius:99px;transition:width .4s}
 
 /* ORDER LIST */
 .order-list{margin-bottom:5px}
-.order-item{display:flex;align-items:center;gap:4px;padding:3px 6px;border-radius:4px;margin-bottom:2px;border:1px solid;font-family:var(--mono);font-size:8px;cursor:pointer;transition:background .12s}
+.order-item{display:flex;align-items:center;gap:4px;padding:5px 6px;border-radius:4px;margin-bottom:2px;border:1px solid;font-family:var(--mono);font-size:11px;cursor:pointer;transition:background .12s}
 .order-item:hover{opacity:.85}
 .oi-pending{border-color:var(--bdr);color:var(--t2);background:rgba(255,255,255,.01)}
 .oi-next{border-color:rgba(245,158,11,.4);color:var(--y);background:rgba(245,158,11,.06)}
 .oi-active{border-color:rgba(0,229,160,.5);color:var(--g);background:rgba(0,229,160,.07);animation:glow .8s infinite}
 .oi-filled{border-color:rgba(0,229,160,.3);color:var(--g);background:rgba(0,229,160,.04)}
 .oi-cancelled{border-color:rgba(239,68,68,.2);color:var(--r);background:rgba(239,68,68,.03)}
-.oi-badge{font-size:7px;padding:1px 4px;border-radius:2px;font-weight:700;flex-shrink:0}
+.oi-badge{font-size:9px;padding:2px 4px;border-radius:2px;font-weight:700;flex-shrink:0}
 .oi-info{flex:1}
 .oi-actions{display:flex;gap:2px}
 
@@ -2596,7 +2596,7 @@ function renderWatchList(){
           ${filledOrds.length?`<span class="wc-pnl" style="color:${pnlLive>=0?'var(--g)':'var(--r)'}">${pnlLive>=0?'+':''}$${pnlLive.toFixed(2)} (${pnlPct.toFixed(1)}%)</span>` :''}
         </div>
         ${nextOrd?`<div class="wc-info">Próxima: <b style="color:${hot?'var(--g)':near?'var(--y)':'var(--b)'}">$${fpZ(nextOrd.price,nextOrd.price)}</b> · ${dist!==null?(dist>0?'−'+dist.toFixed(1)+'% falta':'⚡ ¡LLEGÓ!'):''} · $${nextOrd.amount}</div>` :''}
-        ${filledOrds.length?`<div class="wc-info">Avg: <b>$${fpZ(avgEntry,avgEntry)}</b> · Inv: <b style="color:var(--y)">$${totalInv.toFixed(0)}</b>${w.slPrice?` · SL:<b style="color:var(--r)">$${fpZ(w.slPrice,w.slPrice)}</b>` :''}${w.tp1Price?` · TP1:<b style="color:var(--g)">$${fpZ(w.tp1Price,w.tp1Price)}</b>${avgEntry>0?` <span style="color:var(--g);font-size:10px">(Est: <b>$${(totalInv*w.tp1Price/avgEntry).toFixed(2)}</b> / <b>+$${(totalInv*(w.tp1Price-avgEntry)/avgEntry).toFixed(2)}</b>)</span>`:''}` :''}</div>` :''}
+        ${filledOrds.length?`<div class="wc-info">Avg: <b>$${fpZ(avgEntry,avgEntry)}</b> · Inv: <b style="color:var(--y)">$${totalInv.toFixed(0)}</b>${w.slPrice?` · SL:<b style="color:var(--r)">$${fpZ(w.slPrice,w.slPrice)}</b>` :''}${w.tp1Price?` · TP1:<b style="color:var(--g)">$${fpZ(w.tp1Price,w.tp1Price)}</b>${avgEntry>0?` <span style="color:var(--g);font-size:12px">(Est: <b>$${(totalInv*w.tp1Price/avgEntry).toFixed(2)}</b> / <b>+$${(totalInv*(w.tp1Price-avgEntry)/avgEntry).toFixed(2)}</b>)</span>`:''}` :''}</div>` :''}
         <div class="wc-bar"><div class="wc-fill" style="width:${dist!==null?Math.max(5,Math.min(100,100-dist*4)):5}%;background:${hot?'var(--g)':near?'var(--y)':'var(--b)'}"></div></div>
         <!-- ÓRDENES CON EDICIÓN -->
         <div class="order-list">
