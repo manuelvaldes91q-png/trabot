@@ -170,11 +170,11 @@ select.inp{cursor:pointer}
 
 /* LOG */
 .logbox{background:var(--bg2);border:1px solid var(--bdr);border-radius:6px;overflow:hidden;margin-bottom:9px}
-.log-hdr{padding:5px 10px;border-bottom:1px solid var(--bdr);font-family:var(--mono);font-size:8px;font-weight:700;color:var(--t2);display:flex;justify-content:space-between;align-items:center}
+.log-hdr{padding:10px 14px;border-bottom:1px solid var(--bdr);font-family:var(--mono);font-size:13px;font-weight:700;color:var(--t2);display:flex;justify-content:space-between;align-items:center}
 .log-body{max-height:110px;overflow-y:auto}
-.le{display:flex;gap:6px;padding:2px 10px;font-family:var(--mono);font-size:8px;border-bottom:1px solid rgba(30,38,56,.25)}
+.le{display:flex;gap:10px;padding:6px 14px;font-family:var(--mono);font-size:13px;border-bottom:1px solid rgba(30,38,56,.25)}
 .le:last-child{border:none}
-.lt{color:var(--t3);min-width:54px;flex-shrink:0}
+.lt{color:var(--t3);min-width:85px;flex-shrink:0}
 .lm.buy{color:var(--g)}.lm.sell{color:var(--r)}.lm.info{color:var(--b)}.lm.warn{color:var(--y)}.lm.tp{color:#4ade80}.lm.sl_{color:var(--r)}
 
 /* CHART */
@@ -573,16 +573,16 @@ window.addEventListener('DOMContentLoaded', () => {
     <!-- LOG -->
     <div class="logbox">
       <div class="log-hdr">🤖 Log del Bot
-        <div style="display:flex;gap:6px;align-items:center">
-          <span style="font-size:7px;color:var(--t2)">Filtrar:</span>
-          <select id="logTypeFilter" onchange="renderLog()" class="inp" style="padding:1px 4px;font-size:8px;background:rgba(255,255,255,.05);border-color:var(--bdr2);color:var(--t);outline:none;cursor:pointer;">
+        <div style="display:flex;gap:8px;align-items:center">
+          <span style="font-size:12px;color:var(--t2)">Filtrar:</span>
+          <select id="logTypeFilter" onchange="renderLog()" class="inp" style="padding:2px 6px;font-size:12px;background:rgba(255,255,255,.05);border-color:var(--bdr2);color:var(--t);outline:none;cursor:pointer;">
             <option value="all">Todos</option>
             <option value="buy">🟢 Compra</option>
             <option value="sell">🔴 Venta</option>
             <option value="error">⚠️ Error</option>
             <option value="system">⚙️ Sistema</option>
           </select>
-          <span style="cursor:pointer" onclick="clearLog()">limpiar</span>
+          <span style="cursor:pointer;font-size:12px;" onclick="clearLog()">limpiar</span>
         </div>
       </div>
       <div class="log-body" id="logbody" style="max-height: 300px;"></div>
@@ -591,7 +591,7 @@ window.addEventListener('DOMContentLoaded', () => {
     <!-- SOLANA SWAP LOGS -->
     <div class="logbox">
       <div class="log-hdr">🚀 Swaps Solana
-        <span style="cursor:pointer" onclick="renderSolanaLogs()">refresh</span>
+        <span style="cursor:pointer;font-size:12px;" onclick="renderSolanaLogs()">refresh</span>
       </div>
       <div class="log-body" id="solanaLogBody" style="max-height: 300px;"></div>
     </div>
