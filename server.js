@@ -587,11 +587,11 @@ async function getSolanaPrices(addresses) {
     const uniqueAddresses = Array.from(new Set(addresses.map(a => a.trim()).filter(Boolean)));
     if (!uniqueAddresses.length) return {};
 
-    // Check which addresses need a refresh (older than 2 seconds or not in cache)
-    // Check which addresses need a refresh (older than 2 seconds or not in cache)
+    // Check which addresses need a refresh (older than 2 seconds or not in cache, unless actively subscribed via WS)
     for (const addr of uniqueAddresses) {
       const cached = solanaPricesCache[addr];
-      if (cached && (now - cached.lastFetch < 2000)) {
+      const hasActiveSub = activeVaultSubs.has(addr) && !activeVaultSubs.get(addr).pending;
+      if (cached && (hasActiveSub || (now - cached.lastFetch < 2000))) {
         results[addr] = { price: cached.price, liquidity: cached.liquidity };
       } else {
         toFetch.push(addr);
@@ -2934,6 +2934,13 @@ async function trackRaydiumVaults(addresses) {
             // Write directly to the cache that runSolanaCycle uses
             const existingLiq = solanaPricesCache[token]?.liquidity || 0;
             solanaPricesCache[token] = { price: finalPrice, liquidity: existingLiq, lastFetch: Date.now() };
+
+            // Trigger an immediate, non-blocking check cycle so price updates and auto-buys happen instantly without waiting 5 seconds
+            if (monitorOn) {
+              setImmediate(() => {
+                runSolanaCycle().catch(() => {});
+              });
+            }
          }
       };
 
