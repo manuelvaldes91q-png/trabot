@@ -14,6 +14,7 @@
   "dependencies": {
     "@ellipsis-labs/phoenix-sdk": "^2.0.3",
     "@google/genai": "^2.4.0",
+    "@raydium-io/raydium-sdk-v2": "^0.2.59-alpha",
     "@solana/spl-token": "^0.4.14",
     "@solana/web3.js": "^1.98.4",
     "@tailwindcss/vite": "^4.1.14",
