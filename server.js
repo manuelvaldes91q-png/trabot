@@ -613,6 +613,9 @@ async function getSolanaPrices(addresses) {
 
       if (solanaWsConnection) {
         const remaining = [];
+        const pumpAddrs = [];
+        const pumpBondingCurves = [];
+        
         for (const addr of toFetch) {
           if (addr.toLowerCase().endsWith('pump')) {
             try {
@@ -621,7 +624,24 @@ async function getSolanaPrices(addresses) {
                 [Buffer.from("bonding-curve"), new PublicKey(addr).toBuffer()],
                 pumpProgramId
               );
-              const info = await solanaWsConnection.getAccountInfo(bondingCurve);
+              pumpAddrs.push(addr);
+              pumpBondingCurves.push(bondingCurve);
+            } catch (e) {
+              remaining.push(addr);
+            }
+          } else {
+            remaining.push(addr);
+          }
+        }
+
+        if (pumpBondingCurves.length > 0) {
+          try {
+            // Batch fetch to save RPC roundtrips
+            const infos = await solanaWsConnection.getMultipleAccountsInfo(pumpBondingCurves);
+            for (let i = 0; i < infos.length; i++) {
+              const info = infos[i];
+              const addr = pumpAddrs[i];
+              let resolved = false;
               if (info && info.data && info.data.length >= 49) {
                 const isComplete = info.data[48] === 1;
                 if (!isComplete) {
@@ -637,15 +657,15 @@ async function getSolanaPrices(addresses) {
                     
                     solanaPricesCache[addr] = { price: finalPrice, liquidity: finalLiquidity, lastFetch: now };
                     results[addr] = { price: finalPrice, liquidity: finalLiquidity };
-                    continue;
+                    resolved = true;
                   }
                 }
               }
-            } catch (e) {
-              // Ignore and let it fall back
+              if (!resolved) remaining.push(addr);
             }
+          } catch (e) {
+            for (const addr of pumpAddrs) remaining.push(addr);
           }
-          remaining.push(addr);
         }
         toFetch = remaining;
       }
@@ -656,14 +676,14 @@ async function getSolanaPrices(addresses) {
       const apiKey = appConfig.dextoolsApiKey || process.env.DEXTOOLS_API_KEY;
       
       if (apiKey) {
-        // Try fetching via DexTools API
-        for (const addr of toFetch) {
+        // Try fetching via DexTools API in parallel
+        await Promise.all(toFetch.map(async (addr) => {
           try {
             // DexTools endpoint for token price: https://public-api.dextools.io/trial/v2/token/solana/{address}/price
             const url = `https://public-api.dextools.io/trial/v2/token/solana/${addr}/price`;
             const r = await fetch(url, {
               headers: { 'x-api-key': apiKey },
-              signal: AbortSignal.timeout(5000)
+              signal: AbortSignal.timeout(4000)
             });
             if (r.ok) {
               const d = await r.json();
@@ -671,7 +691,7 @@ async function getSolanaPrices(addresses) {
               const liquidity = d.data?.liquidity || 0;
               solanaPricesCache[addr] = { price: +price, liquidity: +liquidity, lastFetch: now };
               results[addr] = { price: +price, liquidity: +liquidity };
-              continue;
+              return;
             }
           } catch (e) {
             if (e.message !== 'fetch failed' && !e.message.includes('timeout') && !e.message.includes('fetch')) {
@@ -684,7 +704,7 @@ async function getSolanaPrices(addresses) {
           if (cached) {
             results[addr] = { price: cached.price, liquidity: cached.liquidity };
           }
-        }
+        }));
       } else {
         // Use Jupiter as primary price source (supports 100 max per request, very fast)
         const chunks = [];
@@ -692,7 +712,8 @@ async function getSolanaPrices(addresses) {
           chunks.push(toFetch.slice(i, i + 100));
         }
 
-        for (const chunk of chunks) {
+        await Promise.all(chunks.map(async (chunk, chunkIdx) => {
+          if (chunkIdx > 0) await new Promise(res => setTimeout(res, chunkIdx * 200));
           let jupiterSuccess = false;
           try {
             const jupUrl = `https://price.jup.ag/v6/price?ids=${chunk.join(',')}`;
@@ -727,8 +748,11 @@ async function getSolanaPrices(addresses) {
                     for (const a of allowedMissed) {
                       lastDexScreenerFetch[a] = now;
                     }
+                    const dexChunks = [];
                     for (let i = 0; i < allowedMissed.length; i += 30) {
-                      const dexChunk = allowedMissed.slice(i, i + 30);
+                      dexChunks.push(allowedMissed.slice(i, i + 30));
+                    }
+                    await Promise.all(dexChunks.map(async (dexChunk) => {
                       const dexScrUrl = `https://api.dexscreener.com/latest/dex/tokens/${dexChunk.join(',')}`;
                       try {
                         const dexRes = await fetch(dexScrUrl, { signal: AbortSignal.timeout(4000) });
@@ -766,7 +790,7 @@ async function getSolanaPrices(addresses) {
                           if (solanaPricesCache[a]) results[a] = { price: solanaPricesCache[a].price, liquidity: solanaPricesCache[a].liquidity };
                         }
                       }
-                    }
+                    }));
                   } else {
                     for (const a of missed) {
                       const cached = solanaPricesCache[a];
@@ -793,11 +817,14 @@ async function getSolanaPrices(addresses) {
                 lastDexScreenerFetch[a] = now;
               }
               // Full fallback to Dexscreener in chunks of 30 if Jupiter completely failed
+              const fullDexChunks = [];
               for (let i = 0; i < allowedChunk.length; i += 30) {
-                const dexChunk = allowedChunk.slice(i, i + 30);
+                fullDexChunks.push(allowedChunk.slice(i, i + 30));
+              }
+              await Promise.all(fullDexChunks.map(async (dexChunk) => {
                 const dexScrUrl = `https://api.dexscreener.com/latest/dex/tokens/${dexChunk.join(',')}`;
                 try {
-                  const dexRes = await fetch(dexScrUrl, { signal: AbortSignal.timeout(5000) });
+                  const dexRes = await fetch(dexScrUrl, { signal: AbortSignal.timeout(4000) });
                   if (dexRes.ok) {
                     const dexData = await dexRes.json();
                     const dexParsed = {};
@@ -832,7 +859,7 @@ async function getSolanaPrices(addresses) {
                       if (solanaPricesCache[a]) results[a] = { price: solanaPricesCache[a].price, liquidity: solanaPricesCache[a].liquidity };
                    }
                 }
-              }
+              }));
             } else {
               for (const a of chunk) {
                 const cached = solanaPricesCache[a];
@@ -840,9 +867,7 @@ async function getSolanaPrices(addresses) {
               }
             }
           }
-          
-          if (chunks.length > 1) await new Promise(res => setTimeout(res, 200));
-        }
+        }));
       }
     }
 
@@ -868,56 +893,52 @@ async function getSolanaPrice(tokenAddress) {
 }
 
 async function getTokenUiBalance(connection, ownerPubKey, tokenMintStr) {
-  try {
-    const owner = new PublicKey(ownerPubKey);
-    if (tokenMintStr === 'So11111111111111111111111111111111111111112') {
-      const nativeBal = await connection.getBalance(owner);
-      let wsolBalRaw = 0;
-      try {
-        const mint = new PublicKey(tokenMintStr);
-        const accounts = await connection.getParsedTokenAccountsByOwner(owner, { mint });
-        if (accounts && accounts.value && accounts.value.length) {
-          wsolBalRaw = Number(accounts.value[0].account.data.parsed.info.tokenAmount.amount);
-        }
-      } catch (e) {}
-      return (nativeBal + wsolBalRaw) / 1e9;
+  const owner = new PublicKey(ownerPubKey);
+  if (tokenMintStr === 'So11111111111111111111111111111111111111112') {
+    const nativeBal = await connection.getBalance(owner);
+    let wsolBalRaw = 0;
+    try {
+      const mint = new PublicKey(tokenMintStr);
+      const accounts = await connection.getParsedTokenAccountsByOwner(owner, { mint });
+      if (accounts && accounts.value && accounts.value.length) {
+        wsolBalRaw = Number(accounts.value[0].account.data.parsed.info.tokenAmount.amount);
+      }
+    } catch (e) {
+      if (e.message && e.message.includes('429')) throw e;
     }
-    const mint = new PublicKey(tokenMintStr);
-    const accounts = await connection.getParsedTokenAccountsByOwner(owner, { mint });
-    if (accounts && accounts.value && accounts.value.length) {
-      return accounts.value[0].account.data.parsed.info.tokenAmount.uiAmount || 0;
-    }
-    return 0;
-  } catch (e) {
-    return 0;
+    return (nativeBal + wsolBalRaw) / 1e9;
   }
+  const mint = new PublicKey(tokenMintStr);
+  const accounts = await connection.getParsedTokenAccountsByOwner(owner, { mint });
+  if (accounts && accounts.value && accounts.value.length) {
+    return accounts.value[0].account.data.parsed.info.tokenAmount.uiAmount || 0;
+  }
+  return 0;
 }
 
 async function getTokenBalance(connection, ownerPubKey, tokenMintStr) {
-  try {
-    const owner = new PublicKey(ownerPubKey);
-    if (tokenMintStr === 'So11111111111111111111111111111111111111112') {
-      const nativeBal = await connection.getBalance(owner);
-      let wsolBalRaw = 0;
-      try {
-        const mint = new PublicKey(tokenMintStr);
-        const accounts = await connection.getParsedTokenAccountsByOwner(owner, { mint });
-        if (accounts && accounts.value && accounts.value.length) {
-          wsolBalRaw = Number(accounts.value[0].account.data.parsed.info.tokenAmount.amount);
-        }
-      } catch (e) {}
-      return nativeBal + wsolBalRaw;
+  const owner = new PublicKey(ownerPubKey);
+  if (tokenMintStr === 'So11111111111111111111111111111111111111112') {
+    const nativeBal = await connection.getBalance(owner);
+    let wsolBalRaw = 0;
+    try {
+      const mint = new PublicKey(tokenMintStr);
+      const accounts = await connection.getParsedTokenAccountsByOwner(owner, { mint });
+      if (accounts && accounts.value && accounts.value.length) {
+        wsolBalRaw = Number(accounts.value[0].account.data.parsed.info.tokenAmount.amount);
+      }
+    } catch (e) {
+      if (e.message && e.message.includes('429')) throw e;
     }
-    const mint = new PublicKey(tokenMintStr);
-    const accounts = await connection.getParsedTokenAccountsByOwner(owner, { mint });
-    if (accounts && accounts.value && accounts.value.length) {
-      const bal = accounts.value[0].account.data.parsed.info.tokenAmount.amount;
-      return +bal;
-    }
-    return 0;
-  } catch (e) {
-    return 0;
+    return nativeBal + wsolBalRaw;
   }
+  const mint = new PublicKey(tokenMintStr);
+  const accounts = await connection.getParsedTokenAccountsByOwner(owner, { mint });
+  if (accounts && accounts.value && accounts.value.length) {
+    const bal = accounts.value[0].account.data.parsed.info.tokenAmount.amount;
+    return +bal;
+  }
+  return 0;
 }
 
 async function getEmptyTokenAccounts(connection, ownerPublicKey) {
@@ -2382,18 +2403,27 @@ async function executeSolanaTradeInternal(w, side, amountUSDT, price, pk, feePay
 
       let baseBalAfter = baseBalBefore;
       let tokenBalAfter = tokenBalBefore;
-      for (let i = 0; i < 5; i++) {
-        baseBalAfter = await getTokenBalance(connection, userPublicKey, baseMint);
-        tokenBalAfter = await getTokenUiBalance(connection, userPublicKey, targetMint);
-        
-        const baseChanged = Math.abs(baseBalAfter - baseBalBefore) > 0;
-        const tokenChanged = Math.abs(tokenBalAfter - tokenBalBefore) > 0;
-        
-        if (side === 'BUY' && tokenChanged) break;
-        if (side === 'SELL' && baseChanged) break;
-        if (baseChanged && tokenChanged) break;
-        
-        await new Promise(r => setTimeout(r, 1500));
+      try {
+        for (let i = 0; i < 5; i++) {
+          baseBalAfter = await getTokenBalance(connection, userPublicKey, baseMint);
+          tokenBalAfter = await getTokenUiBalance(connection, userPublicKey, targetMint);
+          
+          const baseChanged = Math.abs(baseBalAfter - baseBalBefore) > 0;
+          const tokenChanged = Math.abs(tokenBalAfter - tokenBalBefore) > 0;
+          
+          if (side === 'BUY' && tokenChanged) break;
+          if (side === 'SELL' && baseChanged) break;
+          if (baseChanged && tokenChanged) break;
+          
+          await new Promise(r => setTimeout(r, 1500));
+        }
+      } catch (e) {
+        addLog(`⚠️ Error verificando balance post-swap para ${w.symbol} (tx: ${txid}), ignorando error de RPC: ${e.message}`, 'info');
+        // If it was a SELL, assume we sold all tokens we tried to sell. If it was a BUY, assume we got some tokens.
+        if (side === 'SELL') {
+          tokenBalAfter = 0;
+          baseBalAfter = baseBalBefore + (rawAmount || 0);
+        }
       }
       
       const diffRaw = side === 'SELL' ? (baseBalAfter - baseBalBefore) : (baseBalBefore - baseBalAfter);
@@ -2937,13 +2967,13 @@ async function trackRaydiumVaults(addresses) {
     solanaWsConnection = new Connection(appConfig.solanaRpcUrl, 'processed');
   }
 
-  for (const token of addresses) {
-    if (token.toLowerCase() === 'so11111111111111111111111111111111111111112') continue;
+  await Promise.all(addresses.map(async (token) => {
+    if (token.toLowerCase() === 'so11111111111111111111111111111111111111112') return;
     const sub = activeVaultSubs.get(token);
     if (sub) {
-      if (sub.pending) continue;
-      if (sub.poolAddress) continue; // already active
-      if (sub.failedAt && (Date.now() - sub.failedAt < 60000)) continue; // wait 1 minute before retrying failed setups
+      if (sub.pending) return;
+      if (sub.poolAddress) return; // already active
+      if (sub.failedAt && (Date.now() - sub.failedAt < 60000)) return; // wait 1 minute before retrying failed setups
     }
     
     // We mark it as pending so we don't fire multiple requests
@@ -3000,7 +3030,7 @@ async function trackRaydiumVaults(addresses) {
             }, 'processed');
 
             activeVaultSubs.set(token, { poolAddress: bondingCurve, baseVault: bondingCurve.toString(), quoteVault: bondingCurve.toString(), baseSubId: subId });
-            continue;
+            return;
           }
         }
       } catch (err) {
@@ -3035,14 +3065,14 @@ async function trackRaydiumVaults(addresses) {
         const res = await fetch(url, { signal: AbortSignal.timeout(4000) });
         if (!res.ok) {
           activeVaultSubs.set(token, { failedAt: Date.now() });
-          continue;
+          return;
         }
         const data = await res.json();
         
         const raydiumPairs = data.pairs?.filter(p => p.chainId === 'solana' && p.dexId === 'raydium');
         if (!raydiumPairs || raydiumPairs.length === 0) {
           activeVaultSubs.set(token, { failedAt: Date.now() });
-          continue;
+          return;
         }
         
         // Get the pair with highest liquidity
@@ -3055,14 +3085,14 @@ async function trackRaydiumVaults(addresses) {
         const poolInfo = await solanaWsConnection.getAccountInfo(poolAddress);
         if (!poolInfo || !poolInfo.data) {
           activeVaultSubs.set(token, { failedAt: Date.now() });
-          continue;
+          return;
         }
         
         const layout = LIQUIDITY_VERSION_TO_STATE_LAYOUT[4];
         // Only decode if it's V4 AMM (data size 752)
         if (poolInfo.data.length !== 752) {
           activeVaultSubs.set(token, { failedAt: Date.now() });
-          continue;
+          return;
         }
         
         const decoded = layout.decode(poolInfo.data);
@@ -3171,7 +3201,7 @@ async function trackRaydiumVaults(addresses) {
       // console.error("Error setting up vault ws", e);
       activeVaultSubs.set(token, { failedAt: Date.now() }); // mark as failed to avoid spamming DexScreener/RPC
     }
-  }
+  }));
 }
 // --- END RAYDIUM VAULT WS TRACKING ---
 
