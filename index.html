@@ -2571,10 +2571,16 @@ function renderWatchList(){
   el.innerHTML = sortedItems.map(({w, wi, cp, filledOrds, pendingOrds, nextOrd}) => {
     const dist=nextOrd?(cp-nextOrd.price)/cp*100:null;
     const hot=dist!==null&&dist<=1.5,near=dist!==null&&dist<=5;
-    let pnlLive=0,pnlPct=0,totalInv=0,avgEntry=0;
+    let pnlLive=0,pnlPct=0,totalInv=0,avgEntry=0,totalTokens=0;
     if(filledOrds.length){
-      totalInv=filledOrds.reduce((a,o)=>a+o.amount,0);
-      avgEntry=filledOrds.reduce((a,o)=>a+(o.filledPrice||o.price)*o.amount,0)/totalInv;
+      if (w.filledBuys && w.filledBuys.length) {
+        totalInv = w.filledBuys.reduce((a,o)=>a+o.amount,0);
+        totalTokens = w.filledBuys.reduce((a,o)=>a+(o.tokens || (o.amount/o.price)),0);
+      } else {
+        totalInv = filledOrds.reduce((a,o)=>a+o.amount,0);
+        totalTokens = filledOrds.reduce((a,o)=>a+(o.amount/(o.filledPrice||o.price)),0);
+      }
+      avgEntry = totalTokens > 0 ? totalInv / totalTokens : 0;
       pnlLive=totalInv*(cp-avgEntry)/avgEntry;
       pnlPct=(cp-avgEntry)/avgEntry*100;
     }
@@ -2604,7 +2610,7 @@ function renderWatchList(){
           ${filledOrds.length?`<span class="wc-pnl" style="color:${pnlLive>=0?'var(--g)':'var(--r)'}">${pnlLive>=0?'+':''}$${pnlLive.toFixed(2)} (${pnlPct.toFixed(1)}%)</span>` :''}
         </div>
         ${nextOrd?`<div class="wc-info">Próxima: <b style="color:${hot?'var(--g)':near?'var(--y)':'var(--b)'}">$${fpZ(nextOrd.price,nextOrd.price)}</b> · ${dist!==null?(dist>0?'−'+dist.toFixed(1)+'% falta':'⚡ ¡LLEGÓ!'):''} · $${nextOrd.amount}</div>` :''}
-        ${filledOrds.length?`<div class="wc-info">Avg: <b>$${fpZ(avgEntry,avgEntry)}</b> · Inv: <b style="color:var(--y)">$${Number(totalInv.toFixed(2))}</b> · Monedas: <b style="color:var(--t)">${avgEntry>0?Number((totalInv/avgEntry).toFixed(2)).toLocaleString():'0'}</b><br/>${w.slPrice?`SL:<b style="color:var(--r)">$${fpZ(w.slPrice,w.slPrice)}</b>` :''}${w.tp1Price?` · TP:<b style="color:var(--g)">$${fpZ(w.tp1Price,w.tp1Price)}</b>${avgEntry>0?` <span style="color:var(--g);font-size:12px">(Est: <b>$${(totalInv*w.tp1Price/avgEntry).toFixed(2)}</b> / <b>+$${(totalInv*(w.tp1Price-avgEntry)/avgEntry).toFixed(2)}</b>)</span>`:''}` :''}</div>` :''}
+        ${filledOrds.length?`<div class="wc-info">Avg: <b>$${fpZ(avgEntry,avgEntry)}</b> · Inv: <b style="color:var(--y)">$${Number(totalInv.toFixed(2))}</b> · Monedas: <b style="color:var(--t)">${totalTokens>0?Number(totalTokens.toFixed(2)).toLocaleString():'0'}</b><br/>${w.slPrice?`SL:<b style="color:var(--r)">$${fpZ(w.slPrice,w.slPrice)}</b>` :''}${w.tp1Price?` · TP:<b style="color:var(--g)">$${fpZ(w.tp1Price,w.tp1Price)}</b>${avgEntry>0?` <span style="color:var(--g);font-size:12px">(Est: <b>$${(totalInv*w.tp1Price/avgEntry).toFixed(2)}</b> / <b>+$${(totalInv*(w.tp1Price-avgEntry)/avgEntry).toFixed(2)}</b>)</span>`:''}` :''}</div>` :''}
         <div class="wc-bar"><div class="wc-fill" style="width:${dist!==null?Math.max(5,Math.min(100,100-dist*4)):5}%;background:${hot?'var(--g)':near?'var(--y)':'var(--b)'}"></div></div>
         <!-- ÓRDENES CON EDICIÓN -->
         <div class="order-list">

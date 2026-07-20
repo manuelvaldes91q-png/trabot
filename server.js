@@ -2572,18 +2572,18 @@ async function runCycle() {
           }
           o.status = 'filled'; 
           o.filledAt = Date.now(); 
-          o.filledPrice = cp;
           
-          if (!w.filledBuys) w.filledBuys = [];
-          w.filledBuys.push({ price: cp, amount: o.amount, level: o.level });
           const realRes = await executeOrder(w, 'BUY', o.amount, cp);
           if (realRes && realRes.ok) {
-            if(mode!=='real') SIM.balance -= o.amount;
+            o.filledPrice = realRes.exactPrice || cp;
+            if (!w.filledBuys) w.filledBuys = [];
+            w.filledBuys.push({ price: realRes.exactPrice || cp, amount: realRes.exactAmountUSDT || o.amount, tokens: realRes.exactTokens, level: o.level });
+            if(mode!=='real') SIM.balance -= (realRes.exactAmountUSDT || o.amount);
             SIM.totalExec++;
             
             // Si tiene TP1, mandamos la venta LIMIT de inmediato (en modo real se queda en el libro - sólo MEXC)
             if (w.tp1Price) {
-               const qtyTokens = o.amount / cp;
+               const qtyTokens = realRes.exactTokens || ((realRes.exactAmountUSDT || o.amount) / (realRes.exactPrice || cp));
                const totalTargetUsdt = qtyTokens * w.tp1Price;
                const tpRes = await mxRealOrder(w.symbol, 'SELL', totalTargetUsdt, w.tp1Price);
                if (tpRes && tpRes.ok && tpRes.orderId !== 'sim') {
@@ -3291,7 +3291,7 @@ async function runSolanaCycle() {
             const realFillPrice = realRes.exactPrice || cp;
             o.filledPrice = realFillPrice;
             if (!w.filledBuys) w.filledBuys = [];
-            w.filledBuys.push({ price: realFillPrice, amount: realRes.exactAmountUSDT || o.amount, level: o.level });
+            w.filledBuys.push({ price: realFillPrice, amount: realRes.exactAmountUSDT || o.amount, tokens: realRes.exactTokens, level: o.level });
 
             o.retryCount = 0;
             if (solMode !== 'wallet' && solMode !== 'pool') {
@@ -4102,7 +4102,7 @@ app.post('/api/action', adminAuth, async (req, res) => {
         w.orders.push(order);
         
         if (!w.filledBuys) w.filledBuys = [];
-        w.filledBuys.push({ price: finalPrice, amount: realRes.exactAmountUSDT || amount, level: order.level });
+        w.filledBuys.push({ price: finalPrice, amount: realRes.exactAmountUSDT || amount, tokens: realRes.exactTokens, level: order.level });
         
         recalculateTargets(w);
         
