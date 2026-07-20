@@ -527,7 +527,7 @@ loadState();
 
 let phoenixClient = null;
 async function initPhoenix() {
-  const rpcs = [...getRpcEndpoints(), 'https://api.mainnet-beta.solana.com'];
+  const rpcs = getRpcEndpoints();
   
   for (const rpc of rpcs) {
     try {
@@ -1334,13 +1334,7 @@ async function detectSnipersAndBundlers(connection, tokenMint, currentHoldersMap
 
 async function checkCreatorHistory(tokenMint, knownCreator) {
   const result = { creatorAddress: null, previousTokensFound: 0, checkedCount: 0, likelyRugged: 0, warning: null };
-  const rpcs = [
-    appConfig.solanaRpcUrl || process.env.SOLANA_RPC_URL,
-    'https://solana.drpc.org',
-    'https://solana-rpc.publicnode.com',
-    'https://rpc.ankr.com/solana',
-    'https://solana-rpc.publicnode.com'
-  ].filter(Boolean);
+  const rpcs = getRpcEndpoints();
 
   let connection = null;
   for (const rpc of rpcs) {
@@ -1443,7 +1437,7 @@ function detectWashTrading(volume24h, liquidityUsd, buys24h, sells24h, totalHold
 
 async function checkToken2022Extensions(tokenMint) {
   const result = { isToken2022: false, dangerousExtensions: [], warning: null };
-  const rpcs = [appConfig.solanaRpcUrl || process.env.SOLANA_RPC_URL, 'https://solana.drpc.org', 'https://solana-rpc.publicnode.com', 'https://rpc.ankr.com/solana'].filter(Boolean);
+  const rpcs = getRpcEndpoints();
   for (const rpc of rpcs) {
     try {
       const connection = new Connection(rpc, 'confirmed');
@@ -1488,7 +1482,7 @@ async function checkLpLockStatus(tokenMint) {
 
 async function checkMetadataMutability(tokenMint) {
   const result = { checked: false, isMutable: null, warning: null };
-  const rpcs = [appConfig.solanaRpcUrl || process.env.SOLANA_RPC_URL, 'https://solana.drpc.org', 'https://solana-rpc.publicnode.com'].filter(Boolean);
+  const rpcs = getRpcEndpoints();
   for (const rpc of rpcs) {
     try {
       const connection = new Connection(rpc, 'confirmed');
@@ -1657,14 +1651,7 @@ async function checkTokenSafety(tokenMint) {
     }
   }
 
-  const rpcs = [
-    appConfig.solanaRpcUrl || process.env.SOLANA_RPC_URL,
-    'https://solana.drpc.org',
-    'https://solana-rpc.publicnode.com',
-    'https://solana-mainnet.rpc.extrnode.com',
-    'https://rpc.ankr.com/solana',
-    'https://solana-rpc.publicnode.com'
-  ].filter(Boolean);
+  const rpcs = getRpcEndpoints();
 
   let mintInfo = null;
   let authorityCheckSuccess = false;
@@ -2058,7 +2045,7 @@ async function sendViaJitoBundle(connection, signedTransaction, keypair) {
 const RPC_ENDPOINTS_BASE = [
   'https://solana-rpc.publicnode.com',
   'https://solana.drpc.org',
-  'https://solana-rpc.publicnode.com'
+  'https://api.mainnet-beta.solana.com'
 ];
 function getRpcEndpoints() {
   const configured = appConfig.solanaRpcUrl || process.env.SOLANA_RPC_URL || 'https://solana-rpc.publicnode.com';
@@ -3689,10 +3676,7 @@ async function runWhaleMonitor() {
   const solanaItems = watchItems.filter(w => w.network === 'solana' && w.address);
   if (!solanaItems.length) return;
 
-  const rpcs = [
-    appConfig.solanaRpcUrl,
-    ...RPC_ENDPOINTS_BASE.filter(u => u !== appConfig.solanaRpcUrl)
-  ].filter(Boolean);
+  const rpcs = getRpcEndpoints();
 
   let connection = null;
   for (const rpc of rpcs) {
