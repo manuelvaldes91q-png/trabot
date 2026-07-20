@@ -605,9 +605,10 @@ async function getSolanaPrices(addresses) {
     // END RAYDIUM VAULTS
 
     if (toFetch.length > 0) {
-      if (!solanaWsConnection && appConfig.solanaRpcUrl) {
+      if (!solanaWsConnection) {
+        const rpcUrl = appConfig.solanaRpcUrl || process.env.SOLANA_RPC_URL || 'https://solana-rpc.publicnode.com';
         try {
-          solanaWsConnection = new Connection(appConfig.solanaRpcUrl, 'processed');
+          solanaWsConnection = new Connection(rpcUrl, 'processed');
         } catch (e) {}
       }
 
@@ -2820,6 +2821,17 @@ function scheduleWsReconnect() {
 
 // Fetches the pool address (pair address) for a Solana mint address from DexScreener
 async function getPoolAddress(mintAddress) {
+  if (mintAddress.toLowerCase().endsWith('pump')) {
+    try {
+      const pumpProgramId = new PublicKey("6EF8f6332FXmPD816eA7Z7K3M4pMDsm37S71uDX3qf2s");
+      const [bondingCurve] = PublicKey.findProgramAddressSync(
+        [Buffer.from("bonding-curve"), new PublicKey(mintAddress).toBuffer()],
+        pumpProgramId
+      );
+      return bondingCurve.toString();
+    } catch(e) {}
+  }
+  
   try {
     const r = await fetch(`https://api.dexscreener.com/latest/dex/tokens/${mintAddress}`);
     if (r.ok) {
