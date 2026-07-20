@@ -2495,6 +2495,36 @@ let loopTimer = null;
 let lastCycleAt = Date.now();
 let lastSolanaCycleAt = Date.now();
 
+function recalculateTargets(w) {
+  if (!w.orders || !w.orders.length) return;
+  const baseOrder = w.orders.find(o => o.level === 1) || w.orders[0];
+  if (!baseOrder) return;
+
+  let inv = 0;
+  let avg = 0;
+  
+  if (w.filledBuys && w.filledBuys.length) {
+    inv = w.filledBuys.reduce((a,b)=>a+b.amount,0);
+    avg = w.filledBuys.reduce((a,b)=>a+b.price*b.amount,0)/inv;
+  } else {
+    const filled = w.orders.filter(o => o.status === 'filled');
+    if (!filled.length) return;
+    inv = filled.reduce((a, o) => a + o.amount, 0);
+    avg = filled.reduce((a, o) => a + o.price * o.amount, 0) / inv;
+  }
+  
+  if (avg === 0) {
+    avg = baseOrder.price;
+  }
+  
+  if (avg > 0) {
+     w.slPrice = avg * (1 - (baseOrder.sl || 10)/100);
+     w.tp1Price = avg * (1 + (baseOrder.tp1 || 8)/100);
+     w.tp2Price = avg * (1 + (baseOrder.tp2 || 15)/100);
+     addLog(`🔄 [DCA] Objetivos de ${w.symbol} actualizados a promedio $${fpZ(avg, avg)} -> SL: $${fpZ(w.slPrice, w.slPrice)} | TP: $${fpZ(w.tp1Price, w.tp1Price)}`, 'info');
+  }
+}
+
 async function executeOrder(w, side, amount, price) {
   if (w.network === 'solana') {
     return await executeSolanaTrade(w, side, amount, price);
@@ -2564,11 +2594,7 @@ async function runCycle() {
             }
           } else continue; // Si falla, abortar ejecución actual
           
-          if (!w.slPrice) {
-             w.slPrice = o.price * (1 - (o.sl || 10)/100);
-             w.tp1Price = o.price * (1 + (o.tp1 || 8)/100);
-             w.tp2Price = o.price * (1 + (o.tp2 || 15)/100);
-          }
+          recalculateTargets(w);
           addLog(`✅ AUTO-COMPRA ${w.symbol} #${o.level}: $${fpZ(cp,cp)} · $${o.amount}`, 'buy');
           break; // sólo una por ciclo
         }
@@ -3274,11 +3300,7 @@ async function runSolanaCycle() {
             }
             SIM.totalExec++;
 
-            if (!w.slPrice) {
-               w.slPrice = realFillPrice * (1 - (o.sl || 10)/100);
-               w.tp1Price = realFillPrice * (1 + (o.tp1 || 8)/100);
-               w.tp2Price = realFillPrice * (1 + (o.tp2 || 15)/100);
-            }
+            recalculateTargets(w);
             addLog(`✅ AUTO-COMPRA SOLANA COMPLETADA: ${w.symbol} #${o.level} · $${realRes.exactAmountUSDT || o.amount} a $${fpZ(realFillPrice, realFillPrice)}`, 'buy');
           } else {
             o.retryCount = (o.retryCount || 0) + 1;
@@ -3942,16 +3964,7 @@ app.post('/api/action', adminAuth, async (req, res) => {
         Object.assign(w.orders[payload.oi], payload.updates);
         const o = w.orders[payload.oi];
         if (o.level === 1) {
-          const basePrice = o.filledPrice || o.price;
-          if (o.sl !== undefined) {
-            w.slPrice = basePrice * (1 - o.sl / 100);
-          }
-          if (o.tp1 !== undefined) {
-            w.tp1Price = basePrice * (1 + o.tp1 / 100);
-          }
-          if (o.tp2 !== undefined) {
-            w.tp2Price = basePrice * (1 + o.tp2 / 100);
-          }
+          recalculateTargets(w);
         }
       }
     } else if (action === 'manualFill') {
@@ -4091,11 +4104,7 @@ app.post('/api/action', adminAuth, async (req, res) => {
         if (!w.filledBuys) w.filledBuys = [];
         w.filledBuys.push({ price: finalPrice, amount: realRes.exactAmountUSDT || amount, level: order.level });
         
-        if (!w.slPrice) {
-          w.slPrice = finalPrice * (1 - sl/100);
-          w.tp1Price = finalPrice * (1 + tp1/100);
-          w.tp2Price = finalPrice * (1 + tp2/100);
-        }
+        recalculateTargets(w);
         
         if (w.network === 'solana') {
           if (solMode !== 'wallet' && solMode !== 'pool') {
