@@ -289,7 +289,7 @@ async function swapUSDCToSOLForFees(amountUSDC) {
     const adminPk = poolConfig.privateKey || appConfig.solanaPrivateKey || process.env.SOLANA_PRIVATE_KEY;
     const realRes = await executeSolanaTradeInternal(w, 'BUY', amountUSDC, 0, adminPk, adminPk);
     if (realRes && realRes.ok) {
-      addLog(`✅ Auto-abastecimiento de SOL completado.`, 'buy');
+      addLog(`✅ Auto-abastecimiento de SOL completado.`, 'info');
     }
   } catch (e) {
     console.error('Error auto abasteciendo SOL:', e);
@@ -305,6 +305,415 @@ async function sendTelegram(msg) {
     await fetch(`https://api.telegram.org/bot${t}/sendMessage`, {
       method: 'POST', headers: {'Content-Type': 'application/json'},
       body: JSON.stringify({ chat_id: c, text: msg, parse_mode: 'HTML' })
+    });
+  } catch (e) {}
+}
+
+// === TELEGRAM INTERACTIVE BUTTONS & COMMANDS POLLING ===
+let tgLastUpdateId = 0;
+let tgPollingActive = false;
+
+async function closePositionBySymbol(symbol) {
+  const idx = watchItems.findIndex(item => item.symbol.toUpperCase() === symbol.toUpperCase());
+  if (idx === -1) return { ok: false, msg: `❌ No se encontró la posición para ${symbol}` };
+  const w = watchItems[idx];
+  const filled = w.orders.filter(o => o.status === 'filled' || o.status === 'done');
+  if (filled.length > 0) {
+    const inv = filled.reduce((a, o) => a + o.amount, 0);
+    const avg = filled.reduce((a, o) => a + o.price * o.amount, 0) / inv;
+    let cp = 0;
+    if (w.network === 'solana') {
+      try {
+        cp = await getSolanaPrice(w.address);
+      } catch (e) {
+        console.error("Error getting Solana price for Telegram close:", e);
+      }
+    } else {
+      try {
+        cp = await mxPrice(w.symbol);
+      } catch (e) {
+        console.error("Error getting MEXC price for Telegram close:", e);
+      }
+    }
+    if (!cp || cp <= 0) cp = w.currentPrice || avg;
+    
+    let pnlP = ((cp - avg) / avg * 100);
+    let pnl = inv * pnlP / 100;
+    
+    addLog(`⚡ [Telegram] Disparando cierre de posición para ${w.symbol}...`, 'info');
+    const realRes = await executeOrder(w, 'SELL', inv + pnl, cp);
+    if (realRes && realRes.ok) {
+      if (realRes.exactAmountUSDT !== undefined && realRes.exactAmountUSDT > 0) {
+        pnl = realRes.exactAmountUSDT - inv;
+        pnlP = (pnl / inv) * 100;
+        addLog(`ℹ️ [Cierre Telegram Real] PNL exacto ajustado post-swap: $${pnl.toFixed(2)}`, 'info');
+      }
+      if (w.network === 'solana') {
+        if (solMode !== 'wallet' && solMode !== 'pool') {
+          SIM.balance += inv + pnl;
+          SIM.solBalance -= (inv / avg);
+        }
+      } else {
+        if (mode !== 'real') {
+          SIM.balance += inv + pnl;
+        }
+      }
+      SIM.pnl += pnl; distributePnL(pnl);
+      if (pnl >= 0) SIM.wins++; else SIM.losses++;
+      SIM.trades.push({ symbol: w.symbol, avgEntry: avg, exit: (realRes.exactPrice || cp), pnl, pnlPct: pnlP.toFixed(2), at: Date.now() });
+      
+      w.orders.forEach(o => { 
+        if (o.status === 'filled' || o.status === 'done') o.status = 'closed'; 
+        if (o.status === 'pending') o.status = 'cancelled';
+      });
+      w.slPrice = null; w.tp1Price = null; w.tp2Price = null; w.tp1Hit = false; w.tp2Hit = false;
+      addLog(`📉 Posición cerrada desde Telegram: ${w.symbol} (Entrada: $${fpZ(avg,avg)} ➡ Salida: $${fpZ(cp,cp)}) · P&L $${pnl.toFixed(2)} (${pnlP.toFixed(1)}%)`, 'sell');
+      
+      const freshIdx = watchItems.findIndex(item => item.symbol.toUpperCase() === w.symbol.toUpperCase());
+      if (freshIdx !== -1) watchItems.splice(freshIdx, 1);
+      saveState();
+      return { ok: true, msg: `✅ Posición para ${w.symbol} cerrada correctamente. P&L: $${pnl.toFixed(2)} (${pnlP.toFixed(1)}%)` };
+    } else {
+      return { ok: false, msg: `❌ La venta de cierre real falló para ${w.symbol}.` };
+    }
+  } else {
+    // Fallback sin órdenes filled
+    let totalInv = 0;
+    w.orders.forEach(o => { if (o.status === 'done' || o.status === 'filled') { totalInv += o.amount; o.status = 'closed'; } });
+    SIM.balance += totalInv; 
+    addLog(`📉 Posición cerrada desde Telegram (virtual/sin órdenes): ${w.symbol}`, 'sell');
+    const freshIdx = watchItems.findIndex(item => item.symbol.toUpperCase() === w.symbol.toUpperCase());
+    if (freshIdx !== -1) watchItems.splice(freshIdx, 1);
+    saveState();
+    return { ok: true, msg: `📉 Posición para ${w.symbol} cerrada (virtual/sin órdenes).` };
+  }
+}
+
+async function startTelegramPolling() {
+  if (tgPollingActive) return;
+  tgPollingActive = true;
+  console.log("🤖 Inicializando sistema de interacción de Telegram...");
+  
+  while (true) {
+    const t = appConfig.tgBotToken || process.env.TELEGRAM_BOT_TOKEN;
+    if (!t) {
+      await new Promise(resolve => setTimeout(resolve, 10000));
+      continue;
+    }
+    
+    try {
+      const url = `https://api.telegram.org/bot${t}/getUpdates?offset=${tgLastUpdateId + 1}&timeout=10`;
+      const res = await fetch(url, { signal: AbortSignal.timeout(15000) });
+      const data = await res.json();
+      if (data.ok && data.result.length > 0) {
+        for (const update of data.result) {
+          tgLastUpdateId = update.update_id;
+          await handleTelegramUpdate(update);
+        }
+      }
+    } catch (e) {
+      if (e.name !== 'TimeoutError') {
+        console.error("⚠️ Error en polling de Telegram:", e.message);
+      }
+    }
+    await new Promise(resolve => setTimeout(resolve, 1000));
+  }
+}
+
+async function handleTelegramUpdate(update) {
+  const t = appConfig.tgBotToken || process.env.TELEGRAM_BOT_TOKEN;
+  const configChatId = appConfig.tgChatId || process.env.TELEGRAM_CHAT_ID;
+  if (!t) return;
+
+  // 1. Mensaje de Texto Normal
+  if (update.message && update.message.text) {
+    const chatId = update.message.chat.id.toString();
+    const text = update.message.text.trim();
+    
+    if (configChatId && chatId !== configChatId.toString()) {
+      return; // Seguridad: Ignorar otros chats
+    }
+
+    if (text === '/start' || text.toLowerCase() === 'menu' || text.toLowerCase() === 'menú') {
+      await sendTelegramMenu(chatId);
+    } else if (text === '/posiciones' || text.toLowerCase() === 'posiciones') {
+      await sendTelegramPositions(chatId);
+    } else if (text === '/cerrar' || text.toLowerCase() === 'cerrar') {
+      await sendTelegramCloseMenu(chatId);
+    }
+  }
+
+  // 2. Callback de Botones Inline
+  if (update.callback_query) {
+    const query = update.callback_query;
+    const chatId = query.message.chat.id.toString();
+    const queryId = query.id;
+    const data = query.data;
+
+    if (configChatId && chatId !== configChatId.toString()) {
+      await answerCallback(queryId, "⚠️ Acceso no autorizado.");
+      return;
+    }
+
+    try {
+      if (data === 'view_positions') {
+        await answerCallback(queryId, "Cargando posiciones...");
+        await sendTelegramPositions(chatId);
+      } else if (data === 'select_close') {
+        await answerCallback(queryId, "Cargando menú de cierre...");
+        await sendTelegramCloseMenu(chatId);
+      } else if (data.startsWith('confirm_close:')) {
+        const symbol = data.split(':')[1];
+        await answerCallback(queryId, `Confirmación para ${symbol}`);
+        await sendTelegramConfirmClose(chatId, symbol);
+      } else if (data.startsWith('close:')) {
+        const symbol = data.split(':')[1];
+        await answerCallback(queryId, `Cerrando posición de ${symbol}...`);
+        const res = await closePositionBySymbol(symbol);
+        await sendTelegramMessageWithMenu(chatId, res.msg);
+      } else if (data === 'menu') {
+        await answerCallback(queryId, "Menú principal");
+        await sendTelegramMenu(chatId);
+      } else {
+        await answerCallback(queryId, "Opción no reconocida.");
+      }
+    } catch (err) {
+      console.error("Error procesando callback de telegram:", err);
+      await answerCallback(queryId, "❌ Error procesando solicitud.");
+    }
+  }
+}
+
+async function answerCallback(queryId, text) {
+  const t = appConfig.tgBotToken || process.env.TELEGRAM_BOT_TOKEN;
+  if (!t) return;
+  try {
+    await fetch(`https://api.telegram.org/bot${t}/answerCallbackQuery`, {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({ callback_query_id: queryId, text })
+    });
+  } catch (e) {}
+}
+
+async function sendTelegramMenu(chatId) {
+  const t = appConfig.tgBotToken || process.env.TELEGRAM_BOT_TOKEN;
+  if (!t) return;
+  const keyboard = {
+    inline_keyboard: [
+      [
+        { text: '📊 Ver Posiciones', callback_data: 'view_positions' },
+        { text: '❌ Cerrar Posición', callback_data: 'select_close' }
+      ]
+    ]
+  };
+
+  const currentMode = mode === 'real' ? 'REAL' : 'SIMULADO';
+  const text = `👋 <b>¡Hola!</b> Soy el Bot de control de tu sistema de Trading.\n\n<b>Modo actual:</b> <code>${currentMode}</code>\n<b>Sub-modo Solana:</b> <code>${solMode === 'pool' ? 'Pool' : 'Wallet'}</code>\n\n¿Qué deseas hacer hoy? Usa los botones a continuación o los comandos /posiciones y /cerrar.`;
+
+  try {
+    await fetch(`https://api.telegram.org/bot${t}/sendMessage`, {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({
+        chat_id: chatId,
+        text,
+        parse_mode: 'HTML',
+        reply_markup: keyboard
+      })
+    });
+  } catch (e) {}
+}
+
+async function sendTelegramPositions(chatId) {
+  const t = appConfig.tgBotToken || process.env.TELEGRAM_BOT_TOKEN;
+  if (!t) return;
+
+  const activePositions = watchItems.filter(w => {
+    const filledOrds = w.orders ? w.orders.filter(o => o.status === 'filled' || o.status === 'done') : [];
+    return filledOrds.length > 0;
+  });
+
+  if (activePositions.length === 0) {
+    const keyboard = {
+      inline_keyboard: [
+        [{ text: '🔄 Actualizar', callback_data: 'view_positions' }],
+        [{ text: '🔙 Menú Principal', callback_data: 'menu' }]
+      ]
+    };
+    await fetch(`https://api.telegram.org/bot${t}/sendMessage`, {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({
+        chat_id: chatId,
+        text: '📊 <b>Ver Posiciones</b>\n\nNo tienes posiciones activas en este momento.',
+        parse_mode: 'HTML',
+        reply_markup: keyboard
+      })
+    });
+    return;
+  }
+
+  let text = `📊 <b>Posiciones Activas (${activePositions.length})</b>\n\n`;
+  const buttons = [];
+
+  for (const w of activePositions) {
+    const filledOrds = w.orders.filter(o => o.status === 'filled' || o.status === 'done');
+    let cp = w.currentPrice || 0;
+    if (cp <= 0) {
+      if (w.network === 'solana') {
+        cp = await getSolanaPrice(w.address).catch(() => w.currentPrice || 0);
+      } else {
+        cp = await mxPrice(w.symbol).catch(() => w.currentPrice || 0);
+      }
+    }
+    
+    let totalInv = 0, totalTokens = 0, avgEntry = 0, pnlLive = 0, pnlPct = 0;
+    if (w.filledBuys && w.filledBuys.length) {
+      totalInv = w.filledBuys.reduce((a, o) => a + o.amount, 0);
+      totalTokens = w.filledBuys.reduce((a, o) => a + (o.tokens || (o.amount / o.price)), 0);
+    } else {
+      totalInv = filledOrds.reduce((a, o) => a + o.amount, 0);
+      totalTokens = filledOrds.reduce((a, o) => a + (o.amount / (o.filledPrice || o.price)), 0);
+    }
+    avgEntry = totalTokens > 0 ? totalInv / totalTokens : 0;
+    pnlLive = totalInv * (cp - avgEntry) / avgEntry;
+    pnlPct = (cp - avgEntry) / avgEntry * 100;
+    const currentVal = totalTokens * cp;
+
+    const pnlSign = pnlLive >= 0 ? '+' : '';
+    const pnlColor = pnlLive >= 0 ? '🟩' : '🟥';
+
+    text += `🪙 <b>${w.symbol}</b> (${w.network.toUpperCase()})\n`;
+    text += `  • Avg Entrada: <code>$${fpZ(avgEntry, avgEntry)}</code>\n`;
+    text += `  • Invertido: <code>$${totalInv.toFixed(2)}</code>\n`;
+    text += `  • Monedas: <code>${Number(totalTokens.toFixed(2)).toLocaleString()}</code>\n`;
+    text += `  • Precio Actual: <code>$${fpZ(cp, cp)}</code>\n`;
+    text += `  • Valor Actual: <code>$${currentVal.toFixed(2)}</code>\n`;
+    text += `  • ${pnlColor} P&L: <b>${pnlSign}$${pnlLive.toFixed(2)} (${pnlSign}${pnlPct.toFixed(1)}%)</b>\n\n`;
+
+    buttons.push([{ text: `❌ Cerrar ${w.symbol}`, callback_data: `confirm_close:${w.symbol}` }]);
+  }
+
+  buttons.push([
+    { text: '🔄 Actualizar', callback_data: 'view_positions' },
+    { text: '🔙 Menú Principal', callback_data: 'menu' }
+  ]);
+
+  const keyboard = { inline_keyboard: buttons };
+
+  try {
+    await fetch(`https://api.telegram.org/bot${t}/sendMessage`, {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({
+        chat_id: chatId,
+        text,
+        parse_mode: 'HTML',
+        reply_markup: keyboard
+      })
+    });
+  } catch (e) {}
+}
+
+async function sendTelegramCloseMenu(chatId) {
+  const t = appConfig.tgBotToken || process.env.TELEGRAM_BOT_TOKEN;
+  if (!t) return;
+
+  const activePositions = watchItems.filter(w => {
+    const filledOrds = w.orders ? w.orders.filter(o => o.status === 'filled' || o.status === 'done') : [];
+    return filledOrds.length > 0;
+  });
+
+  if (activePositions.length === 0) {
+    const keyboard = {
+      inline_keyboard: [[{ text: '🔙 Menú Principal', callback_data: 'menu' }]]
+    };
+    await fetch(`https://api.telegram.org/bot${t}/sendMessage`, {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({
+        chat_id: chatId,
+        text: '❌ <b>Cerrar Posición</b>\n\nNo hay posiciones activas para cerrar en este momento.',
+        parse_mode: 'HTML',
+        reply_markup: keyboard
+      })
+    });
+    return;
+  }
+
+  const buttons = activePositions.map(w => [
+    { text: `❌ Cerrar ${w.symbol}`, callback_data: `confirm_close:${w.symbol}` }
+  ]);
+
+  buttons.push([{ text: '🔙 Menú Principal', callback_data: 'menu' }]);
+
+  const keyboard = { inline_keyboard: buttons };
+
+  try {
+    await fetch(`https://api.telegram.org/bot${t}/sendMessage`, {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({
+        chat_id: chatId,
+        text: '❌ <b>Selecciona la posición que deseas cerrar por completo:</b>',
+        parse_mode: 'HTML',
+        reply_markup: keyboard
+      })
+    });
+  } catch (e) {}
+}
+
+async function sendTelegramConfirmClose(chatId, symbol) {
+  const t = appConfig.tgBotToken || process.env.TELEGRAM_BOT_TOKEN;
+  if (!t) return;
+
+  const keyboard = {
+    inline_keyboard: [
+      [
+        { text: '✅ Sí, Cerrar todo', callback_data: `close:${symbol}` },
+        { text: '🚫 Cancelar', callback_data: 'view_positions' }
+      ]
+    ]
+  };
+
+  try {
+    await fetch(`https://api.telegram.org/bot${t}/sendMessage`, {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({
+        chat_id: chatId,
+        text: `⚠️ <b>¿Estás completamente seguro de que deseas vender y cerrar toda la posición de ${symbol}?</b>`,
+        parse_mode: 'HTML',
+        reply_markup: keyboard
+      })
+    });
+  } catch (e) {}
+}
+
+async function sendTelegramMessageWithMenu(chatId, text) {
+  const t = appConfig.tgBotToken || process.env.TELEGRAM_BOT_TOKEN;
+  if (!t) return;
+
+  const keyboard = {
+    inline_keyboard: [
+      [
+        { text: '📊 Ver Posiciones', callback_data: 'view_positions' },
+        { text: '🔙 Menú Principal', callback_data: 'menu' }
+      ]
+    ]
+  };
+
+  try {
+    await fetch(`https://api.telegram.org/bot${t}/sendMessage`, {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({
+        chat_id: chatId,
+        text,
+        parse_mode: 'HTML',
+        reply_markup: keyboard
+      })
     });
   } catch (e) {}
 }
@@ -2430,7 +2839,7 @@ async function executeSolanaTradeInternal(w, side, amountUSDT, price, pk, feePay
         exactPrice = exactAmountUSDT / tokenDiff;
       }
 
-      addLog(`🎉 Solana trade ${side} confirmado con éxito para ${w.symbol}! TxID: ${txid}`, side==='BUY'?'buy':'sell');
+      addLog(`🎉 Solana trade ${side} confirmado con éxito para ${w.symbol}! TxID: ${txid}`, 'info');
       solanaSwapLogs.unshift({ txid, symbol: w.symbol, side, amountUSDT, time: Date.now() });
       if(solanaSwapLogs.length > 50) solanaSwapLogs.pop();
 
@@ -2470,7 +2879,7 @@ async function mxRealOrder(symbol, side, amountUSDT, price) {
     });
     const res = await r.json();
     if (res.code) { addLog(`MEXC Error (${symbol}): ${res.msg}`, 'warn'); return { ok: false }; }
-    addLog(`✅ MEXC REAL ${side}: ${symbol} a ${price}`, side==='BUY'?'buy':'sell');
+    addLog(`✅ MEXC REAL ${side}: ${symbol} a ${price}`, 'info');
     return { ok: true, orderId: res.orderId };
   } catch(e) { return { ok: false }; }
 }
@@ -3832,6 +4241,7 @@ function startLoop() {
 // Iniciar el loop si estaba encendido en el estado recuperado
 startLoop();
 connectSolanaWs();
+startTelegramPolling();
 
 
 // ============================================
