@@ -1500,7 +1500,7 @@ async function updateSolanaWalletInfo() {
           const connection = new Connection(rpcUrl, { commitment: 'confirmed', disableRetryOnRateLimit: true });
           for (let w of watchItems) {
             if (w.network === 'solana' && w.address) {
-              await new Promise(r => setTimeout(r, 100));
+              await new Promise(r => setTimeout(r, 600));
               const bal = await getTokenUiBalance(connection, solanaWalletAddress, w.address);
               w.onChainBalance = bal;
             }
@@ -1516,11 +1516,13 @@ async function updateSolanaWalletInfo() {
       if (w.network === 'solana' && w.address) {
         try {
           // Prevent hitting strict RPC rate limits on bulk balance checks
-          await new Promise(r => setTimeout(r, 100));
+          await new Promise(r => setTimeout(r, 600));
           const bal = await getTokenUiBalance(connection, solanaWalletAddress, w.address);
           w.onChainBalance = bal;
         } catch (e) {
-          console.error(`Error fetching balance for ${w.symbol}:`, e.message);
+          if (!e.message.includes('429') && !e.message.includes('rate limit')) {
+             console.error(`Error fetching balance for ${w.symbol}:`, e.message);
+          }
         }
       }
     }
@@ -4981,6 +4983,34 @@ app.post('/api/action', adminAuth, async (req, res) => {
       } else {
         return res.status(500).json({ error: 'La compra real falló. Verifica fondos o red.' });
       }
+    } else if (action === 'fixCope') {
+      let changed = false;
+      for (const w of watchItems) {
+        if (w.symbol.toLowerCase() === 'cope') {
+          w.orders = w.orders.filter(o => o.status !== 'error' && o.status !== 'paused' && o.status !== 'pending');
+          const realTokens = 245409.20079;
+          const realAmount = 4.5;
+          const realPrice = realAmount / realTokens;
+          for (const o of w.orders) {
+            if (o.type === 'dca' || o.type === 'entry') {
+              o.price = realPrice;
+              o.filledPrice = realPrice;
+            }
+          }
+          if (w.filledBuys && w.filledBuys.length > 0) {
+            w.filledBuys[0].price = realPrice;
+            w.filledBuys[0].tokens = realTokens;
+          }
+          if (w.orders.length > 0 && w.orders[0].type === 'dca') {
+            w.orders[0].type = 'entry';
+            w.orders[0].note = 'Compra Manual (Fix)';
+          }
+          changed = true;
+          addLog('🔨 Estado de cope parcheado manualmente a través del script de recuperación.', 'info');
+        }
+      }
+      if (changed) saveState();
+      return res.json({ ok: true, changed });
     }
     
     saveState();
