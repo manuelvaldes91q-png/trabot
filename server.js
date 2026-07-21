@@ -4429,38 +4429,78 @@ async function detectOnChainPurchasePrice(tokenMintStr) {
     const connection = new Connection(rpcUrl, 'confirmed');
     const userPublicKey = new PublicKey(userPublicKeyStr);
     
-    const signatures = await connection.getSignaturesForAddress(userPublicKey, { limit: 30 });
-    if (!signatures || signatures.length === 0) return [];
+    // Find Associated Token Accounts (ATA) to look for exact token signatures
+    const [ata] = PublicKey.findProgramAddressSync(
+      [
+        userPublicKey.toBuffer(),
+        new PublicKey('TokenkegQfeZyiNwAJbNbGKPFXCWuBvf9Ss623VQ5DA').toBuffer(),
+        new PublicKey(tokenMintStr).toBuffer()
+      ],
+      new PublicKey('ATokenGPvbdGVxr1b2hvZbsiqW5xWH25efTNsLJA8knL')
+    );
+    
+    const [ata2022] = PublicKey.findProgramAddressSync(
+      [
+        userPublicKey.toBuffer(),
+        new PublicKey('TokenzQdBNbkh8AL6sQYVzuvJjpsZ7573efC5m1b8B5').toBuffer(),
+        new PublicKey(tokenMintStr).toBuffer()
+      ],
+      new PublicKey('ATokenGPvbdGVxr1b2hvZbsiqW5xWH25efTNsLJA8knL')
+    );
+    
+    // Fetch signatures for the ATAs first, falling back to the main wallet
+    let signatures = [];
+    try {
+      const sigsAta = await connection.getSignaturesForAddress(ata, { limit: 10 });
+      if (sigsAta) signatures.push(...sigsAta);
+    } catch (e) {}
+    try {
+      const sigsAta2022 = await connection.getSignaturesForAddress(ata2022, { limit: 10 });
+      if (sigsAta2022) signatures.push(...sigsAta2022);
+    } catch (e) {}
+    
+    if (signatures.length === 0) {
+      try {
+        const sigsWallet = await connection.getSignaturesForAddress(userPublicKey, { limit: 15 });
+        if (sigsWallet) signatures.push(...sigsWallet);
+      } catch (e) {}
+    }
+    
+    if (signatures.length === 0) return [];
     
     const solPrice = await mxPrice('SOL') || 140;
     
+    // Helper function to extract balance diffs
+    const getMintDiff = (tx, mint) => {
+      const preTokenBalances = tx.meta.preTokenBalances || [];
+      const postTokenBalances = tx.meta.postTokenBalances || [];
+      
+      // Match using owner first
+      let pre = preTokenBalances.find(b => b.mint === mint && b.owner === userPublicKeyStr);
+      let post = postTokenBalances.find(b => b.mint === mint && b.owner === userPublicKeyStr);
+      
+      // Fallback to matching any entry for that mint in case owner isn't populated
+      if (!pre && !post) {
+        pre = preTokenBalances.find(b => b.mint === mint);
+        post = postTokenBalances.find(b => b.mint === mint);
+      }
+      
+      const preAmt = pre ? (pre.uiTokenAmount.uiAmount || 0) : 0;
+      const postAmt = post ? (post.uiTokenAmount.uiAmount || 0) : 0;
+      return postAmt - preAmt;
+    };
+    
     for (const sigInfo of signatures) {
       try {
+        // Delay 150ms to strictly comply with RPC rate limits
+        await new Promise(res => setTimeout(res, 150));
+        
         const tx = await connection.getParsedTransaction(sigInfo.signature, {
           maxSupportedTransactionVersion: 0
         });
         if (!tx || !tx.meta) continue;
         
-        const postTokenBalances = tx.meta.postTokenBalances || [];
-        const preTokenBalances = tx.meta.preTokenBalances || [];
-        const userOwnerStr = userPublicKeyStr;
-        
-        const targetPost = postTokenBalances.find(b => b.mint === tokenMintStr && (b.owner === userOwnerStr || !b.owner));
-        const targetPre = preTokenBalances.find(b => b.mint === tokenMintStr && (b.owner === userOwnerStr || !b.owner));
-        
-        let postAmt = targetPost ? (targetPost.uiTokenAmount.uiAmount || 0) : 0;
-        let preAmt = targetPre ? (targetPre.uiTokenAmount.uiAmount || 0) : 0;
-        
-        if (!targetPost && !targetPre) {
-          const anyPost = postTokenBalances.find(b => b.mint === tokenMintStr);
-          const anyPre = preTokenBalances.find(b => b.mint === tokenMintStr);
-          if (anyPost || anyPre) {
-            postAmt = anyPost ? (anyPost.uiTokenAmount.uiAmount || 0) : 0;
-            preAmt = anyPre ? (anyPre.uiTokenAmount.uiAmount || 0) : 0;
-          }
-        }
-        
-        const tokenDiff = postAmt - preAmt;
+        const tokenDiff = getMintDiff(tx, tokenMintStr);
         
         if (tokenDiff > 0.0001) {
           let spentAmount = 0;
@@ -4471,26 +4511,25 @@ async function detectOnChainPurchasePrice(tokenMintStr) {
           const usdtMint = 'Es9vMFrzaCERmJfrF4H2FYD4CoNkY11McCe8BenwNYB';
           const wsolMint = 'So11111111111111111111111111111111111111112';
           
-          const userPostTokens = postTokenBalances.filter(b => b.owner === userOwnerStr || !b.owner);
-          const userPreTokens = preTokenBalances.filter(b => b.owner === userOwnerStr || !b.owner);
+          const usdcDiff = -getMintDiff(tx, usdcMint);
+          const usdtDiff = -getMintDiff(tx, usdtMint);
+          const wsolDiff = -getMintDiff(tx, wsolMint);
           
-          const postUsdc = userPostTokens.find(b => b.mint === usdcMint);
-          const preUsdc = userPreTokens.find(b => b.mint === usdcMint);
-          const usdcPostAmt = postUsdc ? (postUsdc.uiTokenAmount.uiAmount || 0) : 0;
-          const usdcPreAmt = preUsdc ? (preUsdc.uiTokenAmount.uiAmount || 0) : 0;
-          const usdcDiff = usdcPreAmt - usdcPostAmt;
+          let nativeSolDiff = 0;
+          const preBalances = tx.meta.preBalances || [];
+          const postBalances = tx.meta.postBalances || [];
+          const accountKeys = tx.transaction.message.accountKeys || [];
           
-          const postUsdt = userPostTokens.find(b => b.mint === usdtMint);
-          const preUsdt = userPreTokens.find(b => b.mint === usdtMint);
-          const usdtPostAmt = postUsdt ? (postUsdt.uiTokenAmount.uiAmount || 0) : 0;
-          const usdtPreAmt = preUsdt ? (preUsdt.uiTokenAmount.uiAmount || 0) : 0;
-          const usdtDiff = usdtPreAmt - usdtPostAmt;
+          const userIndex = accountKeys.findIndex(k => {
+            const p = typeof k === 'string' ? k : (k.pubkey ? k.pubkey.toBase58() : '');
+            return p === userPublicKeyStr;
+          });
           
-          const postWsol = userPostTokens.find(b => b.mint === wsolMint);
-          const preWsol = userPreTokens.find(b => b.mint === wsolMint);
-          const wsolPostAmt = postWsol ? (postWsol.uiTokenAmount.uiAmount || 0) : 0;
-          const wsolPreAmt = preWsol ? (preWsol.uiTokenAmount.uiAmount || 0) : 0;
-          const wsolDiff = wsolPreAmt - wsolPostAmt;
+          if (userIndex !== -1) {
+            const solPre = preBalances[userIndex] || 0;
+            const solPost = postBalances[userIndex] || 0;
+            nativeSolDiff = (solPre - solPost) / 1e9;
+          }
           
           if (usdcDiff > 0.01) {
             spentAmount = usdcDiff;
@@ -4504,23 +4543,12 @@ async function detectOnChainPurchasePrice(tokenMintStr) {
             spentAmount = wsolDiff;
             spentCurrency = 'SOL';
             amountUSDT = wsolDiff * solPrice;
-          } else {
-            const preBalances = tx.meta.preBalances || [];
-            const postBalances = tx.meta.postBalances || [];
-            const accountKeys = tx.transaction.message.accountKeys || [];
-            const userIndex = accountKeys.findIndex(k => {
-              const p = typeof k === 'string' ? k : (k.pubkey ? k.pubkey.toBase58() : '');
-              return p === userOwnerStr;
-            });
-            if (userIndex !== -1) {
-              const solPre = preBalances[userIndex] || 0;
-              const solPost = postBalances[userIndex] || 0;
-              const solDiff = (solPre - solPost) / 1e9;
-              if (solDiff > 0.0001) {
-                spentAmount = solDiff;
-                spentCurrency = 'SOL';
-                amountUSDT = solDiff * solPrice;
-              }
+          } else if (nativeSolDiff > 0.001) {
+            const netSol = Math.max(0, nativeSolDiff - 0.002);
+            if (netSol > 0.0005) {
+              spentAmount = nativeSolDiff;
+              spentCurrency = 'SOL';
+              amountUSDT = nativeSolDiff * solPrice;
             }
           }
           
@@ -4538,7 +4566,7 @@ async function detectOnChainPurchasePrice(tokenMintStr) {
           }
         }
       } catch (innerErr) {
-        // skip
+        // skip failed parsed transactions
       }
     }
   } catch (err) {
