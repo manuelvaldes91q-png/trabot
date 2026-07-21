@@ -912,6 +912,33 @@ function loadState() {
       watchItems.forEach(w => {
         w.klines1h = []; w.klines1d = [];
         if (!w.orders) w.orders = [];
+
+        // Auto-patch cope position discrepancy
+        if (w.symbol && w.symbol.toLowerCase() === 'cope') {
+           const realTokens = 245409.20079;
+           const realAmount = 4.5;
+           const realPrice = realAmount / realTokens;
+           let patched = false;
+           for (const o of w.orders) {
+             if ((o.type === 'dca' || o.type === 'entry') && o.status === 'filled') {
+               if (o.price !== realPrice || o.filledPrice !== realPrice) {
+                 o.price = realPrice;
+                 o.filledPrice = realPrice;
+                 patched = true;
+               }
+             }
+           }
+           if (w.filledBuys && w.filledBuys.length > 0) {
+             if (w.filledBuys[0].tokens !== realTokens) {
+               w.filledBuys[0].price = realPrice;
+               w.filledBuys[0].tokens = realTokens;
+               patched = true;
+             }
+           }
+           if (patched) {
+             console.log('🔨 Parche automático aplicado a COPE al cargar el estado.');
+           }
+        }
       });
       console.log(`✅ Estado recuperado: ${watchItems.length} monedas.`);
     } catch (e) {
