@@ -1302,53 +1302,69 @@ async function getSolanaPrice(tokenAddress) {
   return res[tokenAddress]?.price || 0;
 }
 
-async function getTokenUiBalance(connection, ownerPubKey, tokenMintStr) {
+async function getTokenUiBalance(connection, ownerPubKey, tokenMintStr, retries = 2) {
   const owner = new PublicKey(ownerPubKey);
-  if (tokenMintStr === 'So11111111111111111111111111111111111111112') {
-    const nativeBal = await connection.getBalance(owner);
-    let wsolBalRaw = 0;
-    try {
-      const mint = new PublicKey(tokenMintStr);
-      const accounts = await connection.getParsedTokenAccountsByOwner(owner, { mint });
-      if (accounts && accounts.value && accounts.value.length) {
-        wsolBalRaw = Number(accounts.value[0].account.data.parsed.info.tokenAmount.amount);
+  try {
+    if (tokenMintStr === 'So11111111111111111111111111111111111111112') {
+      const nativeBal = await connection.getBalance(owner);
+      let wsolBalRaw = 0;
+      try {
+        const mint = new PublicKey(tokenMintStr);
+        const accounts = await connection.getParsedTokenAccountsByOwner(owner, { mint });
+        if (accounts && accounts.value && accounts.value.length) {
+          wsolBalRaw = Number(accounts.value[0].account.data.parsed.info.tokenAmount.amount);
+        }
+      } catch (e) {
+        if (e.message && e.message.includes('429')) throw e;
       }
-    } catch (e) {
-      if (e.message && e.message.includes('429')) throw e;
+      return (nativeBal + wsolBalRaw) / 1e9;
     }
-    return (nativeBal + wsolBalRaw) / 1e9;
+    const mint = new PublicKey(tokenMintStr);
+    const accounts = await connection.getParsedTokenAccountsByOwner(owner, { mint });
+    if (accounts && accounts.value && accounts.value.length) {
+      return accounts.value[0].account.data.parsed.info.tokenAmount.uiAmount || 0;
+    }
+    return 0;
+  } catch (err) {
+    if (retries > 0 && err.message && (err.message.includes('429') || err.message.includes('rate limit'))) {
+      await new Promise(r => setTimeout(r, 1500));
+      return getTokenUiBalance(connection, ownerPubKey, tokenMintStr, retries - 1);
+    }
+    throw err;
   }
-  const mint = new PublicKey(tokenMintStr);
-  const accounts = await connection.getParsedTokenAccountsByOwner(owner, { mint });
-  if (accounts && accounts.value && accounts.value.length) {
-    return accounts.value[0].account.data.parsed.info.tokenAmount.uiAmount || 0;
-  }
-  return 0;
 }
 
-async function getTokenBalance(connection, ownerPubKey, tokenMintStr) {
+async function getTokenBalance(connection, ownerPubKey, tokenMintStr, retries = 2) {
   const owner = new PublicKey(ownerPubKey);
-  if (tokenMintStr === 'So11111111111111111111111111111111111111112') {
-    const nativeBal = await connection.getBalance(owner);
-    let wsolBalRaw = 0;
-    try {
-      const mint = new PublicKey(tokenMintStr);
-      const accounts = await connection.getParsedTokenAccountsByOwner(owner, { mint });
-      if (accounts && accounts.value && accounts.value.length) {
-        wsolBalRaw = Number(accounts.value[0].account.data.parsed.info.tokenAmount.amount);
+  try {
+    if (tokenMintStr === 'So11111111111111111111111111111111111111112') {
+      const nativeBal = await connection.getBalance(owner);
+      let wsolBalRaw = 0;
+      try {
+        const mint = new PublicKey(tokenMintStr);
+        const accounts = await connection.getParsedTokenAccountsByOwner(owner, { mint });
+        if (accounts && accounts.value && accounts.value.length) {
+          wsolBalRaw = Number(accounts.value[0].account.data.parsed.info.tokenAmount.amount);
+        }
+      } catch (e) {
+        if (e.message && e.message.includes('429')) throw e;
       }
-    } catch (e) {
-      if (e.message && e.message.includes('429')) throw e;
+      return nativeBal + wsolBalRaw;
     }
-    return nativeBal + wsolBalRaw;
+    const mint = new PublicKey(tokenMintStr);
+    const accounts = await connection.getParsedTokenAccountsByOwner(owner, { mint });
+    if (accounts && accounts.value && accounts.value.length) {
+      const bal = accounts.value[0].account.data.parsed.info.tokenAmount.amount;
+      return +bal;
+    }
+    return 0;
+  } catch (err) {
+    if (retries > 0 && err.message && (err.message.includes('429') || err.message.includes('rate limit'))) {
+      await new Promise(r => setTimeout(r, 1500));
+      return getTokenBalance(connection, ownerPubKey, tokenMintStr, retries - 1);
+    }
+    throw err;
   }
-  const mint = new PublicKey(tokenMintStr);
-  const accounts = await connection.getParsedTokenAccountsByOwner(owner, { mint });
-  if (accounts && accounts.value && accounts.value.length) {
-    const bal = accounts.value[0].account.data.parsed.info.tokenAmount.amount;
-    return +bal;
-  }
-  return 0;
 }
 
 async function getEmptyTokenAccounts(connection, ownerPublicKey) {
@@ -1484,6 +1500,7 @@ async function updateSolanaWalletInfo() {
           const connection = new Connection(rpcUrl, 'confirmed');
           for (let w of watchItems) {
             if (w.network === 'solana' && w.address) {
+              await new Promise(r => setTimeout(r, 100));
               const bal = await getTokenUiBalance(connection, solanaWalletAddress, w.address);
               w.onChainBalance = bal;
             }
@@ -1498,6 +1515,8 @@ async function updateSolanaWalletInfo() {
     for (let w of watchItems) {
       if (w.network === 'solana' && w.address) {
         try {
+          // Prevent hitting strict RPC rate limits on bulk balance checks
+          await new Promise(r => setTimeout(r, 100));
           const bal = await getTokenUiBalance(connection, solanaWalletAddress, w.address);
           w.onChainBalance = bal;
         } catch (e) {
@@ -4745,7 +4764,15 @@ app.post('/api/action', adminAuth, async (req, res) => {
           let pnl = inv * pnlP / 100;
           
           addLog(`⚡ [Cierre Manual] Disparando cierre de posición para ${w.symbol}...`, 'info');
-          const realRes = await executeOrder(w, 'SELL', inv + pnl, cp);
+          
+          let realRes = null;
+          if (payload.force) {
+            addLog(`⚠️ [Cierre Forzado] Cerrando posición ${w.symbol} localmente sin intentar on-chain por solicitud del usuario.`, 'warn');
+            realRes = { ok: true, exactPrice: cp, exactAmountUSDT: inv + pnl };
+          } else {
+            realRes = await executeOrder(w, 'SELL', inv + pnl, cp);
+          }
+          
           if (realRes && realRes.ok) {
             if (realRes.exactAmountUSDT !== undefined && realRes.exactAmountUSDT > 0) {
               pnl = realRes.exactAmountUSDT - inv;
