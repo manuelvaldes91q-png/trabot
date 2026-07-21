@@ -2679,10 +2679,13 @@ async function executeSolanaTradeInternal(w, side, amountUSDT, price, pk, feePay
                  exactAmountUSDT = isSOL ? (diffRaw / 1e9) * (await mxPrice('SOL') || 140) : (diffRaw / 1e6);
               }
               
-              const tokenDiff = side === 'BUY' ? (tokenBalAfter - tokenBalBefore) : (tokenBalBefore - tokenBalAfter);
+              let tokenDiff = side === 'BUY' ? (tokenBalAfter - tokenBalBefore) : (tokenBalBefore - tokenBalAfter);
               let exactPrice = price;
               if (tokenDiff > 0 && exactAmountUSDT > 0) {
                 exactPrice = exactAmountUSDT / tokenDiff;
+              } else if (tokenDiff <= 0 && exactAmountUSDT > 0 && price > 0) {
+                tokenDiff = exactAmountUSDT / price;
+                addLog(`⚠️ Balance on-chain rezagado. Estimando tokens obtenidos: ${tokenDiff.toFixed(2)} a precio $${fpZ(price, price)}`, 'warn');
               }
 
               addLog(`🎉 Solana trade ${side} confirmado con éxito para ${w.symbol}! TxID: ${prevTxid}`, 'info');
@@ -2952,10 +2955,13 @@ async function executeSolanaTradeInternal(w, side, amountUSDT, price, pk, feePay
          exactAmountUSDT = isSOL ? (diffRaw / 1e9) * (await mxPrice('SOL') || 140) : (diffRaw / 1e6);
       }
       
-      const tokenDiff = side === 'BUY' ? (tokenBalAfter - tokenBalBefore) : (tokenBalBefore - tokenBalAfter);
+      let tokenDiff = side === 'BUY' ? (tokenBalAfter - tokenBalBefore) : (tokenBalBefore - tokenBalAfter);
       let exactPrice = price; // default to passed price
       if (tokenDiff > 0 && exactAmountUSDT > 0) {
         exactPrice = exactAmountUSDT / tokenDiff;
+      } else if (tokenDiff <= 0 && exactAmountUSDT > 0 && price > 0) {
+        tokenDiff = exactAmountUSDT / price;
+        addLog(`⚠️ Balance on-chain rezagado. Estimando tokens obtenidos: ${tokenDiff.toFixed(2)} a precio $${fpZ(price, price)}`, 'warn');
       }
 
       addLog(`🎉 Solana trade ${side} confirmado con éxito para ${w.symbol}! TxID: ${txid}`, 'info');
@@ -4852,6 +4858,9 @@ app.post('/api/action', adminAuth, async (req, res) => {
         const finalPrice = realRes.exactPrice || cp;
         w.currentPrice = finalPrice;
         
+        // Remove paused or errored entry orders since we are forcing a market entry
+        w.orders = w.orders.filter(o => o.status !== 'paused' && o.status !== 'error' && o.status !== 'pending');
+        
         const order = {
           level: w.orders.length + 1,
           price: finalPrice,
@@ -4859,7 +4868,7 @@ app.post('/api/action', adminAuth, async (req, res) => {
           sl, tp1, tp2,
           note: 'Compra de Mercado Rápida',
           status: 'filled',
-          type: 'dca',
+          type: w.orders.length === 0 ? 'entry' : 'dca',
           filledAt: Date.now(),
           filledPrice: finalPrice
         };
