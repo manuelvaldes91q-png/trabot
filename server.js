@@ -2494,7 +2494,6 @@ async function sendViaJitoBundle(connection, signedTransaction, keypair) {
 
 const RPC_ENDPOINTS_BASE = [
   'https://solana-rpc.publicnode.com',
-  'https://rpc.ankr.com/solana',
   'https://api.mainnet-beta.solana.com'
 ];
 function getRpcEndpoints() {

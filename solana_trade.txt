@@ -1,0 +1,151 @@
+2582:async function executeSolanaTradeInternal(w, side, amountUSDT, price, pk, feePayerPk = null) {
+2583-  if (solMode !== 'wallet' && solMode !== 'pool') return { ok: true, txid: 'simulated' };
+2584-  if (!pk) {
+2585-    addLog(`⚠️ No se puede ejecutar orden real en Solana para ${w.symbol}: Falta llave privada.`, 'warn');
+2586-    return { ok: false };
+2587-  }
+2588-  const targetMint = w.address;
+2589-  if (!targetMint) {
+2590-    addLog(`⚠️ Error Solana trade: Falta la dirección del token para ${w.symbol}`, 'warn');
+2591-    return { ok: false };
+2592-  }
+2593-
+2594-  const rpcEndpoints = getRpcEndpoints();
+2595-  const keypair = Keypair.fromSecretKey(bs58.decode(pk));
+2596-  const userPublicKey = keypair.publicKey.toString();
+2597-  const isSOL = (appConfig.solanaBaseToken !== 'USDC');
+2598-  const baseMint = isSOL ? 'So11111111111111111111111111111111111111112' : 'EPjFWdd5AufqSSqeM2qN1xzybapC8G4wEGGkZwyTDt1v';
+2599-
+2600-  let adminKeypair = null;
+2601-  if (feePayerPk) {
+2602-    try { adminKeypair = Keypair.fromSecretKey(bs58.decode(feePayerPk)); } catch(e) {}
+2603-  }
+2604-
+2605-  if (side === 'BUY' && appConfig.safetyCheckEnabled) {
+2606-    const safety = await checkTokenSafety(targetMint);
+2607-    if (!safety.safe) {
+2608-      addLog(`🛑 Compra de ${w.symbol} bloqueada por chequeo de seguridad: ${safety.warnings.join(' | ')}`, 'warn');
+2609-      return { ok: false, blockedBySafety: true, safety };
+2610-    }
+2611-  }
+2612-
+2613-  let lastError = null;
+2614-  let sentTxids = [];
+2615-  let baseBalBefore = null;
+2616-  let tokenBalBefore = null;
+2617-
+2618-  for (let attempt = 0; attempt < MAX_SWAP_ATTEMPTS; attempt++) {
+2619-    const rpcUrl = rpcEndpoints[attempt % rpcEndpoints.length];
+2620-    const connection = new Connection(rpcUrl, { commitment: 'confirmed', disableRetryOnRateLimit: true });
+2621-
+2622-    try {
+2623-      let inputMint, outputMint, rawAmount;
+2624-      if (baseBalBefore === null) {
+2625-        baseBalBefore = await getTokenBalance(connection, userPublicKey, baseMint);
+2626-      }
+2627-      if (tokenBalBefore === null) {
+2628-        tokenBalBefore = await getTokenUiBalance(connection, userPublicKey, targetMint);
+2629-      }
+2630-
+2631-      if (side === 'BUY') {
+2632-        inputMint = baseMint;
+2633-        outputMint = targetMint;
+2634-        if (isSOL) {
+2635-          const solPrice = await mxPrice('SOL') || 140;
+2636-          rawAmount = Math.floor((amountUSDT / solPrice) * 1e9);
+2637-        } else {
+2638-          rawAmount = Math.floor(amountUSDT * 1e6);
+2639-        }
+2640-      } else {
+2641-        inputMint = targetMint;
+2642-        outputMint = baseMint;
+2643-        const bal = await getTokenBalance(connection, userPublicKey, targetMint);
+2644-        if (bal <= 0) {
+2645-          addLog(`⚠️ No se encontró balance de ${w.symbol} para vender.`, 'warn');
+2646-          return { ok: false };
+2647-        }
+2648-        rawAmount = bal;
+2649-      }
+2650-
+2651-      // Security Check: If we already have previously sent transaction IDs in this call,
+2652-      // check if any of them succeeded before generating/sending a new one.
+2653-      if (sentTxids.length > 0) {
+2654-        addLog(`🔍 Verificando si alguna transacción previa (${sentTxids.map(id => id.slice(0,8)).join(', ')}) se confirmó antes de reintentar...`, 'info');
+2655-        for (const prevTxid of sentTxids) {
+2656-          try {
+2657-            const statuses = await connection.getSignatureStatuses([prevTxid]);
+2658-            const status = statuses && statuses.value && statuses.value[0];
+2659-            if (status && (status.confirmationStatus === 'confirmed' || status.confirmationStatus === 'finalized') && !status.err) {
+2660-              addLog(`🎉 ¡Transacción previa detectada como CONFIRMADA con éxito! txid: ${prevTxid}`, 'info');
+2661-              
+2662-              let baseBalAfter = baseBalBefore;
+2663-              let tokenBalAfter = tokenBalBefore;
+2664-              try {
+2665-                baseBalAfter = await getTokenBalance(connection, userPublicKey, baseMint);
+2666-                tokenBalAfter = await getTokenUiBalance(connection, userPublicKey, targetMint);
+2667-              } catch (balErr) {
+2668-                addLog(`⚠️ Error al verificar balances tras detectar éxito previo, usando aproximación: ${balErr.message}`, 'info');
+2669-                if (side === 'SELL') {
+2670-                  tokenBalAfter = 0;
+2671-                  baseBalAfter = baseBalBefore + rawAmount;
+2672-                }
+2673-              }
+2674-              
+2675-              const diffRaw = side === 'SELL' ? (baseBalAfter - baseBalBefore) : (baseBalBefore - baseBalAfter);
+2676-              let exactAmountUSDT = 0;
+2677-              if (side === 'BUY') {
+2678-                 exactAmountUSDT = isSOL ? (rawAmount / 1e9) * (await mxPrice('SOL') || 140) : (rawAmount / 1e6);
+2679-              } else {
+2680-                 exactAmountUSDT = isSOL ? (diffRaw / 1e9) * (await mxPrice('SOL') || 140) : (diffRaw / 1e6);
+2681-              }
+2682-              
+2683-              const tokenDiff = side === 'BUY' ? (tokenBalAfter - tokenBalBefore) : (tokenBalBefore - tokenBalAfter);
+2684-              let exactPrice = price;
+2685-              if (tokenDiff > 0 && exactAmountUSDT > 0) {
+2686-                exactPrice = exactAmountUSDT / tokenDiff;
+2687-              }
+2688-
+2689-              addLog(`🎉 Solana trade ${side} confirmado con éxito para ${w.symbol}! TxID: ${prevTxid}`, 'info');
+2690-              solanaSwapLogs.unshift({ txid: prevTxid, symbol: w.symbol, side, amountUSDT, time: Date.now() });
+2691-              if(solanaSwapLogs.length > 50) solanaSwapLogs.pop();
+2692-
+2693-              return { ok: true, txid: prevTxid, exactAmountUSDT, exactPrice, exactTokens: tokenDiff };
+2694-            }
+2695-          } catch (e) {
+2696-            console.error("Error checking previous txid in retry:", e);
+2697-          }
+2698-        }
+2699-      }
+2700-
+2701-      // Proactive Balance and Gas verification to prevent simulation and transaction failures
+2702-      const nativeSolBalLamports = await connection.getBalance(new PublicKey(userPublicKey));
+2703-      const solBal = nativeSolBalLamports / 1e9;
+2704-      const MIN_GAS_RESERVE = 0.0045; // Gas & ATA Rent creation buffer
+2705-
+2706-      if (solBal < MIN_GAS_RESERVE) {
+2707-        addLog(`🛑 Balance de gas SOL crítico en tu wallet: ${solBal.toFixed(5)} SOL. Requiere al menos ${MIN_GAS_RESERVE} SOL para transacciones de red. Abortando swap.`, 'warn');
+2708-        return { ok: false };
+2709-      }
+2710-
+2711-      if (side === 'BUY') {
+2712-        if (isSOL) {
+2713-          const totalSolNeeded = (rawAmount / 1e9) + MIN_GAS_RESERVE;
+2714-          if (solBal < totalSolNeeded) {
+2715-            addLog(`🛑 Balance de SOL insuficiente: tienes ${solBal.toFixed(5)} SOL, pero necesitas ${(rawAmount / 1e9).toFixed(5)} SOL + ${MIN_GAS_RESERVE} SOL de gas. Abortando swap.`, 'warn');
+2716-            return { ok: false };
+2717-          }
+2718-        } else {
+2719-          if (baseBalBefore < rawAmount) {
+2720-            addLog(`🛑 Balance de USDC insuficiente: tienes ${(baseBalBefore / 1e6).toFixed(2)} USDC, requerido ${(rawAmount / 1e6).toFixed(2)} USDC. Abortando swap.`, 'warn');
+2721-            return { ok: false };
+2722-          }
+2723-        }
+2724-      }
+2725-
+2726-      const baseSlip = appConfig.solanaSlippage || 2.5;
+2727-      const slipPercent = baseSlip * SLIPPAGE_ESCALATION_FACTORS[attempt];
+2728-      const slippageBps = Math.floor(slipPercent * 100);
+2729-
+2730-      const basePriorityFee = (appConfig.solanaPriorityFee && appConfig.solanaPriorityFee !== 'auto') ? parseInt(appConfig.solanaPriorityFee) : 1000;
+2731-      const escalatedPriorityFee = Math.floor(basePriorityFee * PRIORITY_FEE_ESCALATION_FACTORS[attempt]);
+2732-
