@@ -1479,11 +1479,32 @@ async function updateSolanaWalletInfo() {
         solanaUsdcBalance = SIM.balance || 1000;
         solanaSolBalance = SIM.solBalance || 10;
         solanaUsdtBalance = SIM.usdtBalance || 1000;
+        try {
+          const rpcUrl = appConfig.solanaRpcUrl || process.env.SOLANA_RPC_URL || 'https://solana-rpc.publicnode.com';
+          const connection = new Connection(rpcUrl, 'confirmed');
+          for (let w of watchItems) {
+            if (w.network === 'solana' && w.address) {
+              const bal = await getTokenUiBalance(connection, solanaWalletAddress, w.address);
+              w.onChainBalance = bal;
+            }
+          }
+        } catch (e) {}
         return;
     }
     
     const rpcUrl = appConfig.solanaRpcUrl || process.env.SOLANA_RPC_URL || 'https://solana-rpc.publicnode.com';
     const connection = new Connection(rpcUrl, 'confirmed');
+    
+    for (let w of watchItems) {
+      if (w.network === 'solana' && w.address) {
+        try {
+          const bal = await getTokenUiBalance(connection, solanaWalletAddress, w.address);
+          w.onChainBalance = bal;
+        } catch (e) {
+          console.error(`Error fetching balance for ${w.symbol}:`, e.message);
+        }
+      }
+    }
     
     const solLamports = await connection.getBalance(keypair.publicKey);
     solanaSolBalance = solLamports / 1e9;
@@ -4391,12 +4412,155 @@ app.get('/api/token/audit/:mint', adminAuth, async (req, res) => {
   }
 });
 
+async function detectOnChainPurchasePrice(tokenMintStr) {
+  const pk = poolConfig.privateKey || appConfig.solanaPrivateKey || process.env.SOLANA_PRIVATE_KEY;
+  if (!pk) return null;
+  
+  try {
+    const keypair = Keypair.fromSecretKey(bs58.decode(pk));
+    const userPublicKey = keypair.publicKey;
+    const rpcUrl = appConfig.solanaRpcUrl || process.env.SOLANA_RPC_URL || 'https://solana-rpc.publicnode.com';
+    const connection = new Connection(rpcUrl, 'confirmed');
+    
+    const signatures = await connection.getSignaturesForAddress(userPublicKey, { limit: 20 });
+    if (!signatures || signatures.length === 0) return null;
+    
+    for (const sigInfo of signatures) {
+      try {
+        const tx = await connection.getParsedTransaction(sigInfo.signature, {
+          maxSupportedTransactionVersion: 0
+        });
+        if (!tx || !tx.meta) continue;
+        
+        const postTokenBalances = tx.meta.postTokenBalances || [];
+        const preTokenBalances = tx.meta.preTokenBalances || [];
+        const userOwnerStr = userPublicKey.toBase58();
+        
+        const userPost = postTokenBalances.find(b => b.mint === tokenMintStr && b.owner === userOwnerStr);
+        const userPre = preTokenBalances.find(b => b.mint === tokenMintStr && b.owner === userOwnerStr);
+        
+        const postAmt = userPost ? (userPost.uiTokenAmount.uiAmount || 0) : 0;
+        const preAmt = userPre ? (userPre.uiTokenAmount.uiAmount || 0) : 0;
+        const tokenDiff = postAmt - preAmt;
+        
+        if (tokenDiff > 0) {
+          const usdcMint = 'EPjFWdd5AufqSSqeM2qN1xzybapC8G4wEGGkZwyTDt1v';
+          const usdtMint = 'Es9vMFrzaCERmJfrF4H2FYD4CoNkY11McCe8BenwNYB';
+          
+          const postUsdc = postTokenBalances.find(b => (b.mint === usdcMint || b.mint === usdtMint) && b.owner === userOwnerStr);
+          const preUsdc = preTokenBalances.find(b => (b.mint === usdcMint || b.mint === usdtMint) && b.owner === userOwnerStr);
+          const usdcPostAmt = postUsdc ? (postUsdc.uiTokenAmount.uiAmount || 0) : 0;
+          const usdcPreAmt = preUsdc ? (preUsdc.uiTokenAmount.uiAmount || 0) : 0;
+          const usdcDiff = usdcPreAmt - usdcPostAmt;
+          
+          if (usdcDiff > 0) {
+            const calculatedPrice = usdcDiff / tokenDiff;
+            return {
+              txid: sigInfo.signature,
+              amountTokens: tokenDiff,
+              amountUSDT: usdcDiff,
+              price: calculatedPrice,
+              timestamp: sigInfo.blockTime ? sigInfo.blockTime * 1000 : Date.now()
+            };
+          }
+          
+          const preBalances = tx.meta.preBalances || [];
+          const postBalances = tx.meta.postBalances || [];
+          const accountKeys = tx.transaction.message.accountKeys || [];
+          const userIndex = accountKeys.findIndex(k => k.pubkey.toBase58() === userOwnerStr);
+          if (userIndex !== -1) {
+            const solPre = preBalances[userIndex] || 0;
+            const solPost = postBalances[userIndex] || 0;
+            const solDiff = (solPre - solPost) / 1e9;
+            if (solDiff > 0.001) {
+              const solPrice = await mxPrice('SOL') || 140;
+              const usdSpent = solDiff * solPrice;
+              const calculatedPrice = usdSpent / tokenDiff;
+              return {
+                txid: sigInfo.signature,
+                amountTokens: tokenDiff,
+                amountUSDT: usdSpent,
+                price: calculatedPrice,
+                timestamp: sigInfo.blockTime ? sigInfo.blockTime * 1000 : Date.now()
+              };
+            }
+          }
+        }
+      } catch (innerErr) {
+        // Skip failed parsings
+      }
+    }
+  } catch (err) {
+    console.error("Error in detectOnChainPurchasePrice:", err);
+  }
+  return null;
+}
+
 app.post('/api/action', adminAuth, async (req, res) => {
   const { action, payload } = req.body;
   if (!action) return res.status(400).json({error: 'Action required'});
 
   try {
-    if (action === 'setMode') {
+    if (action === 'detectPurchasePrice') {
+      const { symbol, address } = payload;
+      const result = await detectOnChainPurchasePrice(address);
+      if (result) {
+        return res.json({ ok: true, found: true, data: result });
+      } else {
+        return res.json({ ok: true, found: false });
+      }
+    } else if (action === 'importOnChainBalance') {
+      const { symbol, network, address, pair, price, amountTokens, amountUSDT, sl = 10, tp1 = 15 } = payload;
+      let w = watchItems.find(item => (address && item.address === address) || item.symbol === symbol);
+      if (!w) {
+        w = {
+          symbol,
+          network: network || 'solana',
+          address,
+          pair,
+          orders: [],
+          currentPrice: Number(price),
+          prevPrice: Number(price)
+        };
+        watchItems.push(w);
+      }
+      
+      const parsedPrice = Number(price);
+      const parsedTokens = Number(amountTokens);
+      const parsedUSDT = Number(amountUSDT);
+      const parsedSL = Number(sl);
+      const parsedTP1 = Number(tp1);
+      
+      const order = {
+        level: 1,
+        price: parsedPrice,
+        amount: parsedUSDT,
+        status: 'filled',
+        type: 'entry',
+        sl: parsedSL,
+        tp1: parsedTP1,
+        tp2: 0,
+        note: 'Balance vinculado'
+      };
+      
+      w.orders = [order];
+      w.filledBuys = [{
+        price: parsedPrice,
+        amount: parsedUSDT,
+        tokens: parsedTokens,
+        level: 1
+      }];
+      
+      w.slPrice = parsedPrice * (1 - parsedSL / 100);
+      w.tp1Price = parsedPrice * (1 + parsedTP1 / 100);
+      w.tp2Price = null;
+      w.tp1Hit = false;
+      w.tp2Hit = false;
+      
+      addLog(`🔗 Balance vinculado para ${w.symbol}: ${parsedTokens.toLocaleString()} tokens a $${parsedPrice} (Invertido: $${parsedUSDT})`, 'info');
+      saveState();
+      return res.json({ ok: true });
+    } else if (action === 'setMode') {
       if (payload.mode) {
         mode = payload.mode;
         addLog(`Modo cambiado a: ${mode.toUpperCase()}`, 'warn');
@@ -4454,6 +4618,11 @@ app.post('/api/action', adminAuth, async (req, res) => {
         Object.assign(w.orders[payload.oi], payload.updates);
         const o = w.orders[payload.oi];
         if (o.level === 1) {
+          if (o.status === 'filled' && w.filledBuys && w.filledBuys.length) {
+            w.filledBuys[0].price = o.price;
+            w.filledBuys[0].amount = o.amount;
+            w.filledBuys[0].tokens = o.amount / o.price;
+          }
           recalculateTargets(w);
         }
       }
