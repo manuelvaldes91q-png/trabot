@@ -2454,7 +2454,7 @@ async function sendViaJitoBundle(connection, signedTransaction, keypair) {
 
 const RPC_ENDPOINTS_BASE = [
   'https://solana-rpc.publicnode.com',
-  'https://solana.drpc.org',
+  'https://rpc.ankr.com/solana',
   'https://api.mainnet-beta.solana.com'
 ];
 function getRpcEndpoints() {
@@ -2571,6 +2571,9 @@ async function executeSolanaTradeInternal(w, side, amountUSDT, price, pk, feePay
   }
 
   let lastError = null;
+  let sentTxids = [];
+  let baseBalBefore = null;
+  let tokenBalBefore = null;
 
   for (let attempt = 0; attempt < MAX_SWAP_ATTEMPTS; attempt++) {
     const rpcUrl = rpcEndpoints[attempt % rpcEndpoints.length];
@@ -2578,8 +2581,12 @@ async function executeSolanaTradeInternal(w, side, amountUSDT, price, pk, feePay
 
     try {
       let inputMint, outputMint, rawAmount;
-      const baseBalBefore = await getTokenBalance(connection, userPublicKey, baseMint);
-      const tokenBalBefore = await getTokenUiBalance(connection, userPublicKey, targetMint);
+      if (baseBalBefore === null) {
+        baseBalBefore = await getTokenBalance(connection, userPublicKey, baseMint);
+      }
+      if (tokenBalBefore === null) {
+        tokenBalBefore = await getTokenUiBalance(connection, userPublicKey, targetMint);
+      }
 
       if (side === 'BUY') {
         inputMint = baseMint;
@@ -2599,6 +2606,56 @@ async function executeSolanaTradeInternal(w, side, amountUSDT, price, pk, feePay
           return { ok: false };
         }
         rawAmount = bal;
+      }
+
+      // Security Check: If we already have previously sent transaction IDs in this call,
+      // check if any of them succeeded before generating/sending a new one.
+      if (sentTxids.length > 0) {
+        addLog(`🔍 Verificando si alguna transacción previa (${sentTxids.map(id => id.slice(0,8)).join(', ')}) se confirmó antes de reintentar...`, 'info');
+        for (const prevTxid of sentTxids) {
+          try {
+            const statuses = await connection.getSignatureStatuses([prevTxid]);
+            const status = statuses && statuses.value && statuses.value[0];
+            if (status && (status.confirmationStatus === 'confirmed' || status.confirmationStatus === 'finalized') && !status.err) {
+              addLog(`🎉 ¡Transacción previa detectada como CONFIRMADA con éxito! txid: ${prevTxid}`, 'info');
+              
+              let baseBalAfter = baseBalBefore;
+              let tokenBalAfter = tokenBalBefore;
+              try {
+                baseBalAfter = await getTokenBalance(connection, userPublicKey, baseMint);
+                tokenBalAfter = await getTokenUiBalance(connection, userPublicKey, targetMint);
+              } catch (balErr) {
+                addLog(`⚠️ Error al verificar balances tras detectar éxito previo, usando aproximación: ${balErr.message}`, 'info');
+                if (side === 'SELL') {
+                  tokenBalAfter = 0;
+                  baseBalAfter = baseBalBefore + rawAmount;
+                }
+              }
+              
+              const diffRaw = side === 'SELL' ? (baseBalAfter - baseBalBefore) : (baseBalBefore - baseBalAfter);
+              let exactAmountUSDT = 0;
+              if (side === 'BUY') {
+                 exactAmountUSDT = isSOL ? (rawAmount / 1e9) * (await mxPrice('SOL') || 140) : (rawAmount / 1e6);
+              } else {
+                 exactAmountUSDT = isSOL ? (diffRaw / 1e9) * (await mxPrice('SOL') || 140) : (diffRaw / 1e6);
+              }
+              
+              const tokenDiff = side === 'BUY' ? (tokenBalAfter - tokenBalBefore) : (tokenBalBefore - tokenBalAfter);
+              let exactPrice = price;
+              if (tokenDiff > 0 && exactAmountUSDT > 0) {
+                exactPrice = exactAmountUSDT / tokenDiff;
+              }
+
+              addLog(`🎉 Solana trade ${side} confirmado con éxito para ${w.symbol}! TxID: ${prevTxid}`, 'info');
+              solanaSwapLogs.unshift({ txid: prevTxid, symbol: w.symbol, side, amountUSDT, time: Date.now() });
+              if(solanaSwapLogs.length > 50) solanaSwapLogs.pop();
+
+              return { ok: true, txid: prevTxid, exactAmountUSDT, exactPrice, exactTokens: tokenDiff };
+            }
+          } catch (e) {
+            console.error("Error checking previous txid in retry:", e);
+          }
+        }
       }
 
       // Proactive Balance and Gas verification to prevent simulation and transaction failures
@@ -2772,6 +2829,7 @@ async function executeSolanaTradeInternal(w, side, amountUSDT, price, pk, feePay
       }
 
       addLog(`✅ Transacción enviada: ${txid.slice(0, 8)}... Esperando confirmación...`, 'info');
+      sentTxids.push(txid); // Track that we sent this transaction!
 
       // Robust polling for confirmation, works even without knowing the exact lastValidBlockHeight
       let confirmed = false;
@@ -2779,23 +2837,45 @@ async function executeSolanaTradeInternal(w, side, amountUSDT, price, pk, feePay
       const MAX_WAIT_MS = 60000; // 60 seconds max wait
       
       while (Date.now() - startTime < MAX_WAIT_MS) {
-        const statuses = await connection.getSignatureStatuses([txid]);
-        const status = statuses && statuses.value && statuses.value[0];
-        
-        if (status) {
-          if (status.err) {
-            throw new Error(`Transacción falló on-chain: ${JSON.stringify(status.err)}`);
+        try {
+          const statuses = await connection.getSignatureStatuses([txid]);
+          const status = statuses && statuses.value && statuses.value[0];
+          
+          if (status) {
+            if (status.err) {
+              throw new Error(`Transacción falló on-chain: ${JSON.stringify(status.err)}`);
+            }
+            if (status.confirmationStatus === 'confirmed' || status.confirmationStatus === 'finalized') {
+              confirmed = true;
+              break;
+            }
           }
-          if (status.confirmationStatus === 'confirmed' || status.confirmationStatus === 'finalized') {
-            confirmed = true;
-            break;
+        } catch (pollErr) {
+          addLog(`⚠️ Error al verificar confirmación (tx: ${txid.slice(0,8)}): ${pollErr.message}. Reintentando consulta...`, 'info');
+          // Try to poll using an alternative connection from our endpoints to be resilient against single-node RPC failure
+          try {
+            const altRpcUrl = rpcEndpoints[(attempt + 1) % rpcEndpoints.length];
+            const altConnection = new Connection(altRpcUrl, 'confirmed');
+            const statuses = await altConnection.getSignatureStatuses([txid]);
+            const status = statuses && statuses.value && statuses.value[0];
+            if (status) {
+              if (status.err) {
+                throw new Error(`Transacción falló on-chain (alt RPC): ${JSON.stringify(status.err)}`);
+              }
+              if (status.confirmationStatus === 'confirmed' || status.confirmationStatus === 'finalized') {
+                confirmed = true;
+                break;
+              }
+            }
+          } catch (altPollErr) {
+            console.error("Error checking tx status on alternative connection:", altPollErr);
           }
         }
         await new Promise(r => setTimeout(r, 2000));
       }
 
       if (!confirmed) {
-        throw new Error(`Timeout: La transacción ${txid} no se confirmó en ${MAX_WAIT_MS/1000}s. Probablemente expiró.`);
+        throw new Error(`Timeout: La transacción ${txid} no se confirmó en ${MAX_WAIT_MS/1000}s. Probablemente expiró o el RPC falló.`);
       }
 
       let baseBalAfter = baseBalBefore;
