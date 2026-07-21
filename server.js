@@ -1540,7 +1540,9 @@ async function updateSolanaWalletInfo() {
     
     lastSolanaBalanceUpdate = now;
   } catch (err) {
-    console.error('Error actualizando balance Solana VPS:', err.message);
+    if (!err.message.includes('429') && !err.message.includes('rate limit')) {
+      console.error('Error actualizando balance Solana VPS:', err.message);
+    }
   }
 }
 
