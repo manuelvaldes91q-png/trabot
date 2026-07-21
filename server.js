@@ -1017,7 +1017,7 @@ async function getSolanaPrices(addresses) {
       if (!solanaWsConnection) {
         const rpcUrl = appConfig.solanaRpcUrl || process.env.SOLANA_RPC_URL || 'https://solana-rpc.publicnode.com';
         try {
-          solanaWsConnection = new Connection(rpcUrl, 'processed');
+          solanaWsConnection = new Connection(rpcUrl, { commitment: 'processed', disableRetryOnRateLimit: true });
         } catch (e) {}
       }
 
@@ -1497,7 +1497,7 @@ async function updateSolanaWalletInfo() {
         solanaUsdtBalance = SIM.usdtBalance || 1000;
         try {
           const rpcUrl = appConfig.solanaRpcUrl || process.env.SOLANA_RPC_URL || 'https://solana-rpc.publicnode.com';
-          const connection = new Connection(rpcUrl, 'confirmed');
+          const connection = new Connection(rpcUrl, { commitment: 'confirmed', disableRetryOnRateLimit: true });
           for (let w of watchItems) {
             if (w.network === 'solana' && w.address) {
               await new Promise(r => setTimeout(r, 100));
@@ -1510,7 +1510,7 @@ async function updateSolanaWalletInfo() {
     }
     
     const rpcUrl = appConfig.solanaRpcUrl || process.env.SOLANA_RPC_URL || 'https://solana-rpc.publicnode.com';
-    const connection = new Connection(rpcUrl, 'confirmed');
+    const connection = new Connection(rpcUrl, { commitment: 'confirmed', disableRetryOnRateLimit: true });
     
     for (let w of watchItems) {
       if (w.network === 'solana' && w.address) {
@@ -1593,7 +1593,7 @@ async function executeSolanaTrade(w, side, amountUSDT, price) {
 async function transferAdminCommission(inv, amountUSDC) {
   if (amountUSDC <= 0) return;
   const rpcUrl = appConfig.solanaRpcUrl || process.env.SOLANA_RPC_URL || 'https://solana-rpc.publicnode.com';
-  const connection = new Connection(rpcUrl, 'confirmed');
+  const connection = new Connection(rpcUrl, { commitment: 'confirmed', disableRetryOnRateLimit: true });
   try {
     const keypair = Keypair.fromSecretKey(bs58.decode(inv.depositWalletPk));
     const adminPk = poolConfig.privateKey || appConfig.solanaPrivateKey || process.env.SOLANA_PRIVATE_KEY;
@@ -1789,7 +1789,7 @@ async function checkCreatorHistory(tokenMint, knownCreator) {
   let connection = null;
   for (const rpc of rpcs) {
     try {
-      connection = new Connection(rpc, 'confirmed');
+      connection = new Connection(rpc, { commitment: 'confirmed', disableRetryOnRateLimit: true });
       await connection.getSlot();
       break;
     } catch (e) { connection = null; }
@@ -1890,7 +1890,7 @@ async function checkToken2022Extensions(tokenMint) {
   const rpcs = getRpcEndpoints();
   for (const rpc of rpcs) {
     try {
-      const connection = new Connection(rpc, 'confirmed');
+      const connection = new Connection(rpc, { commitment: 'confirmed', disableRetryOnRateLimit: true });
       const mintPubkey = new PublicKey(tokenMint);
       const accountInfo = await connection.getAccountInfo(mintPubkey);
       if (!accountInfo) return result;
@@ -1935,7 +1935,7 @@ async function checkMetadataMutability(tokenMint) {
   const rpcs = getRpcEndpoints();
   for (const rpc of rpcs) {
     try {
-      const connection = new Connection(rpc, 'confirmed');
+      const connection = new Connection(rpc, { commitment: 'confirmed', disableRetryOnRateLimit: true });
       const mintPubkey = new PublicKey(tokenMint);
       const [metadataPda] = PublicKey.findProgramAddressSync([Buffer.from('metadata'), TOKEN_METADATA_PROGRAM_ID.toBuffer(), mintPubkey.toBuffer()], TOKEN_METADATA_PROGRAM_ID);
       const accountInfo = await connection.getAccountInfo(metadataPda);
@@ -2110,7 +2110,7 @@ async function checkTokenSafety(tokenMint) {
   for (const rpc of rpcs) {
     try {
       const displayRpc = rpc.split('?')[0];
-      const connection = new Connection(rpc, 'confirmed');
+      const connection = new Connection(rpc, { commitment: 'confirmed', disableRetryOnRateLimit: true });
       const programId = t22Info.isToken2022 ? TOKEN_2022_PROGRAM_ID : undefined;
       mintInfo = await getMint(connection, new PublicKey(tokenMint), 'confirmed', programId);
       authorityCheckSuccess = true;
@@ -2161,7 +2161,7 @@ async function checkTokenSafety(tokenMint) {
     
     for (const rpc of rpcs) {
       try {
-        const conn = new Connection(rpc, 'confirmed');
+        const conn = new Connection(rpc, { commitment: 'confirmed', disableRetryOnRateLimit: true });
         largestAccounts = await conn.getTokenLargestAccounts(new PublicKey(tokenMint));
         simConnection = conn;
         break; // Éxito
@@ -2176,7 +2176,7 @@ async function checkTokenSafety(tokenMint) {
         if (totalSupply === null) {
           for (const rpc of rpcs) {
             try {
-              const conn = new Connection(rpc, 'confirmed');
+              const conn = new Connection(rpc, { commitment: 'confirmed', disableRetryOnRateLimit: true });
               const supplyInfo = await conn.getTokenSupply(new PublicKey(tokenMint));
               totalSupply = supplyInfo.value.uiAmount;
               break;
@@ -2617,7 +2617,7 @@ async function executeSolanaTradeInternal(w, side, amountUSDT, price, pk, feePay
 
   for (let attempt = 0; attempt < MAX_SWAP_ATTEMPTS; attempt++) {
     const rpcUrl = rpcEndpoints[attempt % rpcEndpoints.length];
-    const connection = new Connection(rpcUrl, 'confirmed');
+    const connection = new Connection(rpcUrl, { commitment: 'confirmed', disableRetryOnRateLimit: true });
 
     try {
       let inputMint, outputMint, rawAmount;
@@ -2895,7 +2895,7 @@ async function executeSolanaTradeInternal(w, side, amountUSDT, price, pk, feePay
           // Try to poll using an alternative connection from our endpoints to be resilient against single-node RPC failure
           try {
             const altRpcUrl = rpcEndpoints[(attempt + 1) % rpcEndpoints.length];
-            const altConnection = new Connection(altRpcUrl, 'confirmed');
+            const altConnection = new Connection(altRpcUrl, { commitment: 'confirmed', disableRetryOnRateLimit: true });
             const statuses = await altConnection.getSignatureStatuses([txid]);
             const status = statuses && statuses.value && statuses.value[0];
             if (status) {
@@ -3518,7 +3518,7 @@ let solanaWsConnection = null;
 async function trackRaydiumVaults(addresses) {
   if (!appConfig.solanaRpcUrl || addresses.length === 0) return;
   if (!solanaWsConnection) {
-    solanaWsConnection = new Connection(appConfig.solanaRpcUrl, 'processed');
+    solanaWsConnection = new Connection(appConfig.solanaRpcUrl, { commitment: 'processed', disableRetryOnRateLimit: true });
   }
 
   await Promise.all(addresses.map(async (token) => {
@@ -4184,7 +4184,7 @@ async function checkPendingDeposits() {
   const rpcUrl = appConfig.solanaRpcUrl || process.env.SOLANA_RPC_URL || 'https://solana-rpc.publicnode.com';
   
   try {
-    const connection = new Connection(rpcUrl, 'confirmed');
+    const connection = new Connection(rpcUrl, { commitment: 'confirmed', disableRetryOnRateLimit: true });
     const poolKeypair = Keypair.fromSecretKey(bs58.decode(poolPk));
     const isSOL = (appConfig.solanaBaseToken !== 'USDC');
     const baseMintStr = isSOL ? 'So11111111111111111111111111111111111111112' : 'EPjFWdd5AufqSSqeM2qN1xzybapC8G4wEGGkZwyTDt1v';
@@ -4243,7 +4243,7 @@ async function runWhaleMonitor() {
 
   let connection = null;
   for (const rpc of rpcs) {
-    try { connection = new Connection(rpc, 'confirmed'); await connection.getSlot(); break; } catch (e) {}
+    try { connection = new Connection(rpc, { commitment: 'confirmed', disableRetryOnRateLimit: true }); await connection.getSlot(); break; } catch (e) {}
   }
   if (!connection) return;
 
@@ -4445,7 +4445,7 @@ async function detectOnChainPurchasePrice(tokenMintStr) {
   const foundSwaps = [];
   try {
     const rpcUrl = appConfig.solanaRpcUrl || process.env.SOLANA_RPC_URL || 'https://solana-rpc.publicnode.com';
-    const connection = new Connection(rpcUrl, 'confirmed');
+    const connection = new Connection(rpcUrl, { commitment: 'confirmed', disableRetryOnRateLimit: true });
     const userPublicKey = new PublicKey(userPublicKeyStr);
     
     // Find Associated Token Accounts (ATA) to look for exact token signatures
@@ -4961,7 +4961,7 @@ app.get('/api/investor/me', investorAuth, async (req, res) => {
   if (req.investor.depositWallet) {
     try {
       const rpcUrl = appConfig.solanaRpcUrl || process.env.SOLANA_RPC_URL || 'https://solana-rpc.publicnode.com';
-      const connection = new Connection(rpcUrl, 'confirmed');
+      const connection = new Connection(rpcUrl, { commitment: 'confirmed', disableRetryOnRateLimit: true });
       const usdcMint = 'EPjFWdd5AufqSSqeM2qN1xzybapC8G4wEGGkZwyTDt1v';
       solBalance = (await connection.getBalance(new PublicKey(req.investor.depositWallet))) / 1e9;
       usdcBalance = (await getTokenBalance(connection, req.investor.depositWallet, usdcMint)) / 1e6;
@@ -5014,7 +5014,7 @@ app.post('/api/investor/request_withdraw', investorAuth, async (req, res) => {
   if (poolConfig.privateKey) {
     try {
       const rpcUrl = appConfig.solanaRpcUrl || process.env.SOLANA_RPC_URL || 'https://solana-rpc.publicnode.com';
-      const connection = new Connection(rpcUrl, 'confirmed');
+      const connection = new Connection(rpcUrl, { commitment: 'confirmed', disableRetryOnRateLimit: true });
       const kp = Keypair.fromSecretKey(bs58.decode(poolConfig.privateKey));
       const destPubkey = new PublicKey(inv.depositWallet);
       
@@ -5128,7 +5128,7 @@ app.post('/api/investor/transfer_external', investorAuth, async (req, res) => {
 
   try {
     const rpcUrl = appConfig.solanaRpcUrl || process.env.SOLANA_RPC_URL || 'https://solana-rpc.publicnode.com';
-    const connection = new Connection(rpcUrl, 'confirmed');
+    const connection = new Connection(rpcUrl, { commitment: 'confirmed', disableRetryOnRateLimit: true });
     
     const invKeypair = Keypair.fromSecretKey(bs58.decode(inv.depositWalletPk));
     const poolKeypair = Keypair.fromSecretKey(bs58.decode(poolConfig.privateKey));
@@ -5223,7 +5223,7 @@ app.post('/api/investor/recover_rent', investorAuth, async (req, res) => {
 
   try {
     const rpcUrl = appConfig.solanaRpcUrl || process.env.SOLANA_RPC_URL || 'https://solana-rpc.publicnode.com';
-    const connection = new Connection(rpcUrl, 'confirmed');
+    const connection = new Connection(rpcUrl, { commitment: 'confirmed', disableRetryOnRateLimit: true });
 
     const result = await closeEmptyTokenAccounts(connection, inv.depositWalletPk, poolConfig.privateKey);
 
@@ -5278,7 +5278,7 @@ app.get('/api/pool/rent_preview', adminAuth, async (req, res) => {
   if (!poolConfig.privateKey) return res.json({ error: 'La wallet del Pool no tiene llaves configuradas' });
   try {
     const rpcUrl = appConfig.solanaRpcUrl || process.env.SOLANA_RPC_URL || 'https://solana-rpc.publicnode.com';
-    const connection = new Connection(rpcUrl, 'confirmed');
+    const connection = new Connection(rpcUrl, { commitment: 'confirmed', disableRetryOnRateLimit: true });
     const ownerKeypair = Keypair.fromSecretKey(bs58.decode(poolConfig.privateKey));
     const emptyAccounts = await getEmptyTokenAccounts(connection, ownerKeypair.publicKey);
     res.json({
@@ -5299,7 +5299,7 @@ app.post('/api/pool/recover_rent', adminAuth, async (req, res) => {
 
   try {
     const rpcUrl = appConfig.solanaRpcUrl || process.env.SOLANA_RPC_URL || 'https://solana-rpc.publicnode.com';
-    const connection = new Connection(rpcUrl, 'confirmed');
+    const connection = new Connection(rpcUrl, { commitment: 'confirmed', disableRetryOnRateLimit: true });
 
     const result = await closeEmptyTokenAccounts(connection, poolConfig.privateKey);
 
@@ -5387,7 +5387,7 @@ app.post('/api/swap-sol-usdc', adminAuth, async (req, res) => {
     const userPublicKey = keypair.publicKey.toString();
 
     const rpcUrlCheck = appConfig.solanaRpcUrl || process.env.SOLANA_RPC_URL || 'https://solana-rpc.publicnode.com';
-    const checkConnection = new Connection(rpcUrlCheck, 'confirmed');
+    const checkConnection = new Connection(rpcUrlCheck, { commitment: 'confirmed', disableRetryOnRateLimit: true });
     const RESERVA_GAS_SOL = 0.001;
 
     let inputMint = 'So11111111111111111111111111111111111111112';
@@ -5476,7 +5476,7 @@ app.post('/api/swap-sol-usdc', adminAuth, async (req, res) => {
         const tx = VersionedTransaction.deserialize(Buffer.from(swapData.swapTransaction, 'base64'));
         
         const rpcUrl = appConfig.solanaRpcUrl || process.env.SOLANA_RPC_URL || 'https://solana-rpc.publicnode.com';
-        const connection = new Connection(rpcUrl, 'confirmed');
+        const connection = new Connection(rpcUrl, { commitment: 'confirmed', disableRetryOnRateLimit: true });
 
         if (!force && attempts === 1) {
           try {
@@ -5552,7 +5552,7 @@ app.post('/api/transfer-funds', adminAuth, async (req, res) => {
     const userPublicKey = keypair.publicKey;
 
     const rpcUrl = appConfig.solanaRpcUrl || process.env.SOLANA_RPC_URL || 'https://solana-rpc.publicnode.com';
-    const connection = new Connection(rpcUrl, 'confirmed');
+    const connection = new Connection(rpcUrl, { commitment: 'confirmed', disableRetryOnRateLimit: true });
 
     const SOL_MINT = 'So11111111111111111111111111111111111111112';
     const USDC_MINT = 'EPjFWdd5AufqSSqeM2qN1xzybapC8G4wEGGkZwyTDt1v';
@@ -5639,7 +5639,7 @@ app.post('/api/transfer-funds', adminAuth, async (req, res) => {
 app.post('/api/pool/rotate_wallet', adminAuth, async (req, res) => {
   try {
     const rpcUrl = appConfig.solanaRpcUrl || process.env.SOLANA_RPC_URL || 'https://solana-rpc.publicnode.com';
-    const connection = new Connection(rpcUrl, 'confirmed');
+    const connection = new Connection(rpcUrl, { commitment: 'confirmed', disableRetryOnRateLimit: true });
 
     const oldPkStr = poolConfig.privateKey || process.env.POOL_PRIVATE_KEY || process.env.SOLANA_PRIVATE_KEY;
     let oldKeypair = null;
@@ -5891,7 +5891,7 @@ app.post('/api/pool/sync_investor_deposit', adminAuth, async (req, res) => {
   if (inv && inv.depositWallet) {
     try {
       const rpcUrl = appConfig.solanaRpcUrl || process.env.SOLANA_RPC_URL || 'https://solana-rpc.publicnode.com';
-      const connection = new Connection(rpcUrl, 'confirmed');
+      const connection = new Connection(rpcUrl, { commitment: 'confirmed', disableRetryOnRateLimit: true });
       const baseMint = new PublicKey('EPjFWdd5AufqSSqeM2qN1xzybapC8G4wEGGkZwyTDt1v'); // USDC
       const invTokenAccountAddress = await getAssociatedTokenAddress(baseMint, new PublicKey(inv.depositWallet));
       const accountInfo = await connection.getTokenAccountBalance(invTokenAccountAddress);
@@ -5969,7 +5969,7 @@ app.post('/api/pool/approve_withdraw', adminAuth, async (req, res) => {
   if (poolConfig.privateKey && request.destinationWallet) {
     try {
       const rpcUrl = appConfig.solanaRpcUrl || process.env.SOLANA_RPC_URL || 'https://solana-rpc.publicnode.com';
-      const connection = new Connection(rpcUrl, 'confirmed');
+      const connection = new Connection(rpcUrl, { commitment: 'confirmed', disableRetryOnRateLimit: true });
       const kp = Keypair.fromSecretKey(bs58.decode(poolConfig.privateKey));
       const destPubkey = new PublicKey(request.destinationWallet);
       
@@ -6070,7 +6070,7 @@ app.post('/api/pool/withdraw_admin', adminAuth, async (req, res) => {
   if (poolConfig.privateKey) {
     try {
       const rpcUrl = appConfig.solanaRpcUrl || process.env.SOLANA_RPC_URL || 'https://solana-rpc.publicnode.com';
-      const connection = new Connection(rpcUrl, 'confirmed');
+      const connection = new Connection(rpcUrl, { commitment: 'confirmed', disableRetryOnRateLimit: true });
       const kp = Keypair.fromSecretKey(bs58.decode(poolConfig.privateKey));
       const destPubkey = new PublicKey(destinationWallet);
       
@@ -6342,7 +6342,7 @@ async function getAmmLiquidityAnalysis(mint) {
     let rpcUsed = "Default";
     
     try {
-      const connection = new Connection(appConfig.solanaRpcUrl || process.env.SOLANA_RPC_URL || 'https://solana-rpc.publicnode.com', 'confirmed');
+      const connection = new Connection(appConfig.solanaRpcUrl || process.env.SOLANA_RPC_URL || 'https://solana-rpc.publicnode.com', { commitment: 'confirmed', disableRetryOnRateLimit: true });
       rpcUsed = connection.rpcEndpoint;
       
       // Fetch latest signatures for the pair address

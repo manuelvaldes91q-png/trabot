@@ -2946,16 +2946,22 @@ function closeTrade(wi){
   myFetch('/api/action', {method: 'POST', headers: {'Content-Type': 'application/json'}, body: JSON.stringify({action: 'closeTrade', payload: {index: wi, symbol: w.symbol, address: w.address}})})
     .then(async (res) => {
       if (!res.ok) {
-        const text = await res.text();
-        if (text.includes('falló') || text.includes('error')) {
-          if (confirm(`❌ La venta on-chain falló. ¿Deseas forzar el cierre de la posición en el bot (sin ejecutar swap) para limpiarla?`)) {
-            myFetch('/api/action', {method: 'POST', headers: {'Content-Type': 'application/json'}, body: JSON.stringify({action: 'closeTrade', payload: {index: wi, symbol: w.symbol, address: w.address, force: true}})}).then(() => {
-              if (typeof fetchStatus === 'function') fetchStatus();
-            });
-          }
+        if (confirm(`❌ La venta on-chain falló. ¿Deseas forzar el cierre de la posición en el bot (sin ejecutar swap) para limpiarla?`)) {
+          myFetch('/api/action', {method: 'POST', headers: {'Content-Type': 'application/json'}, body: JSON.stringify({action: 'closeTrade', payload: {index: wi, symbol: w.symbol, address: w.address, force: true}})}).then(() => {
+            if (typeof fetchStatus === 'function') fetchStatus();
+          });
         }
+      } else {
+        if (typeof fetchStatus === 'function') fetchStatus();
       }
-    }).catch(e => console.error(e));
+    }).catch(e => {
+      console.error(e);
+      if (confirm(`❌ Error de red al cerrar la posición. ¿Deseas forzar el cierre de la posición localmente?`)) {
+        myFetch('/api/action', {method: 'POST', headers: {'Content-Type': 'application/json'}, body: JSON.stringify({action: 'closeTrade', payload: {index: wi, symbol: w.symbol, address: w.address, force: true}})}).then(() => {
+          if (typeof fetchStatus === 'function') fetchStatus();
+        });
+      }
+    });
 }
 function removeWatch(wi){
   const w=watchItems[wi];
