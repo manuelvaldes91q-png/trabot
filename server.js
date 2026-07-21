@@ -4414,16 +4414,25 @@ app.get('/api/token/audit/:mint', adminAuth, async (req, res) => {
 
 async function detectOnChainPurchasePrice(tokenMintStr) {
   const pk = poolConfig.privateKey || appConfig.solanaPrivateKey || process.env.SOLANA_PRIVATE_KEY;
-  if (!pk) return null;
+  let userPublicKeyStr = solanaWalletAddress;
+  if (!userPublicKeyStr && pk) {
+    try {
+      const keypair = Keypair.fromSecretKey(bs58.decode(pk));
+      userPublicKeyStr = keypair.publicKey.toBase58();
+    } catch(e) {}
+  }
+  if (!userPublicKeyStr) return [];
   
+  const foundSwaps = [];
   try {
-    const keypair = Keypair.fromSecretKey(bs58.decode(pk));
-    const userPublicKey = keypair.publicKey;
     const rpcUrl = appConfig.solanaRpcUrl || process.env.SOLANA_RPC_URL || 'https://solana-rpc.publicnode.com';
     const connection = new Connection(rpcUrl, 'confirmed');
+    const userPublicKey = new PublicKey(userPublicKeyStr);
     
-    const signatures = await connection.getSignaturesForAddress(userPublicKey, { limit: 20 });
-    if (!signatures || signatures.length === 0) return null;
+    const signatures = await connection.getSignaturesForAddress(userPublicKey, { limit: 30 });
+    if (!signatures || signatures.length === 0) return [];
+    
+    const solPrice = await mxPrice('SOL') || 140;
     
     for (const sigInfo of signatures) {
       try {
@@ -4434,66 +4443,108 @@ async function detectOnChainPurchasePrice(tokenMintStr) {
         
         const postTokenBalances = tx.meta.postTokenBalances || [];
         const preTokenBalances = tx.meta.preTokenBalances || [];
-        const userOwnerStr = userPublicKey.toBase58();
+        const userOwnerStr = userPublicKeyStr;
         
-        const userPost = postTokenBalances.find(b => b.mint === tokenMintStr && b.owner === userOwnerStr);
-        const userPre = preTokenBalances.find(b => b.mint === tokenMintStr && b.owner === userOwnerStr);
+        const targetPost = postTokenBalances.find(b => b.mint === tokenMintStr && (b.owner === userOwnerStr || !b.owner));
+        const targetPre = preTokenBalances.find(b => b.mint === tokenMintStr && (b.owner === userOwnerStr || !b.owner));
         
-        const postAmt = userPost ? (userPost.uiTokenAmount.uiAmount || 0) : 0;
-        const preAmt = userPre ? (userPre.uiTokenAmount.uiAmount || 0) : 0;
+        let postAmt = targetPost ? (targetPost.uiTokenAmount.uiAmount || 0) : 0;
+        let preAmt = targetPre ? (targetPre.uiTokenAmount.uiAmount || 0) : 0;
+        
+        if (!targetPost && !targetPre) {
+          const anyPost = postTokenBalances.find(b => b.mint === tokenMintStr);
+          const anyPre = preTokenBalances.find(b => b.mint === tokenMintStr);
+          if (anyPost || anyPre) {
+            postAmt = anyPost ? (anyPost.uiTokenAmount.uiAmount || 0) : 0;
+            preAmt = anyPre ? (anyPre.uiTokenAmount.uiAmount || 0) : 0;
+          }
+        }
+        
         const tokenDiff = postAmt - preAmt;
         
-        if (tokenDiff > 0) {
+        if (tokenDiff > 0.0001) {
+          let spentAmount = 0;
+          let spentCurrency = 'USDC';
+          let amountUSDT = 0;
+          
           const usdcMint = 'EPjFWdd5AufqSSqeM2qN1xzybapC8G4wEGGkZwyTDt1v';
           const usdtMint = 'Es9vMFrzaCERmJfrF4H2FYD4CoNkY11McCe8BenwNYB';
+          const wsolMint = 'So11111111111111111111111111111111111111112';
           
-          const postUsdc = postTokenBalances.find(b => (b.mint === usdcMint || b.mint === usdtMint) && b.owner === userOwnerStr);
-          const preUsdc = preTokenBalances.find(b => (b.mint === usdcMint || b.mint === usdtMint) && b.owner === userOwnerStr);
+          const userPostTokens = postTokenBalances.filter(b => b.owner === userOwnerStr || !b.owner);
+          const userPreTokens = preTokenBalances.filter(b => b.owner === userOwnerStr || !b.owner);
+          
+          const postUsdc = userPostTokens.find(b => b.mint === usdcMint);
+          const preUsdc = userPreTokens.find(b => b.mint === usdcMint);
           const usdcPostAmt = postUsdc ? (postUsdc.uiTokenAmount.uiAmount || 0) : 0;
           const usdcPreAmt = preUsdc ? (preUsdc.uiTokenAmount.uiAmount || 0) : 0;
           const usdcDiff = usdcPreAmt - usdcPostAmt;
           
-          if (usdcDiff > 0) {
-            const calculatedPrice = usdcDiff / tokenDiff;
-            return {
-              txid: sigInfo.signature,
-              amountTokens: tokenDiff,
-              amountUSDT: usdcDiff,
-              price: calculatedPrice,
-              timestamp: sigInfo.blockTime ? sigInfo.blockTime * 1000 : Date.now()
-            };
+          const postUsdt = userPostTokens.find(b => b.mint === usdtMint);
+          const preUsdt = userPreTokens.find(b => b.mint === usdtMint);
+          const usdtPostAmt = postUsdt ? (postUsdt.uiTokenAmount.uiAmount || 0) : 0;
+          const usdtPreAmt = preUsdt ? (preUsdt.uiTokenAmount.uiAmount || 0) : 0;
+          const usdtDiff = usdtPreAmt - usdtPostAmt;
+          
+          const postWsol = userPostTokens.find(b => b.mint === wsolMint);
+          const preWsol = userPreTokens.find(b => b.mint === wsolMint);
+          const wsolPostAmt = postWsol ? (postWsol.uiTokenAmount.uiAmount || 0) : 0;
+          const wsolPreAmt = preWsol ? (preWsol.uiTokenAmount.uiAmount || 0) : 0;
+          const wsolDiff = wsolPreAmt - wsolPostAmt;
+          
+          if (usdcDiff > 0.01) {
+            spentAmount = usdcDiff;
+            spentCurrency = 'USDC';
+            amountUSDT = usdcDiff;
+          } else if (usdtDiff > 0.01) {
+            spentAmount = usdtDiff;
+            spentCurrency = 'USDT';
+            amountUSDT = usdtDiff;
+          } else if (wsolDiff > 0.0001) {
+            spentAmount = wsolDiff;
+            spentCurrency = 'SOL';
+            amountUSDT = wsolDiff * solPrice;
+          } else {
+            const preBalances = tx.meta.preBalances || [];
+            const postBalances = tx.meta.postBalances || [];
+            const accountKeys = tx.transaction.message.accountKeys || [];
+            const userIndex = accountKeys.findIndex(k => {
+              const p = typeof k === 'string' ? k : (k.pubkey ? k.pubkey.toBase58() : '');
+              return p === userOwnerStr;
+            });
+            if (userIndex !== -1) {
+              const solPre = preBalances[userIndex] || 0;
+              const solPost = postBalances[userIndex] || 0;
+              const solDiff = (solPre - solPost) / 1e9;
+              if (solDiff > 0.0001) {
+                spentAmount = solDiff;
+                spentCurrency = 'SOL';
+                amountUSDT = solDiff * solPrice;
+              }
+            }
           }
           
-          const preBalances = tx.meta.preBalances || [];
-          const postBalances = tx.meta.postBalances || [];
-          const accountKeys = tx.transaction.message.accountKeys || [];
-          const userIndex = accountKeys.findIndex(k => k.pubkey.toBase58() === userOwnerStr);
-          if (userIndex !== -1) {
-            const solPre = preBalances[userIndex] || 0;
-            const solPost = postBalances[userIndex] || 0;
-            const solDiff = (solPre - solPost) / 1e9;
-            if (solDiff > 0.001) {
-              const solPrice = await mxPrice('SOL') || 140;
-              const usdSpent = solDiff * solPrice;
-              const calculatedPrice = usdSpent / tokenDiff;
-              return {
-                txid: sigInfo.signature,
-                amountTokens: tokenDiff,
-                amountUSDT: usdSpent,
-                price: calculatedPrice,
-                timestamp: sigInfo.blockTime ? sigInfo.blockTime * 1000 : Date.now()
-              };
-            }
+          if (amountUSDT > 0) {
+            const calculatedPrice = amountUSDT / tokenDiff;
+            foundSwaps.push({
+              txid: sigInfo.signature,
+              amountTokens: tokenDiff,
+              amountSpent: spentAmount,
+              currencyUsed: spentCurrency,
+              amountUSDT: amountUSDT,
+              price: calculatedPrice,
+              timestamp: sigInfo.blockTime ? sigInfo.blockTime * 1000 : Date.now()
+            });
           }
         }
       } catch (innerErr) {
-        // Skip failed parsings
+        // skip
       }
     }
   } catch (err) {
     console.error("Error in detectOnChainPurchasePrice:", err);
   }
-  return null;
+  return foundSwaps;
 }
 
 app.post('/api/action', adminAuth, async (req, res) => {
@@ -4504,7 +4555,7 @@ app.post('/api/action', adminAuth, async (req, res) => {
     if (action === 'detectPurchasePrice') {
       const { symbol, address } = payload;
       const result = await detectOnChainPurchasePrice(address);
-      if (result) {
+      if (result && result.length > 0) {
         return res.json({ ok: true, found: true, data: result });
       } else {
         return res.json({ ok: true, found: false });
