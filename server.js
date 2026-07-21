@@ -2661,8 +2661,49 @@ async function executeSolanaTradeInternal(w, side, amountUSDT, price, pk, feePay
               let baseBalAfter = baseBalBefore;
               let tokenBalAfter = tokenBalBefore;
               try {
-                baseBalAfter = await getTokenBalance(connection, userPublicKey, baseMint);
-                tokenBalAfter = await getTokenUiBalance(connection, userPublicKey, targetMint);
+                // Wait briefly just in case, though it's already confirmed
+                await new Promise(r => setTimeout(r, 1000));
+                const parsed = await connection.getParsedTransaction(prevTxid, { maxSupportedTransactionVersion: 0, commitment: 'confirmed' });
+                
+                if (parsed && parsed.meta) {
+                    if (side === 'BUY' && parsed.meta.postTokenBalances) {
+                        const pre = parsed.meta.preTokenBalances.find(t => t.mint === targetMint && t.owner === userPublicKey);
+                        const post = parsed.meta.postTokenBalances.find(t => t.mint === targetMint && t.owner === userPublicKey);
+                        const preAmt = pre ? (pre.uiTokenAmount.uiAmount || 0) : 0;
+                        const postAmt = post ? (post.uiTokenAmount.uiAmount || 0) : 0;
+                        if (postAmt > preAmt) {
+                            tokenBalBefore = preAmt;
+                            tokenBalAfter = postAmt;
+                            addLog(`ℹ️ Balances extraídos (prev tx) desde on-chain para ${w.symbol}.`, 'info');
+                        }
+                    } else if (side === 'SELL') {
+                        if (baseMint === 'So11111111111111111111111111111111111111112') {
+                            const accountIndex = parsed.transaction.message.accountKeys.findIndex(k => k.pubkey.toString() === userPublicKey);
+                            if (accountIndex !== -1 && parsed.meta.preBalances && parsed.meta.postBalances) {
+                                const preAmt = parsed.meta.preBalances[accountIndex] || 0;
+                                const postAmt = parsed.meta.postBalances[accountIndex] || 0;
+                                if (postAmt > preAmt) {
+                                    baseBalBefore = preAmt;
+                                    baseBalAfter = postAmt;
+                                }
+                            }
+                        } else {
+                            const pre = parsed.meta.preTokenBalances.find(t => t.mint === baseMint && t.owner === userPublicKey);
+                            const post = parsed.meta.postTokenBalances.find(t => t.mint === baseMint && t.owner === userPublicKey);
+                            const preAmt = pre ? (pre.uiTokenAmount.amount || 0) : 0;
+                            const postAmt = post ? (post.uiTokenAmount.amount || 0) : 0;
+                            if (Number(postAmt) > Number(preAmt)) {
+                                baseBalBefore = Number(preAmt);
+                                baseBalAfter = Number(postAmt);
+                            }
+                        }
+                    }
+                }
+                // Fallback to balance polling if parsing failed
+                if (baseBalAfter === baseBalBefore && tokenBalAfter === tokenBalBefore) {
+                  baseBalAfter = await getTokenBalance(connection, userPublicKey, baseMint);
+                  tokenBalAfter = await getTokenUiBalance(connection, userPublicKey, targetMint);
+                }
               } catch (balErr) {
                 addLog(`⚠️ Error al verificar balances tras detectar éxito previo, usando aproximación: ${balErr.message}`, 'info');
                 if (side === 'SELL') {
@@ -2922,19 +2963,65 @@ async function executeSolanaTradeInternal(w, side, amountUSDT, price, pk, feePay
 
       let baseBalAfter = baseBalBefore;
       let tokenBalAfter = tokenBalBefore;
+      let usedParsedTx = false;
       try {
-        for (let i = 0; i < 5; i++) {
+        for (let i = 0; i < 7; i++) {
           baseBalAfter = await getTokenBalance(connection, userPublicKey, baseMint);
           tokenBalAfter = await getTokenUiBalance(connection, userPublicKey, targetMint);
           
-          const baseChanged = Math.abs(baseBalAfter - baseBalBefore) > 0;
-          const tokenChanged = Math.abs(tokenBalAfter - tokenBalBefore) > 0;
+          let baseChanged = Math.abs(baseBalAfter - baseBalBefore) > 0;
+          let tokenChanged = Math.abs(tokenBalAfter - tokenBalBefore) > 0;
           
           if (side === 'BUY' && tokenChanged) break;
           if (side === 'SELL' && baseChanged) break;
           if (baseChanged && tokenChanged) break;
           
           await new Promise(r => setTimeout(r, 1500));
+        }
+        
+        // Fallback to getParsedTransaction if still no change detected
+        if ((side === 'BUY' && Math.abs(tokenBalAfter - tokenBalBefore) <= 0) || (side === 'SELL' && Math.abs(baseBalAfter - baseBalBefore) <= 0)) {
+           const parsed = await connection.getParsedTransaction(txid, { maxSupportedTransactionVersion: 0, commitment: 'confirmed' });
+           if (parsed && parsed.meta) {
+              if (side === 'BUY' && parsed.meta.postTokenBalances) {
+                 const pre = parsed.meta.preTokenBalances.find(t => t.mint === targetMint && t.owner === userPublicKey);
+                 const post = parsed.meta.postTokenBalances.find(t => t.mint === targetMint && t.owner === userPublicKey);
+                 const preAmt = pre ? (pre.uiTokenAmount.uiAmount || 0) : 0;
+                 const postAmt = post ? (post.uiTokenAmount.uiAmount || 0) : 0;
+                 if (postAmt > preAmt) {
+                    tokenBalBefore = preAmt;
+                    tokenBalAfter = postAmt;
+                    usedParsedTx = true;
+                    addLog(`ℹ️ Balances extraídos exitosamente desde la transacción parseada on-chain para ${w.symbol}.`, 'info');
+                 }
+              } else if (side === 'SELL') {
+                 // For sell we want base token difference
+                 if (baseMint === 'So11111111111111111111111111111111111111112') {
+                     const accountIndex = parsed.transaction.message.accountKeys.findIndex(k => k.pubkey.toString() === userPublicKey);
+                     if (accountIndex !== -1 && parsed.meta.preBalances && parsed.meta.postBalances) {
+                         const preAmt = parsed.meta.preBalances[accountIndex] || 0;
+                         const postAmt = parsed.meta.postBalances[accountIndex] || 0;
+                         if (postAmt > preAmt) {
+                             baseBalBefore = preAmt;
+                             baseBalAfter = postAmt;
+                             usedParsedTx = true;
+                             addLog(`ℹ️ Balance SOL extraído desde la transacción parseada on-chain para ${w.symbol}.`, 'info');
+                         }
+                     }
+                 } else {
+                     const pre = parsed.meta.preTokenBalances.find(t => t.mint === baseMint && t.owner === userPublicKey);
+                     const post = parsed.meta.postTokenBalances.find(t => t.mint === baseMint && t.owner === userPublicKey);
+                     const preAmt = pre ? (pre.uiTokenAmount.amount || 0) : 0;
+                     const postAmt = post ? (post.uiTokenAmount.amount || 0) : 0;
+                     if (Number(postAmt) > Number(preAmt)) {
+                        baseBalBefore = Number(preAmt);
+                        baseBalAfter = Number(postAmt);
+                        usedParsedTx = true;
+                        addLog(`ℹ️ Balance base extraído desde la transacción parseada on-chain para ${w.symbol}.`, 'info');
+                     }
+                 }
+              }
+           }
         }
       } catch (e) {
         addLog(`⚠️ Error verificando balance post-swap para ${w.symbol} (tx: ${txid}), ignorando error de RPC: ${e.message}`, 'info');
