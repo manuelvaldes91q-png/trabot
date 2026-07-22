@@ -2705,17 +2705,18 @@ function markRpcBad(url, reason) {
 }
 
 const RPC_ENDPOINTS_BASE = [
-  "https://solana-rpc.publicnode.com",
-  "https://solana.drpc.org",
-  "https://rpc.ankr.com/solana",
-  "https://solana.lava.build",
-  "https://api.mainnet-beta.solana.com"
+  "https://1rpc.io/sol",
+  "https://solana-mainnet.g.alchemy.com/v2/demo",
+  "https://api.mainnet-beta.solana.com",
+  "https://solana.blockpi.network/v1/rpc/public",
+  "https://mainnet.rpcpool.com",
+  "https://solana-rpc.publicnode.com"
 ];
 
 function getRpcEndpoints() {
   const now = Date.now();
   for (const [url, ts] of badRpcBlacklist.entries()) {
-    if (now - ts > 20000) badRpcBlacklist.delete(url); // 20s expire for rate limits
+    if (now - ts > 10000) badRpcBlacklist.delete(url); // 10s expire for rate limits
   }
 
   let configured = appConfig.solanaRpcUrl || process.env.SOLANA_RPC_URL;
