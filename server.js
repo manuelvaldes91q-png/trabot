@@ -5869,6 +5869,25 @@ app.post('/api/swap-sol-usdc', adminAuth, async (req, res) => {
   try {
     const { amount, side, force, input, output } = req.body;
     console.log('[API /api/swap-sol-usdc] Incoming swap request body:', req.body);
+    
+    let inputSymbol = input || (side === 'buy' ? 'SOL' : 'USDC');
+    let outputSymbol = output || (side === 'buy' ? 'USDC' : 'SOL');
+
+    if (solMode !== 'wallet' && solMode !== 'pool') {
+      const solPrice = await mxPrice('SOL') || 140;
+      if (inputSymbol === 'SOL' && outputSymbol === 'USDC') {
+        SIM.balance += amount * solPrice;
+        SIM.solBalance = Math.max(0, SIM.solBalance - amount);
+      } else if (inputSymbol === 'USDC' && outputSymbol === 'SOL') {
+        SIM.balance = Math.max(0, SIM.balance - amount);
+        SIM.solBalance += amount / solPrice;
+      }
+      const simTxid = 'sim_tx_' + Math.random().toString(36).substring(2, 12);
+      addLog(`✅ [Simulación] Swap exitoso: ${amount} ${inputSymbol} ➡ ${outputSymbol} (TxID: ${simTxid})`, 'buy');
+      saveState();
+      return res.json({ success: true, txid: simTxid });
+    }
+
     const pk = poolConfig.privateKey || appConfig.solanaPrivateKey || process.env.SOLANA_PRIVATE_KEY;
     if (!pk) return res.status(400).json({ error: 'No se encontró la llave privada' });
     
@@ -5881,9 +5900,6 @@ app.post('/api/swap-sol-usdc', adminAuth, async (req, res) => {
     let outputMint = 'EPjFWdd5AufqSSqeM2qN1xzybapC8G4wEGGkZwyTDt1v';
     let inputDecimals = 9;
     let outputDecimals = 6;
-    let inputSymbol = 'SOL';
-    let outputSymbol = 'USDC';
-
     if (input && output) {
       inputSymbol = input;
       outputSymbol = output;
