@@ -1,14 +1,14 @@
-import express from "express";
-import path from "path";
-import fs from "fs";
-import { fileURLToPath } from "url";
-import { createServer as createViteServer } from "vite";
-import crypto from "crypto";
-import "dotenv/config";
-import { Connection, Keypair, VersionedTransaction, PublicKey, SystemProgram, Transaction, sendAndConfirmTransaction } from '@solana/web3.js';
-import { getAssociatedTokenAddress, createTransferInstruction, getAccount, createCloseAccountInstruction, createAssociatedTokenAccountInstruction, getMint, TOKEN_2022_PROGRAM_ID, getExtensionTypes, ExtensionType } from '@solana/spl-token';
-import bs58 from 'bs58';
-import raydiumPkg from '@raydium-io/raydium-sdk-v2';
+// import express from "express";
+// import path from "path";
+// import fs from "fs";
+// import { fileURLToPath } from "url";
+// import { createServer as createViteServer } from "vite";
+// import crypto from "crypto";
+// import "dotenv/config";
+// import { Connection, Keypair, VersionedTransaction, PublicKey, SystemProgram, Transaction, sendAndConfirmTransaction } from '@solana/web3.js';
+// import { getAssociatedTokenAddress, createTransferInstruction, getAccount, createCloseAccountInstruction, createAssociatedTokenAccountInstruction, getMint, TOKEN_2022_PROGRAM_ID, getExtensionTypes, ExtensionType } from '@solana/spl-token';
+// import bs58 from 'bs58';
+// import raydiumPkg from '@raydium-io/raydium-sdk-v2';
 const { LIQUIDITY_VERSION_TO_STATE_LAYOUT } = raydiumPkg;
 
 const TOKEN_METADATA_PROGRAM_ID = new PublicKey('metaqbxxUERdq28cj1RbAWkYQm3ybzjb6a8bt518x1s');
@@ -39,11 +39,11 @@ function deserializeMetadata(accountInfo) {
   return { name, symbol, uri, isMutable };
 }
 
-import * as phoenix from '@ellipsis-labs/phoenix-sdk';
-import https from "https";
-import http from "http";
-import bcrypt from 'bcryptjs';
-import WebSocket from 'ws';
+// import * as phoenix from '@ellipsis-labs/phoenix-sdk';
+// import https from "https";
+// import http from "http";
+// import bcrypt from 'bcryptjs';
+// import WebSocket from 'ws';
 
 const __filename = fileURLToPath(import.meta.url);
 const __dirname = path.dirname(__filename);
@@ -1561,16 +1561,16 @@ async function updateSolanaWalletInfo() {
         solanaSolBalance = SIM.solBalance || 10;
         solanaUsdtBalance = SIM.usdtBalance || 1000;
         try {
+          const rpcUrl = appConfig.solanaRpcUrl || process.env.SOLANA_RPC_URL || 'https://api.mainnet-beta.solana.com';
+          const connection = new Connection(rpcUrl, { commitment: 'confirmed', disableRetryOnRateLimit: true });
           for (let w of watchItems) {
             if (w.network === 'solana' && w.address) {
               await new Promise(r => setTimeout(r, 600));
-              const bal = await withRpcFallback(c => getTokenUiBalance(c, solanaWalletAddress, w.address));
+              const bal = await getTokenUiBalance(connection, solanaWalletAddress, w.address);
               w.onChainBalance = bal;
             }
           }
-        } catch (e) {
-          console.error("Error updating SIM custom token balances:", e.message);
-        }
+        } catch (e) {}
         return;
     }
     
@@ -2575,21 +2575,13 @@ async function sendViaJitoBundle(connection, signedTransaction, keypair) {
 }
 
 const RPC_ENDPOINTS_BASE = [
-  "https://solana.api.onfinality.io/rpc?apikey=9741d82b-2bdf-490e-b996-6e07df5e4930",
-  "https://shared.us-east-1.getblock.io/6f4c4e1a90f44ff19bc2f2c9aa0d8959",
-  "https://api.mainnet-beta.solana.com",
-  "https://solana-rpc.publicnode.com",
-  "https://rpc.ankr.com/solana",
-  "https://solana.drpc.org",
-  "https://mainnet.helius-rpc.com/?api-key=15319bf4-5b40-4958-ac8d-6313aa55eb92",
-  "https://api.metaplex.solana.com",
-  "https://solana-mainnet.rpc.extnode.com",
-  "https://solana.public-rpc.com",
-  "https://api.mainnet.rpcpool.com",
-  "https://ssc-dao.genesysgo.net"
+  "https://api.mainnet-beta.solana.com"
 ];
 function getRpcEndpoints() {
   let configured = appConfig.solanaRpcUrl || process.env.SOLANA_RPC_URL || 'https://api.mainnet-beta.solana.com';
+  if (configured.includes('publicnode.com') || configured.includes('drpc.org') || configured.includes('ankr.com')) {
+    configured = 'https://api.mainnet-beta.solana.com';
+  }
   const rpcs = [configured, ...RPC_ENDPOINTS_BASE.filter(u => u !== configured)];
   return [...new Set(rpcs)];
 }
@@ -7216,3 +7208,5 @@ app.listen(ACTUAL_PORT, '0.0.0.0', () => {
     console.log(`🚀 SERVIDOR VPS INICIADO 24/7 en puerto ${ACTUAL_PORT}`);
     console.log(`📁 Panel de control accesible vía IP pública:${ACTUAL_PORT}`);
 });
+
+module.exports = { updateSolanaWalletInfo, poolConfig, appConfig, solanaWalletAddress: () => solanaWalletAddress, getUSDC: () => solanaUsdcBalance };
