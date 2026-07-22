@@ -1412,6 +1412,7 @@ async function withRpcFallback(actionFn) {
       const errMsg = e ? (e.message || String(e)) : '';
       if (
         errMsg.includes('429') || 
+        errMsg.includes('402') || 
         errMsg.includes('400') || 
         errMsg.includes('Bad Request') || 
         errMsg.includes('unknown network') || 
@@ -2477,7 +2478,7 @@ async function checkTokenSafety(tokenMint) {
                       quoteResponse,
                       userPublicKey: owner.toString(),
                       wrapAndUnwrapSol: true,
-                      asLegacyTransaction: true,
+                      asLegacyTransaction: false,
                       skipUserAccountsCheck: true
                   })
               }, 2, 1000);
@@ -2738,31 +2739,51 @@ const RPC_ENDPOINTS_BASE = [
   "https://rpc.ankr.com/solana"
 ];
 
+let priorityRotationIndex = 0;
+let baseRotationIndex = 0;
+
 function getRpcEndpoints() {
   const now = Date.now();
   for (const [url, ts] of badRpcBlacklist.entries()) {
     if (now - ts > 15000) badRpcBlacklist.delete(url); // 15s expire for rate limits / errors
   }
 
-  let configured = appConfig.solanaRpcUrl || process.env.SOLANA_RPC_URL;
-  let addrs = appConfig.additionalRpcUrls || [];
-  let rpcs = [configured, ...addrs, ...RPC_ENDPOINTS_BASE].filter(Boolean);
-  rpcs = [...new Set(rpcs)];
+  const configured = appConfig.solanaRpcUrl || process.env.SOLANA_RPC_URL;
+  const addrs = appConfig.additionalRpcUrls || [];
+  
+  // Priority: Configured + User Custom
+  let priority = [...new Set([configured, ...addrs].filter(Boolean))];
+  
+  // Base: Public endpoints minus what is already in priority
+  let base = RPC_ENDPOINTS_BASE.filter(u => !priority.includes(u));
 
-  let valid = rpcs.filter(u => !badRpcBlacklist.has(u));
+  const validPriority = priority.filter(u => !badRpcBlacklist.has(u));
+  const validBase = base.filter(u => !badRpcBlacklist.has(u));
 
-  if (valid.length === 0) {
-    badRpcBlacklist.clear();
-    valid = [...rpcs];
+  // If a group is completely blacklisted, fallback to trying them anyway
+  const finalPriority = validPriority.length > 0 ? validPriority : (priority.length > 0 ? priority : []);
+  const finalBase = validBase.length > 0 ? validBase : base;
+
+  // Internal rotation for priority
+  let rotatedPriority = [];
+  if (finalPriority.length > 0) {
+    priorityRotationIndex = (priorityRotationIndex + 1) % finalPriority.length;
+    for (let i = 0; i < finalPriority.length; i++) {
+      rotatedPriority.push(finalPriority[(priorityRotationIndex + i) % finalPriority.length]);
+    }
   }
 
-  // Rotate round-robin to balance load and prevent rate-limiting a single node
-  if (valid.length > 1) {
-    const first = valid.shift();
-    valid.push(first);
+  // Internal rotation for base
+  let rotatedBase = [];
+  if (finalBase.length > 0) {
+    baseRotationIndex = (baseRotationIndex + 1) % finalBase.length;
+    for (let i = 0; i < finalBase.length; i++) {
+      rotatedBase.push(finalBase[(baseRotationIndex + i) % finalBase.length]);
+    }
   }
 
-  return valid;
+  // Always return priority first, then base. Both internally rotated.
+  return [...rotatedPriority, ...rotatedBase];
 }
 
 const SLIPPAGE_ESCALATION_FACTORS = [1, 1.3, 1.6, 2.0, 2.5, 3.0];
@@ -3065,7 +3086,7 @@ async function executeSolanaTradeInternal(w, side, amountUSDT, price, pk, feePay
           wrapAndUnwrapSol: true,
           dynamicComputeUnitLimit: true,
           prioritizationFeeLamports: 'auto',
-          asLegacyTransaction: true,
+          asLegacyTransaction: false,
           skipUserAccountsCheck: true
         };
         if (adminKeypair) bodyPayload.feePayer = adminKeypair.publicKey.toString();
@@ -3163,6 +3184,10 @@ async function executeSolanaTradeInternal(w, side, amountUSDT, price, pk, feePay
       }
 
       const swapTransactionBuf = Buffer.from(swapTransaction, 'base64');
+      if (swapTransactionBuf.length > 1232) {
+        addLog(`❌ La transacción generada (${swapTransactionBuf.length} bytes) excede el límite de Solana (1232 bytes).`, 'error');
+        throw new Error(`Transacción demasiado grande (${swapTransactionBuf.length} bytes). Intenta con un slippage menor o menos hops.`);
+      }
       const transaction = VersionedTransaction.deserialize(swapTransactionBuf);
 
       try {
@@ -6132,7 +6157,7 @@ app.post('/api/swap-sol-usdc', adminAuth, async (req, res) => {
             wrapAndUnwrapSol: true,
             dynamicComputeUnitLimit: true,
             prioritizationFeeLamports: 'auto',
-            asLegacyTransaction: true,
+            asLegacyTransaction: false,
             skipUserAccountsCheck: true
           })
         });
