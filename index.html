@@ -224,9 +224,23 @@ select.inp{cursor:pointer}
 <div class="login-screen" id="loginScreen" style="display:none">
   <div class="login-box">
     <div class="logo" style="font-size:24px;margin-bottom:10px">DIP<span>/</span>HUNTER</div>
-    <div style="font-size:11px;color:var(--t2);margin-bottom:20px;line-height:1.4">Acceso Privado al Nodo VPS<br>(Requiere contraseña de administrador)</div>
-    <input type="password" id="pwInp" class="inp" placeholder="Ingresa la contraseña..." style="margin-bottom:15px;font-size:14px;padding:8px" onkeydown="if(event.key==='Enter') doLogin()">
-    <button class="btn btn-g" style="width:100%;font-size:13px;padding:8px" onclick="doLogin()">Autenticar</button>
+    <div style="font-size:11px;color:var(--t2);margin-bottom:15px;line-height:1.4">Acceso Privado al Nodo VPS<br>(Seguridad con Autenticación 2FA en Telegram)</div>
+    
+    <div id="loginStep1">
+      <input type="password" id="pwInp" class="inp" placeholder="Ingresa la contraseña..." style="margin-bottom:15px;font-size:14px;padding:8px" onkeydown="if(event.key==='Enter') doLogin()">
+      <button class="btn btn-g" style="width:100%;font-size:13px;padding:8px" onclick="doLogin()">Autenticar</button>
+    </div>
+
+    <div id="loginStep2" style="display:none">
+      <div id="2faMsg" style="font-size:11px;color:var(--g);margin-bottom:12px;line-height:1.3;background:rgba(0,229,160,0.1);padding:8px;border-radius:6px;border:1px solid rgba(0,229,160,0.3)">
+        📩 Código 2FA enviado a Telegram. Ingrésalo a continuación:
+      </div>
+      <input type="text" id="code2faInp" class="inp" placeholder="Código de 6 dígitos..." maxlength="6" style="margin-bottom:12px;font-size:16px;padding:8px;text-align:center;letter-spacing:4px;font-weight:bold;color:var(--g)" onkeydown="if(event.key==='Enter') verify2FA()">
+      <button class="btn btn-g" style="width:100%;font-size:13px;padding:8px;margin-bottom:8px" onclick="verify2FA()">Verificar Código 2FA</button>
+      <button class="btn" style="width:100%;font-size:11px;padding:5px;background:transparent;color:var(--t2);border:1px dashed var(--bdr)" onclick="doLogin(true)">🔄 Reenviar Código a Telegram</button>
+    </div>
+
+    <div id="loginErr" style="display:none;font-size:11px;color:var(--r);margin-top:12px;line-height:1.3;background:rgba(239,68,68,0.1);padding:8px;border-radius:6px;border:1px solid rgba(239,68,68,0.3)"></div>
   </div>
 </div>
 <div class="app">
@@ -302,6 +316,7 @@ window.addEventListener('DOMContentLoaded', () => {
     <button class="btn btn-d btn-sm" onclick="openPoolModal()">🏦 Pool</button>
     <button class="btn btn-d btn-sm" onclick="showTrades()">📋 Historial</button>
     <button class="btn btn-d btn-sm" onclick="openConfigModal()">⚙️ Config</button>
+    <button class="btn btn-r btn-sm" onclick="logout()" title="Cerrar Sesión">🚪 Salir</button>
     <button class="btn btn-r btn-sm" id="btnStop" style="display:none" onclick="stopMonitor()">⏹ Parar monitor</button>
     <button class="btn btn-g" id="btnStart" onclick="startMonitor()">▶ INICIAR MONITOR</button>
   </div>
@@ -631,21 +646,99 @@ async function myFetch(url, opts = {}) {
   const res = await fetch(url, opts);
   if (res.status === 401) {
     document.getElementById('loginScreen').style.display = 'flex';
+    if (document.getElementById('loginStep1')) {
+      document.getElementById('loginStep1').style.display = 'block';
+      document.getElementById('loginStep2').style.display = 'none';
+      if (document.getElementById('loginErr')) document.getElementById('loginErr').style.display = 'none';
+    }
     throw new Error('Unauthorized');
   }
   return res;
 }
-async function doLogin() {
+async function doLogin(resend = false) {
   const p = document.getElementById('pwInp').value;
-  const r = await fetch('/api/login', {
-    method: 'POST', headers: {'Content-Type': 'application/json'},
-    body: JSON.stringify({password:p})
-  });
-  if (r.ok) {
-    authToken = p; localStorage.setItem('dh_pwd', p);
-    document.getElementById('loginScreen').style.display = 'none';
-    initServerState(); // intentamos de nuevo restaurar
-  } else { alert('Contraseña incorrecta'); }
+  const errDiv = document.getElementById('loginErr');
+  if (errDiv) errDiv.style.display = 'none';
+
+  if (!p) {
+    if (errDiv) { errDiv.innerText = 'Por favor ingresa la contraseña'; errDiv.style.display = 'block'; }
+    return;
+  }
+
+  try {
+    const r = await fetch('/api/login', {
+      method: 'POST',
+      headers: {'Content-Type': 'application/json'},
+      body: JSON.stringify({ password: p })
+    });
+
+    const data = await r.json();
+
+    if (!r.ok) {
+      if (errDiv) { errDiv.innerText = data.error || 'Contraseña incorrecta'; errDiv.style.display = 'block'; }
+      return;
+    }
+
+    if (data.requires2FA) {
+      document.getElementById('loginStep1').style.display = 'none';
+      document.getElementById('loginStep2').style.display = 'block';
+      const msgDiv = document.getElementById('2faMsg');
+      if (msgDiv) msgDiv.innerText = resend ? '🔄 Nuevo código 2FA enviado a tu Telegram.' : '📩 Código 2FA enviado a tu Telegram. Ingrésalo a continuación:';
+      const codeInp = document.getElementById('code2faInp');
+      if (codeInp) { codeInp.value = ''; codeInp.focus(); }
+    } else if (data.status === 'ok') {
+      authToken = p;
+      localStorage.setItem('dh_pwd', p);
+      document.getElementById('loginScreen').style.display = 'none';
+      initServerState();
+    }
+  } catch (e) {
+    if (errDiv) { errDiv.innerText = 'Error de conexión con el servidor'; errDiv.style.display = 'block'; }
+  }
+}
+
+async function verify2FA() {
+  const p = document.getElementById('pwInp').value;
+  const code = document.getElementById('code2faInp').value.trim();
+  const errDiv = document.getElementById('loginErr');
+  if (errDiv) errDiv.style.display = 'none';
+
+  if (!code) {
+    if (errDiv) { errDiv.innerText = 'Ingresa el código de 6 dígitos enviado por Telegram'; errDiv.style.display = 'block'; }
+    return;
+  }
+
+  try {
+    const r = await fetch('/api/login', {
+      method: 'POST',
+      headers: {'Content-Type': 'application/json'},
+      body: JSON.stringify({ password: p, code: code })
+    });
+
+    const data = await r.json();
+
+    if (r.ok && data.status === 'ok') {
+      authToken = p;
+      localStorage.setItem('dh_pwd', p);
+      document.getElementById('loginScreen').style.display = 'none';
+      initServerState();
+    } else {
+      if (errDiv) { errDiv.innerText = data.error || 'Código 2FA incorrecto'; errDiv.style.display = 'block'; }
+    }
+  } catch (e) {
+    if (errDiv) { errDiv.innerText = 'Error verificando el código 2FA'; errDiv.style.display = 'block'; }
+  }
+}
+
+function logout() {
+  authToken = '';
+  localStorage.removeItem('dh_pwd');
+  document.getElementById('loginScreen').style.display = 'flex';
+  if (document.getElementById('loginStep1')) document.getElementById('loginStep1').style.display = 'block';
+  if (document.getElementById('loginStep2')) document.getElementById('loginStep2').style.display = 'none';
+  if (document.getElementById('pwInp')) document.getElementById('pwInp').value = '';
+  if (document.getElementById('code2faInp')) document.getElementById('code2faInp').value = '';
+  if (document.getElementById('loginErr')) document.getElementById('loginErr').style.display = 'none';
 }
 let audioCtx=null,soundOn=false;
 function initAudio(){if(!audioCtx)audioCtx=new(window.AudioContext||window.webkitAudioContext)();}

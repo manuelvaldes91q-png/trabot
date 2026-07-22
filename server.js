@@ -49,7 +49,44 @@ const __filename = fileURLToPath(import.meta.url);
 const __dirname = path.dirname(__filename);
 
 const app = express();
-app.use(express.json());
+app.disable('x-powered-by');
+
+// Simple IP-based Rate Limiter to prevent brute-force attacks
+const rateLimitMap = new Map();
+const pending2FACodes = new Map();
+function rateLimiter(maxRequests = 30, windowMs = 60000) {
+  return (req, res, next) => {
+    const ip = req.headers['x-forwarded-for'] || req.socket.remoteAddress || 'unknown';
+    const now = Date.now();
+    const clientData = rateLimitMap.get(ip) || { count: 0, resetTime: now + windowMs };
+
+    if (now > clientData.resetTime) {
+      clientData.count = 1;
+      clientData.resetTime = now + windowMs;
+    } else {
+      clientData.count++;
+    }
+
+    rateLimitMap.set(ip, clientData);
+
+    if (clientData.count > maxRequests) {
+      return res.status(429).json({ error: 'Demasiadas peticiones. Intenta de nuevo más tarde.' });
+    }
+    next();
+  };
+}
+
+// Security headers middleware
+app.use((req, res, next) => {
+  res.setHeader('X-Content-Type-Options', 'nosniff');
+  res.setHeader('X-Frame-Options', 'DENY');
+  res.setHeader('X-XSS-Protection', '1; mode=block');
+  next();
+});
+
+app.use(express.json({ limit: '1mb' }));
+app.use('/api/login', rateLimiter(10, 60000));
+app.use('/api/investor/login', rateLimiter(10, 60000));
 
 // Middleware de autenticación para rutas admin que mueven fondos reales.
 // Reutiliza la MISMA contraseña que ya usa /api/login (appConfig.appPassword /
@@ -5237,10 +5274,57 @@ app.post('/api/action', adminAuth, async (req, res) => {
   }
 });
 
-app.post('/api/login', (req, res) => {
+app.post('/api/login', async (req, res) => {
   const pwd = appConfig.appPassword || process.env.APP_PASSWORD || 'admin123';
-  if (req.body.password === pwd) res.json({status: 'ok', token: pwd});
-  else res.status(401).json({error: 'Invalid password'});
+  const { password, code } = req.body || {};
+
+  if (password !== pwd) {
+    sendTelegram(`🚨 <b>ALERTA DE SEGURIDAD: Intento de Acceso Fallido</b>\n\nSe ingresó una contraseña de administrador INCORRECTA desde la Web.`).catch(() => {});
+    return res.status(401).json({ error: 'Contraseña incorrecta' });
+  }
+
+  const tgToken = appConfig.tgBotToken || process.env.TELEGRAM_BOT_TOKEN;
+  const tgChat = appConfig.tgChatId || process.env.TELEGRAM_CHAT_ID;
+
+  // Si Telegram está configurado, requerimos verificación 2FA
+  if (tgToken && tgChat) {
+    if (!code) {
+      // Generar código de 6 dígitos aleatorio
+      const newCode = Math.floor(100000 + Math.random() * 900000).toString();
+      pending2FACodes.set('admin_2fa', {
+        code: newCode,
+        expiresAt: Date.now() + 5 * 60 * 1000 // 5 minutos de validez
+      });
+
+      const sentMsg = `🔐 <b>Código de Seguridad 2FA - Panel Admin</b>\n\nSe ha solicitado acceso al Panel Administrativo.\n\nTu código de verificación es: <code>${newCode}</code>\n\n<i>Este código vence en 5 minutos. Si no solicitaste este acceso, por favor mantén tus llaves seguras.</i>`;
+      await sendTelegram(sentMsg);
+
+      return res.json({
+        requires2FA: true,
+        message: 'Código de verificación 2FA enviado a tu Telegram'
+      });
+    }
+
+    // Verificar código 2FA
+    const active2FA = pending2FACodes.get('admin_2fa');
+    if (!active2FA || Date.now() > active2FA.expiresAt) {
+      sendTelegram(`⚠️ <b>ALERTA DE SEGURIDAD: Código 2FA Expirado</b>\n\nSe intentó verificar un código 2FA caducado o no solicitado.`).catch(() => {});
+      return res.status(401).json({ error: 'El código 2FA ha expirado o no ha sido solicitado. Por favor solicita uno nuevo.' });
+    }
+
+    if (String(code).trim() !== active2FA.code) {
+      sendTelegram(`🚨 <b>ALERTA DE SEGURIDAD: Código 2FA INCORRECTO</b>\n\nSe ingresó un código de verificación 2FA ERRÓNEO en el Panel Admin.`).catch(() => {});
+      return res.status(401).json({ error: 'Código 2FA incorrecto. Revisa Telegram e inténtalo de nuevo.' });
+    }
+
+    // Código válido -> consumimos el código
+    pending2FACodes.delete('admin_2fa');
+
+    // Notificación de seguridad en Telegram
+    sendTelegram(`✅ <b>Acceso Concedido</b>\n\nSesión iniciada con éxito en el Panel Admin (Verificación 2FA completada).`).catch(() => {});
+  }
+
+  res.json({ status: 'ok', token: pwd });
 });
 
 app.post('/api/investor/login', async (req, res) => {
