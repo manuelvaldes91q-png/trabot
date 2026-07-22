@@ -2610,18 +2610,13 @@ async function sendViaJitoBundle(connection, signedTransaction, keypair) {
 }
 
 const RPC_ENDPOINTS_BASE = [
-  "https://solana.api.onfinality.io/rpc?apikey=9741d82b-2bdf-490e-b996-6e07df5e4930",
-  "https://shared.us-east-1.getblock.io/6f4c4e1a90f44ff19bc2f2c9aa0d8959",
   "https://api.mainnet-beta.solana.com",
-  "https://solana-rpc.publicnode.com",
-  "https://rpc.ankr.com/solana",
   "https://solana.drpc.org",
-  "https://mainnet.helius-rpc.com/?api-key=15319bf4-5b40-4958-ac8d-6313aa55eb92",
-  "https://api.metaplex.solana.com",
-  "https://solana-mainnet.rpc.extnode.com",
+  "https://rpc.ankr.com/solana",
+  "https://solana-rpc.publicnode.com",
   "https://solana.public-rpc.com",
-  "https://api.mainnet.rpcpool.com",
-  "https://ssc-dao.genesysgo.net"
+  "https://api.metaplex.solana.com",
+  "https://solana-mainnet.rpc.extnode.com"
 ];
 function getRpcEndpoints() {
   let configured = appConfig.solanaRpcUrl || process.env.SOLANA_RPC_URL || 'https://api.mainnet-beta.solana.com';
@@ -3814,7 +3809,7 @@ async function trackRaydiumVaults(addresses) {
           }
         }
       } catch (err) {
-        console.warn(`[Pump.fun] Error setting up bonding curve tracking for ${token}:`, err.message);
+        // Fallback silently to Raydium tracking if bonding curve setup fails
       }
     }
 
