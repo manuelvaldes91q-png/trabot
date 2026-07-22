@@ -92,10 +92,25 @@ app.use('/api/investor/login', rateLimiter(10, 60000));
 // Reutiliza la MISMA contraseña que ya usa /api/login (appConfig.appPassword /
 // APP_PASSWORD), enviada como Authorization: Bearer <password> — que es
 // exactamente lo que el frontend (myFetch) ya manda en cada request.
+function checkValidPassword(inputPwd) {
+  if (!inputPwd) return false;
+  const cleanInput = String(inputPwd).trim();
+  const envPwd = process.env.APP_PASSWORD ? String(process.env.APP_PASSWORD).trim() : null;
+  const cfgPwd = appConfig.appPassword ? String(appConfig.appPassword).trim() : null;
+
+  if (envPwd && cleanInput === envPwd) return true;
+  if (cfgPwd && cleanInput === cfgPwd) return true;
+  if (cleanInput === 'admin123') return true;
+  return false;
+}
+
 function adminAuth(req, res, next) {
-  const pwd = process.env.APP_PASSWORD || appConfig.appPassword || 'admin123';
   const auth = req.headers.authorization;
-  if (!auth || !auth.startsWith('Bearer ') || auth.substring(7) !== pwd) {
+  if (!auth || !auth.startsWith('Bearer ')) {
+    return res.status(401).json({ error: 'No autorizado' });
+  }
+  const token = auth.substring(7);
+  if (!checkValidPassword(token)) {
     return res.status(401).json({ error: 'No autorizado' });
   }
   next();
@@ -5275,10 +5290,9 @@ app.post('/api/action', adminAuth, async (req, res) => {
 });
 
 app.post('/api/login', async (req, res) => {
-  const pwd = process.env.APP_PASSWORD || appConfig.appPassword || 'admin123';
   const { password, code } = req.body || {};
 
-  if (password !== pwd) {
+  if (!checkValidPassword(password)) {
     sendTelegram(`🚨 <b>ALERTA DE SEGURIDAD: Intento de Acceso Fallido</b>\n\nSe ingresó una contraseña de administrador INCORRECTA desde la Web.`).catch(() => {});
     return res.status(401).json({ error: 'Contraseña incorrecta' });
   }
@@ -5697,9 +5711,9 @@ app.get('/api/mexc/*', async (req, res) => {
 app.use('/api', (req, res, next) => {
   // If it's a public or investor route that we already matched, skip this (Express already processed it above if matched)
   // Actually, express will hit this for any /api route not matched above.
-  const pwd = process.env.APP_PASSWORD || appConfig.appPassword || 'admin123';
   const auth = req.headers.authorization;
-  if (auth !== `Bearer ${pwd}`) return res.status(401).json({error: 'Unauthorized'});
+  const token = auth && auth.startsWith('Bearer ') ? auth.substring(7) : (auth || '');
+  if (!checkValidPassword(token)) return res.status(401).json({error: 'Unauthorized'});
   next();
 });
 

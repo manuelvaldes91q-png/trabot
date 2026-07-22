@@ -645,18 +645,22 @@ async function myFetch(url, opts = {}) {
   opts.headers['Authorization'] = 'Bearer ' + authToken;
   const res = await fetch(url, opts);
   if (res.status === 401) {
-    document.getElementById('loginScreen').style.display = 'flex';
-    if (document.getElementById('loginStep1')) {
-      document.getElementById('loginStep1').style.display = 'block';
-      document.getElementById('loginStep2').style.display = 'none';
-      if (document.getElementById('loginErr')) document.getElementById('loginErr').style.display = 'none';
+    const loginScreen = document.getElementById('loginScreen');
+    if (loginScreen) loginScreen.style.display = 'flex';
+    const step2 = document.getElementById('loginStep2');
+    if (!step2 || step2.style.display !== 'block') {
+      if (document.getElementById('loginStep1')) {
+        document.getElementById('loginStep1').style.display = 'block';
+        if (step2) step2.style.display = 'none';
+        if (document.getElementById('loginErr')) document.getElementById('loginErr').style.display = 'none';
+      }
     }
     throw new Error('Unauthorized');
   }
   return res;
 }
 async function doLogin(resend = false) {
-  const p = document.getElementById('pwInp').value;
+  const p = (document.getElementById('pwInp').value || '').trim();
   const errDiv = document.getElementById('loginErr');
   if (errDiv) errDiv.style.display = 'none';
 
@@ -698,7 +702,7 @@ async function doLogin(resend = false) {
 }
 
 async function verify2FA() {
-  const p = document.getElementById('pwInp').value;
+  const p = (document.getElementById('pwInp').value || '').trim();
   const code = document.getElementById('code2faInp').value.trim();
   const errDiv = document.getElementById('loginErr');
   if (errDiv) errDiv.style.display = 'none';
