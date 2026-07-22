@@ -5338,6 +5338,7 @@ app.post('/api/login', async (req, res) => {
     sendTelegram(`✅ <b>Acceso Concedido</b>\n\nSesión iniciada con éxito en el Panel Admin (Verificación 2FA completada).`).catch(() => {});
   }
 
+  const pwd = password;
   res.json({ status: 'ok', token: pwd });
 });
 
