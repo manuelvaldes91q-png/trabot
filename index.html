@@ -5173,15 +5173,19 @@ async function executeSwap(force = false) {
     }
   }
 
+  const swapPayload = { amount, input: inputAsset, output: outputAsset, force };
+  console.log('[executeSwap] Sending swap request to backend with parameters:', swapPayload);
+
   document.getElementById('swapResult').textContent = 'Ejecutando swap...';
   try {
     const r = await myFetch('/api/swap-sol-usdc', {
       method: 'POST',
-      body: JSON.stringify({ amount, input: inputAsset, output: outputAsset, force })
+      body: JSON.stringify(swapPayload)
     });
     
     if (r.status === 409) {
         const d = await r.json();
+        console.warn('[executeSwap] High gas fee confirmation required (409):', d);
         if (confirm(d.error)) {
             return executeSwap(true);
         } else {
@@ -5191,14 +5195,19 @@ async function executeSwap(force = false) {
     }
 
     const d = await r.json();
+    console.log('[executeSwap] Backend swap response status:', r.status, 'Payload:', d);
+
     if (d.success) {
+      console.log('[executeSwap] Swap succeeded! Transaction ID:', d.txid);
       document.getElementById('swapResult').textContent = '✅ Swap exitoso! TxID: ' + d.txid;
       document.getElementById('swapAmount').value = '';
       document.getElementById('swapQuoteResult').textContent = '';
     } else {
-      document.getElementById('swapResult').textContent = '❌ Error: ' + d.error;
+      console.error('[executeSwap] Swap failed with backend error:', { status: r.status, error: d.error, details: d.details || d });
+      document.getElementById('swapResult').textContent = '❌ Error: ' + (d.error || JSON.stringify(d));
     }
   } catch (e) {
+    console.error('[executeSwap] Exception during swap execution:', e);
     document.getElementById('swapResult').textContent = '❌ Error: ' + e.message;
   }
 }

@@ -5714,14 +5714,13 @@ app.get('/api/quote-sol-usdc', adminAuth, async (req, res) => {
 app.post('/api/swap-sol-usdc', adminAuth, async (req, res) => {
   try {
     const { amount, side, force, input, output } = req.body;
+    console.log('[API /api/swap-sol-usdc] Incoming swap request body:', req.body);
     const pk = poolConfig.privateKey || appConfig.solanaPrivateKey || process.env.SOLANA_PRIVATE_KEY;
     if (!pk) return res.status(400).json({ error: 'No se encontró la llave privada' });
     
     const keypair = Keypair.fromSecretKey(bs58.decode(pk));
     const userPublicKey = keypair.publicKey.toString();
 
-    const rpcUrlCheck = appConfig.solanaRpcUrl || process.env.SOLANA_RPC_URL || 'https://api.mainnet-beta.solana.com';
-    const checkConnection = new Connection(rpcUrlCheck, { commitment: 'confirmed', disableRetryOnRateLimit: true });
     const RESERVA_GAS_SOL = 0.001;
 
     let inputMint = 'So11111111111111111111111111111111111111112';
@@ -5751,7 +5750,7 @@ app.post('/api/swap-sol-usdc', adminAuth, async (req, res) => {
     }
 
     // Balance checks
-    const solBal = await getTokenUiBalance(checkConnection, userPublicKey, 'So11111111111111111111111111111111111111112');
+    const solBal = await withRpcFallback(c => getTokenUiBalance(c, userPublicKey, 'So11111111111111111111111111111111111111112'));
     
     if (inputSymbol === 'SOL') {
       const disponible = Math.max(0, solBal - RESERVA_GAS_SOL);
@@ -5760,7 +5759,7 @@ app.post('/api/swap-sol-usdc', adminAuth, async (req, res) => {
       }
     } else {
       const inputMintToCheck = inputSymbol === 'USDC' ? 'EPjFWdd5AufqSSqeM2qN1xzybapC8G4wEGGkZwyTDt1v' : 'Es9vMFrzaCERmJfrF4H2FYD4KCoNkY11McCe8BenwNYB';
-      const tokenBal = await getTokenUiBalance(checkConnection, userPublicKey, inputMintToCheck);
+      const tokenBal = await withRpcFallback(c => getTokenUiBalance(c, userPublicKey, inputMintToCheck));
       if (amount > tokenBal) {
         return res.status(400).json({ error: `Balance insuficiente de ${inputSymbol}. Tienes ${tokenBal.toFixed(2)} ${inputSymbol}.` });
       }
@@ -5809,25 +5808,11 @@ app.post('/api/swap-sol-usdc', adminAuth, async (req, res) => {
 
         const tx = VersionedTransaction.deserialize(Buffer.from(swapData.swapTransaction, 'base64'));
         
-        const rpcs = getRpcEndpoints();
-        let connection = null;
-        for (const rpc of rpcs) {
-          try {
-            connection = new Connection(rpc, { commitment: 'confirmed', disableRetryOnRateLimit: true });
-            await connection.getSlot(); // Test connection
-            break;
-          } catch (e) {
-            connection = null;
-          }
-        }
-        if (!connection) {
-          console.error("All RPCs failed for solanaUsdcBalance SIM branch.");
-          return;
-        }
-
+        console.log(`[Swap ${inputSymbol}-${outputSymbol}] Deserialized transaction, checking fee & sending...`);
+        
         if (!force && attempts === 1) {
           try {
-            const feeInfo = await connection.getFeeForMessage(tx.message, 'confirmed');
+            const feeInfo = await withRpcFallback(c => c.getFeeForMessage(tx.message, 'confirmed'));
             if (feeInfo && feeInfo.value !== null) {
               const feeSol = feeInfo.value / 1e9;
               const feeLimit = appConfig.solanaFeeLimit || 0.05;
@@ -5837,12 +5822,12 @@ app.post('/api/swap-sol-usdc', adminAuth, async (req, res) => {
               }
             }
           } catch (e) {
-            console.warn('⚠️ No se pudo estimar el fee del swap, omitiendo chequeo.', e);
+            console.warn('⚠️ No se pudo estimar el fee del swap, omitiendo chequeo:', e.message || e);
           }
         }
 
         tx.sign([keypair]);
-        txid = await connection.sendRawTransaction(tx.serialize());
+        txid = await withRpcFallback(c => c.sendRawTransaction(tx.serialize(), { skipPreflight: false, maxRetries: 3 }));
         console.log(`[Swap ${inputSymbol}-${outputSymbol}] Transacción enviada con éxito: ${txid}`);
         break; // Éxito, salir de la estructura de repetición
       } catch (err) {
@@ -5919,7 +5904,7 @@ app.post('/api/transfer-funds', adminAuth, async (req, res) => {
     const USDT_MINT = 'Es9vMFrzaCERmJfrF4H2FYD4KCoNkY11McCe8BenwNYB';
     const RESERVA_GAS_SOL = 0.001;
 
-    const solBal = await getTokenUiBalance(connection, userPublicKey.toBase58(), SOL_MINT);
+    const solBal = await withRpcFallback(c => getTokenUiBalance(c, userPublicKey.toBase58(), SOL_MINT));
 
     let txid = null;
 
@@ -5944,7 +5929,7 @@ app.post('/api/transfer-funds', adminAuth, async (req, res) => {
       txid = await sendAndConfirmTransaction(connection, tx, [keypair], { commitment: 'confirmed' });
     } else if (asset === 'USDC' || asset === 'USDT') {
       const targetMintStr = asset === 'USDC' ? USDC_MINT : USDT_MINT;
-      const tokenBal = await getTokenUiBalance(connection, userPublicKey.toBase58(), targetMintStr);
+      const tokenBal = await withRpcFallback(c => getTokenUiBalance(c, userPublicKey.toBase58(), targetMintStr));
       if (amount > tokenBal) {
         return res.status(400).json({ error: `Balance insuficiente de ${asset}. Tienes ${tokenBal.toFixed(2)} ${asset}, intentaste enviar ${amount.toFixed(2)} ${asset}.` });
       }
