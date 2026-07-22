@@ -2470,7 +2470,9 @@ async function checkTokenSafety(tokenMint) {
                   body: JSON.stringify({
                       quoteResponse,
                       userPublicKey: owner.toString(),
-                      wrapAndUnwrapSol: true
+                      wrapAndUnwrapSol: true,
+                      asLegacyTransaction: true,
+                      skipUserAccountsCheck: true
                   })
               }, 2, 1000);
               if (sr && sr.ok) {
@@ -3026,7 +3028,9 @@ async function executeSolanaTradeInternal(w, side, amountUSDT, price, pk, feePay
           userPublicKey,
           wrapAndUnwrapSol: true,
           dynamicComputeUnitLimit: true,
-          prioritizationFeeLamports: 'auto'
+          prioritizationFeeLamports: 'auto',
+          asLegacyTransaction: true,
+          skipUserAccountsCheck: true
         };
         if (adminKeypair) bodyPayload.feePayer = adminKeypair.publicKey.toString();
 
@@ -6001,7 +6005,9 @@ app.post('/api/swap-sol-usdc', adminAuth, async (req, res) => {
             userPublicKey,
             wrapAndUnwrapSol: true,
             dynamicComputeUnitLimit: true,
-            prioritizationFeeLamports: 'auto'
+            prioritizationFeeLamports: 'auto',
+            asLegacyTransaction: true,
+            skipUserAccountsCheck: true
           })
         });
         const swapData = await swapRes.json();
@@ -6030,7 +6036,7 @@ app.post('/api/swap-sol-usdc', adminAuth, async (req, res) => {
         }
 
         tx.sign([keypair]);
-        txid = await withRpcFallback(c => c.sendRawTransaction(tx.serialize(), { skipPreflight: false, maxRetries: 3 }));
+        txid = await withRpcFallback(c => c.sendRawTransaction(tx.serialize(), { skipPreflight: true, maxRetries: 3 }));
         console.log(`[Swap ${inputSymbol}-${outputSymbol}] Transacción enviada con éxito: ${txid}`);
         break; // Éxito, salir de la estructura de repetición
       } catch (err) {
