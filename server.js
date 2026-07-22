@@ -1382,7 +1382,8 @@ async function getTokenUiBalance(connection, ownerPubKey, tokenMintStr, retries 
       }
     } catch(e) {
        const msg = (e && e.message) ? e.message.toLowerCase() : '';
-       if (msg.includes('429') || msg.includes('rate limit') || msg.includes('fetch') || msg.includes('403') || msg.includes('503') || msg.includes('timeout')) {
+       const isAccountMissing = msg.includes('could not find account') || msg.includes('account not found') || msg.includes('invalid account owner') || msg.includes('does not exist');
+       if (!isAccountMissing) {
          throw e;
        }
        // if ata doesn't exist, try getting parsed accounts just in case
@@ -1404,7 +1405,8 @@ async function getTokenUiBalance(connection, ownerPubKey, tokenMintStr, retries 
          }
        } catch (err) {
          const err2Msg = (err && err.message) ? err.message.toLowerCase() : '';
-         if (err2Msg.includes('429') || err2Msg.includes('rate limit') || err2Msg.includes('fetch') || err2Msg.includes('403') || err2Msg.includes('503') || err2Msg.includes('timeout')) {
+         const isAccountMissing2 = err2Msg.includes('could not find account') || err2Msg.includes('account not found');
+         if (!isAccountMissing2) {
            throw err;
          }
        }
@@ -1441,7 +1443,8 @@ async function getTokenBalance(connection, ownerPubKey, tokenMintStr, retries = 
       return Number(balInfo.value.amount) || 0;
     } catch(e) {
        const msg = (e && e.message) ? e.message.toLowerCase() : '';
-       if (msg.includes('429') || msg.includes('rate limit') || msg.includes('fetch') || msg.includes('403') || msg.includes('503') || msg.includes('timeout')) {
+       const isAccountMissing = msg.includes('could not find account') || msg.includes('account not found') || msg.includes('invalid account owner') || msg.includes('does not exist');
+       if (!isAccountMissing) {
          throw e;
        }
        // fallback
@@ -1456,7 +1459,8 @@ async function getTokenBalance(connection, ownerPubKey, tokenMintStr, retries = 
          }
        } catch(err) {
          const err2Msg = (err && err.message) ? err.message.toLowerCase() : '';
-         if (err2Msg.includes('429') || err2Msg.includes('rate limit') || err2Msg.includes('fetch') || err2Msg.includes('403') || err2Msg.includes('503') || err2Msg.includes('timeout')) {
+         const isAccountMissing2 = err2Msg.includes('could not find account') || err2Msg.includes('account not found');
+         if (!isAccountMissing2) {
            throw err;
          }
        }
@@ -1634,15 +1638,18 @@ async function updateSolanaWalletInfo() {
     }
     
     const solLamports = await withRpcFallback(c => c.getBalance(keypair.publicKey));
-    solanaSolBalance = solLamports / 1e9;
+    const newSolBal = solLamports / 1e9;
     
     const usdcMint = 'EPjFWdd5AufqSSqeM2qN1xzybapC8G4wEGGkZwyTDt1v';
-    const usdcBalRaw = await withRpcFallback(c => getTokenBalance(c, solanaWalletAddress, usdcMint));
-    solanaUsdcBalance = usdcBalRaw / 1e6;
+    const newUsdcBal = await withRpcFallback(c => getTokenUiBalance(c, solanaWalletAddress, usdcMint));
 
     const usdtMint = 'Es9vMFrzaCERmJfrF4H2FYD4KCoNkY11McCe8BenwNYB';
-    const usdtBalRaw = await withRpcFallback(c => getTokenBalance(c, solanaWalletAddress, usdtMint));
-    solanaUsdtBalance = usdtBalRaw / 1e6;
+    const newUsdtBal = await withRpcFallback(c => getTokenUiBalance(c, solanaWalletAddress, usdtMint));
+    
+    // Atomic update: only update global balances when all RPC queries succeed
+    solanaSolBalance = newSolBal;
+    solanaUsdcBalance = newUsdcBal;
+    solanaUsdtBalance = newUsdtBal;
     
     lastSolanaBalanceUpdate = now;
   } catch (err) {
