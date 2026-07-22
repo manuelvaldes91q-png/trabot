@@ -1,46 +1,30 @@
 const fs = require('fs');
-let content = fs.readFileSync('index.html_fixed', 'utf8');
+let html = fs.readFileSync('index.html', 'utf8');
 
-const targetStr = `<!-- ORDEN ENTRADA -->`;
-const endStr = `</select>
-      </div>
-    </div>`;
+// I know that the duplication starts around "function updateDash(){"
+// Let's find "function updateDash(){"
+const idx = html.indexOf("function updateDash(){");
+const prefix = html.substring(0, idx);
 
-const startIndex = content.indexOf(targetStr);
-const endIndex = content.indexOf(endStr, startIndex) + endStr.length;
+// Now we want the rest of the file without the duplicated junk.
+// Let's search for "function updateDash(){" from the end of the file backwards, because the suffix might have been inserted.
+// Actually, the suffix starts with "\n  const pnl=SIM.pnl"
+// The last occurrence of "const pnl=SIM.pnl" in the file should be the REAL one (or the first one?).
+// Since the suffix was inserted IN PLACE of the string, the end of the file is the end of the FIRST inserted suffix... wait.
+// If the replacement was:
+// dBal.textContent = '$' + bal.toFixed(2);
+// It inserted the suffix after the match.
 
-if (startIndex !== -1 && endIndex !== -1) {
-    const replacement = `<!-- ORDEN ENTRADA -->
-    <div style="font-size:7px;font-weight:700;color:var(--g);font-family:var(--mono);margin-bottom:3px">🎯 Entrada #1</div>
-    <div style="display:grid;grid-template-columns:1fr 1fr 1fr;gap:3px;margin-bottom:3px">
-      <div><div class="lbl">Precio $</div><input type="number" id="af_price" class="inp" value="\${bestDip?bestDip.price:cp}" step="any" onkeyup="updateAfDist()" onchange="updateAfDist()"></div>
-      <div><div class="lbl">Monto $</div><input type="number" id="af_amount" class="inp" value="40" min="1"></div>
-      <div><div class="lbl">Expira(h)</div><input type="number" id="af_expire" class="inp" placeholder="24" value="24" min="0"></div>
-    </div>
-    <div style="display:grid;grid-template-columns:1fr 1fr;gap:3px;margin-bottom:3px">
-      <div><div class="lbl">Stop Loss %</div><input type="number" id="af_sl" class="inp" value="10" min="1"></div>
-      <div><div class="lbl">Take Profit %</div><input type="number" id="af_tp1" class="inp" value="15" min="0.5"></div>
-      <input type="hidden" id="af_tp2" value="0">
-      <input type="hidden" id="af_note" value="\${bestDip?'pared $'+fpZ(bestDip.price,cp):''}">
-    </div>
-    <div id="af_dist" style="font-size:7px;font-family:var(--mono);color:var(--t2);margin-bottom:5px"></div>
+// Let's just split by "const pnl=SIM.pnl"
+const parts = html.split("  const pnl=SIM.pnl");
+console.log('Found "  const pnl=SIM.pnl" times:', parts.length - 1);
 
-    <!-- DCA -->
-    <div style="display:flex;align-items:center;justify-content:space-between;margin-bottom:3px">
-      <div style="font-size:7px;font-weight:700;color:var(--pu);font-family:var(--mono)">🔄 DCA (opcional)</div>
-      <div style="display:flex;gap:3px">
-        <button class="btn btn-pu btn-xs" onclick="addAfDCA()">+ Nivel</button>
-        <select id="af_preset" class="inp" style="font-size:7px;padding:1px 4px;width:auto" onchange="applyAfPreset()">
-          <option value="">Preset DCA...</option>
-          <option value="a">−3% / −6% / −9%</option>
-          <option value="b">−5% / −10% / −15%</option>
-          <option value="c">−5% doble monto</option>
-          <option value="d">Martingale ×1.5</option>
-        </select>
-      </div>
-    </div>`;
-    
-    const newContent = content.substring(0, startIndex) + replacement + content.substring(endIndex);
-    fs.writeFileSync('index.html', newContent);
-    console.log("Fixed successfully!");
-}
+// We know the correct suffix starts with "  const pnl=SIM.pnl" and goes to the end of the file.
+// If the file ends with </body></html>, we can just take the LAST "  const pnl=SIM.pnl" part.
+const lastPart = parts[parts.length - 1];
+
+// Let's construct the original file:
+const originalHTML = prefix + "function updateDash(){\n  const dBal = document.getElementById('dBal');\n  if (dBal) dBal.textContent = '$' + SIM.balance.toFixed(2);\n  const pnl=SIM.pnl" + lastPart;
+
+fs.writeFileSync('index.html.restored2', originalHTML);
+console.log('Saved index.html.restored2. Line count:', originalHTML.split('\n').length);

@@ -1607,7 +1607,9 @@ async function testTelegramConnection(btn) {
   }
 }
 
+let lastVpsSolWallet = null;
 function updateSolanaVpsWalletUI(vpsSolWallet) {
+  lastVpsSolWallet = vpsSolWallet;
   const el = document.getElementById('solanaVpsWallet');
   if (!el) return;
   
@@ -1660,7 +1662,16 @@ function updateSolanaVpsWalletUI(vpsSolWallet) {
 
 function updateDash(){
   const dBal = document.getElementById('dBal');
-  if (dBal) dBal.textContent = '$' + SIM.balance.toFixed(2);
+  if (dBal) {
+    const solModeEl = document.getElementById('solModeSel');
+    const solMode = solModeEl ? solModeEl.value : 'simulated';
+    if ((solMode === 'wallet' || solMode === 'pool') && lastVpsSolWallet) {
+      const bal = (lastVpsSolWallet.usdc || 0) + (lastVpsSolWallet.usdt || 0);
+      dBal.textContent = '$' + bal.toFixed(2);
+    } else {
+      dBal.textContent = '$' + (SIM.balance || 0).toFixed(2);
+    }
+  }
   const pnl=SIM.pnl,pct=SIM.initBal>0?pnl/SIM.initBal*100:0;
   const dPnL = document.getElementById('dPnL');
   if (dPnL) {
@@ -2979,7 +2990,7 @@ window.submitAddOrder = function(wi) {
       method: 'POST',
       headers: {'Content-Type': 'application/json'},
       body: JSON.stringify({
-        action: 'quickMarketBuy',
+        action: 'dcaMarketBuy',
         payload: {
           symbol: w.symbol,
           network: w.network,

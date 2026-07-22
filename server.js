@@ -2524,8 +2524,10 @@ async function sendViaJitoBundle(connection, signedTransaction, keypair) {
 }
 
 const RPC_ENDPOINTS_BASE = [
-  'https://solana-rpc.publicnode.com',
-  'https://api.mainnet-beta.solana.com'
+  "https://solana-rpc.publicnode.com",
+  "https://api.mainnet-beta.solana.com",
+  "https://solana.drpc.org",
+  "https://rpc.ankr.com/solana"
 ];
 function getRpcEndpoints() {
   const configured = appConfig.solanaRpcUrl || process.env.SOLANA_RPC_URL || 'https://solana-rpc.publicnode.com';
@@ -4946,7 +4948,54 @@ app.post('/api/action', adminAuth, async (req, res) => {
       SIM.losses = 0;
       SIM.totalExec = 0;
       if (payload.clearLogs) logs.length = 0;
-    } else if (action === 'quickMarketBuy') {
+    
+    } else if (action === 'dcaMarketBuy') {
+      const { wi, amount, note } = payload;
+      let w = watchItems[wi];
+      if (w) {
+        let cp = 0;
+        if (w.network === 'solana') {
+          cp = await getSolanaPrice(w.address);
+        } else {
+          cp = await mxPrice(w.symbol);
+        }
+        if (!cp || cp <= 0) cp = w.currentPrice || 1;
+
+        addLog(`⚡ [DCA Mercado] Comprando ${w.symbol} de ${amount}...`, 'info');
+        const realRes = await executeOrder(w, 'BUY', amount, cp);
+        if (realRes && realRes.ok) {
+          const finalPrice = realRes.exactPrice || cp;
+          w.currentPrice = finalPrice;
+          
+          const order = {
+            level: w.orders.length + 1,
+            price: finalPrice,
+            amount: realRes.exactAmountUSDT || amount,
+            note: note || 'DCA a Mercado',
+            status: 'filled',
+            type: 'dca',
+            filledAt: Date.now(),
+            filledPrice: finalPrice
+          };
+          w.orders.push(order);
+          
+          if (!w.filledBuys) w.filledBuys = [];
+          w.filledBuys.push({ price: finalPrice, amount: realRes.exactAmountUSDT || amount, tokens: realRes.exactTokens, level: order.level });
+          
+          recalculateTargets(w);
+          
+          if (w.network === 'solana') {
+             const rpcUrl = appConfig.solanaRpcUrl || process.env.SOLANA_RPC_URL || 'https://solana-rpc.publicnode.com';
+             const conn = new require('@solana/web3.js').Connection(rpcUrl, 'confirmed');
+             const bal = await getTokenUiBalance(conn, solanaWalletAddress, w.address);
+             w.onChainBalance = bal;
+          }
+          addLog(`✅ [DCA Mercado] Completado ${w.symbol} a ${fpZ(finalPrice, finalPrice)}`, 'info');
+        } else {
+          addLog(`❌ [DCA Mercado] Falló compra en ${w.symbol}`, 'error');
+        }
+      }
+} else if (action === 'quickMarketBuy') {
       const { symbol, network, address, pair, amount, sl = 10, tp1 = 8, tp2 = 15 } = payload;
       let w = watchItems.find(item => (address && item.address === address) || item.symbol === symbol);
       if (!w) {
