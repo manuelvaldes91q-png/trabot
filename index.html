@@ -1563,17 +1563,20 @@ async function loadRpcStatus() {
           const isBad = ep.blacklisted;
           const statusColor = isBad ? 'var(--r)' : (ep.status === 'healthy' ? 'var(--g)' : 'var(--y)');
           const statusText = isBad ? `Excluido (${Math.ceil(ep.blacklistRemainingMs / 1000)}s)` : 'Saludable';
+          const isCustom = ep.isCustom;
           html += `
             <div style="display:flex; align-items:center; justify-content:space-between; background:var(--bg3); padding:8px 12px; border-radius:6px; border:1px solid var(--bdr); font-family:var(--mono); font-size:11px;">
-              <div style="display:flex; align-items:center; gap:8px; overflow:hidden;">
-                <div style="width:8px; height:8px; border-radius:50%; background:${statusColor}; flex-shrink:0;"></div>
-                <span style="color:var(--t); white-space:nowrap; overflow:hidden; text-overflow:ellipsis; max-width:300px;" title="${ep.url}">${ep.url}</span>
+              <div style="display:flex; align-items:center; gap:8px; overflow:hidden; flex:1;">
+                <div style="width:8px; height:8px; border-radius:50%; background:${statusColor}; flex-shrink:0;" title="${statusText}"></div>
+                <span style="color:var(--t); white-space:nowrap; overflow:hidden; text-overflow:ellipsis;" title="${ep.url}">${ep.url} ${isCustom ? '<span style="color:var(--b); font-size:9px; background:rgba(0,180,216,0.1); padding:1px 4px; border-radius:3px; margin-left:4px;">Personalizado</span>' : ''}</span>
               </div>
-              <div style="display:flex; align-items:center; gap:12px; font-size:10px; color:var(--t2); flex-shrink:0;">
-                <span>Éxitos: <strong style="color:var(--g)">${ep.successes}</strong></span>
-                <span>Errores: <strong style="color:var(--r)">${ep.errors}</strong></span>
-                <span>Latencia: <strong>${ep.lastLatency}ms</strong></span>
+              <div style="display:flex; align-items:center; gap:10px; font-size:10px; color:var(--t2); flex-shrink:0; margin-left:8px;">
+                <span>Éx: <strong style="color:var(--g)">${ep.successes}</strong></span>
+                <span>Err: <strong style="color:var(--r)">${ep.errors}</strong></span>
+                <span>Lat: <strong>${ep.lastLatency}ms</strong></span>
                 <span style="padding:2px 6px; border-radius:4px; background:${isBad ? 'rgba(239,68,68,0.1)' : 'rgba(0,229,160,0.1)'}; color:${statusColor}; font-weight:600;">${statusText}</span>
+                <button class="btn btn-sm" style="padding:2px 6px; font-size:9px; background:rgba(255,255,255,0.05); color:var(--t);" onclick="testSingleRpc('${ep.url}')" title="Probar conexión">⚡ Probar</button>
+                ${isCustom ? `<button class="btn btn-sm" style="padding:2px 6px; font-size:9px; background:rgba(239,68,68,0.1); color:var(--r);" onclick="removeCustomRpc('${ep.url}')" title="Eliminar RPC">🗑️</button>` : ''}
               </div>
             </div>
           `;
@@ -1587,6 +1590,75 @@ async function loadRpcStatus() {
     }
   } catch (e) {
     container.innerHTML = `<div style="color:var(--r); font-size:11px; padding:10px; text-align:center;">Error de red: ${e.message}</div>`;
+  }
+}
+
+async function addNewRpc() {
+  const inp = document.getElementById('newRpcUrl');
+  if (!inp || !inp.value.trim()) return alert('Introduce una URL de RPC válida');
+  const url = inp.value.trim();
+  const btn = document.getElementById('addRpcBtn');
+  if (btn) { btn.disabled = true; btn.innerText = 'Probando y Agregando...'; }
+  try {
+    const res = await myFetch('/api/solana/add-rpc', {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({ url })
+    });
+    const data = await res.json();
+    if (data.success) {
+      inp.value = '';
+      if (data.testResult && data.testResult.success) {
+        alert(`✅ RPC agregado y probado con éxito!\nLatencia: ${data.testResult.latency}ms (Slot: ${data.testResult.slot})\nYa está activo y en rotación en el sistema.`);
+      } else {
+        alert(`⚠️ RPC agregado, pero la prueba inicial falló: ${data.testResult?.error || 'Error desconocido'}`);
+      }
+      loadRpcStatus();
+    } else {
+      alert(`Error al agregar RPC: ${data.error || 'Desconocido'}`);
+    }
+  } catch (e) {
+    alert(`Error de red: ${e.message}`);
+  } finally {
+    if (btn) { btn.disabled = false; btn.innerText = '➕ Agregar y Probar RPC'; }
+  }
+}
+
+async function removeCustomRpc(url) {
+  if (!confirm(`¿Eliminar el RPC ${url} de los personalizados?`)) return;
+  try {
+    const res = await myFetch('/api/solana/remove-rpc', {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({ url })
+    });
+    const data = await res.json();
+    if (data.success) {
+      loadRpcStatus();
+    } else {
+      alert(`Error: ${data.error}`);
+    }
+  } catch (e) {
+    alert(`Error de red: ${e.message}`);
+  }
+}
+
+async function testSingleRpc(url) {
+  try {
+    const res = await myFetch('/api/solana/test-rpc', {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({ url })
+    });
+    const data = await res.json();
+    if (data.success) {
+      alert(`🟢 RPC Activo y Saludable!\nURL: ${url}\nLatencia: ${data.latency}ms\nSlot actual: ${data.slot}`);
+    } else {
+      alert(`🔴 RPC con Errores o Inactivo:\nURL: ${url}\nError: ${data.error}`);
+    }
+    loadRpcStatus();
+  } catch (e) {
+    alert(`Error de red al probar RPC: ${e.message}`);
   }
 }
 
@@ -5167,12 +5239,18 @@ addLog('DIP HUNTER v6 listo — Escáner + Monitor 10s + Auto-Ejecución + Edito
       <!-- SECCIÓN MONITOREO RPC SOLANA -->
       <div style="background:rgba(255,255,255,0.015); border:1px solid var(--bdr); border-radius:6px; padding:15px; margin-bottom:20px;">
         <div style="display:flex; justify-content:space-between; align-items:center; margin-bottom:10px;">
-          <div style="font-weight:600;color:var(--g);font-size:12px;text-transform:uppercase;letter-spacing:0.05em">📡 Monitoreo de Estado RPCs Solana</div>
+          <div style="font-weight:600;color:var(--g);font-size:12px;text-transform:uppercase;letter-spacing:0.05em">📡 Gestión y Monitoreo de RPCs Solana</div>
           <button class="btn btn-sm btn-b" onclick="loadRpcStatus()">🔄 Actualizar Estado</button>
         </div>
         <div style="font-size:11px;color:var(--t2);margin-bottom:12px">
-          Estado en tiempo real de los nodos RPC, latencia, aciertos, errores y exclusiones automáticas por rate limit (429) o prohibido (403).
+          Agrega tus propios nodos RPC personalizados. El sistema los prueba automáticamente al agregarlos y los integra de inmediato en la rotación y failover inteligente.
         </div>
+        
+        <div style="display:flex; gap:8px; margin-bottom:12px;">
+          <input type="text" id="newRpcUrl" class="inp" placeholder="https://your-custom-solana-rpc.com" style="flex:1; font-family:var(--mono); font-size:11px;">
+          <button id="addRpcBtn" class="btn btn-g btn-sm" onclick="addNewRpc()" style="white-space:nowrap;">➕ Agregar y Probar RPC</button>
+        </div>
+
         <div id="rpcStatusList" style="display:flex; flex-direction:column; gap:8px;">
           <div style="color:var(--t2); font-size:11px; text-align:center; padding:10px;">Haz clic en "Actualizar Estado" o entra a esta pestaña para cargar los nodos.</div>
         </div>

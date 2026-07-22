@@ -100,7 +100,6 @@ function checkValidPassword(inputPwd) {
 
   if (envPwd && cleanInput === envPwd) return true;
   if (cfgPwd && cleanInput === cfgPwd) return true;
-  if (cleanInput === 'admin123') return true;
   return false;
 }
 
@@ -244,6 +243,7 @@ let appConfig = {
   tgChatId: process.env.TELEGRAM_CHAT_ID || '',
   solanaPrivateKey: process.env.SOLANA_PRIVATE_KEY || '',
   solanaRpcUrl: process.env.SOLANA_RPC_URL || 'https://api.mainnet-beta.solana.com',
+  additionalRpcUrls: [],
   solanaBaseToken: process.env.SOLANA_BASE_TOKEN || 'SOL',
   solanaSlippage: process.env.SOLANA_SLIPPAGE ? parseFloat(process.env.SOLANA_SLIPPAGE) : 2.5,
   solanaPriorityFee: process.env.SOLANA_PRIORITY_FEE || 'auto',
@@ -1412,6 +1412,9 @@ async function withRpcFallback(actionFn) {
       const errMsg = e ? (e.message || String(e)) : '';
       if (
         errMsg.includes('429') || 
+        errMsg.includes('400') || 
+        errMsg.includes('Bad Request') || 
+        errMsg.includes('unknown network') || 
         errMsg.includes('405') || 
         errMsg.includes('500') || 
         errMsg.includes('502') || 
@@ -2742,8 +2745,9 @@ function getRpcEndpoints() {
   }
 
   let configured = appConfig.solanaRpcUrl || process.env.SOLANA_RPC_URL;
-  let rpcs = configured ? [configured, ...RPC_ENDPOINTS_BASE] : [...RPC_ENDPOINTS_BASE];
-  rpcs = [...new Set(rpcs)].filter(u => u);
+  let addrs = appConfig.additionalRpcUrls || [];
+  let rpcs = [configured, ...addrs, ...RPC_ENDPOINTS_BASE].filter(Boolean);
+  rpcs = [...new Set(rpcs)];
 
   let valid = rpcs.filter(u => !badRpcBlacklist.has(u));
 
@@ -3163,7 +3167,9 @@ async function executeSolanaTradeInternal(w, side, amountUSDT, price, pk, feePay
 
       try {
         const feeLimitSOL = appConfig.solanaFeeLimit || 0.05;
-        const feeInfo = await connection.getFeeForMessage(transaction.message, 'confirmed').catch(() => null);
+        const feeInfo = await withRpcFallback(async (conn) => {
+          return await conn.getFeeForMessage(transaction.message, 'confirmed');
+        }).catch(() => null);
         if (feeInfo && feeInfo.value !== null) {
            const feeSOL = feeInfo.value / 1e9;
            if (feeSOL > feeLimitSOL) {
@@ -3194,15 +3200,21 @@ async function executeSolanaTradeInternal(w, side, amountUSDT, price, pk, feePay
       let bundleUuid = null;
       if (appConfig.useJitoBundle) {
         try {
-          bundleUuid = await sendViaJitoBundle(connection, transaction, keypair);
+          bundleUuid = await withRpcFallback(async (conn) => {
+            return await sendViaJitoBundle(conn, transaction, keypair);
+          });
           addLog(`🚀 Transacción enviada vía Jito Bundle para ${w.symbol}... (${txid.slice(0,8)})`, 'info');
         } catch (jitoErr) {
-          addLog(`⚠️ Jito bundle falló (${jitoErr.message}). Enviando por RPC directo...`, 'warn');
-          await connection.sendRawTransaction(transaction.serialize(), { skipPreflight: true, maxRetries: 3 });
+          addLog(`⚠️ Jito bundle falló (${jitoErr.message}). Enviando por RPC directo con rotación y fallback...`, 'warn');
+          await withRpcFallback(async (conn) => {
+            return await conn.sendRawTransaction(transaction.serialize(), { skipPreflight: true, maxRetries: 3 });
+          });
         }
       } else {
-        addLog(`🚀 Enviando transacción real de Solana para ${w.symbol}... (${txid.slice(0,8)})`, 'info');
-        await connection.sendRawTransaction(transaction.serialize(), { skipPreflight: true, maxRetries: 3 });
+        addLog(`🚀 Enviando transacción real de Solana para ${w.symbol}... (${txid.slice(0,8)}) con rotación RPC...`, 'info');
+        await withRpcFallback(async (conn) => {
+          return await conn.sendRawTransaction(transaction.serialize(), { skipPreflight: true, maxRetries: 3 });
+        });
       }
 
       addLog(`✅ Transacción enviada: ${txid.slice(0, 8)}... Esperando confirmación...`, 'info');
@@ -5873,7 +5885,8 @@ app.get('/api/pool/backup', adminAuth, (req, res) => {
 
 app.get('/api/solana/rpc-status', adminAuth, (req, res) => {
   const rpcs = getRpcEndpoints();
-  const allBase = [...new Set([appConfig.solanaRpcUrl, process.env.SOLANA_RPC_URL, ...RPC_ENDPOINTS_BASE].filter(Boolean))];
+  const addrs = appConfig.additionalRpcUrls || [];
+  const allBase = [...new Set([appConfig.solanaRpcUrl, process.env.SOLANA_RPC_URL, ...addrs, ...RPC_ENDPOINTS_BASE].filter(Boolean))];
   const statusList = allBase.map(url => {
     const isBlacklisted = badRpcBlacklist.has(url);
     const stats = rpcHealthStats.get(url) || { successes: 0, errors: 0, lastLatency: 0, status: 'unknown' };
@@ -5884,10 +5897,72 @@ app.get('/api/solana/rpc-status', adminAuth, (req, res) => {
       successes: stats.successes,
       errors: stats.errors,
       lastLatency: stats.lastLatency,
-      status: isBlacklisted ? 'blacklisted' : (stats.status || 'healthy')
+      status: isBlacklisted ? 'blacklisted' : (stats.status || 'healthy'),
+      isCustom: addrs.includes(url)
     };
   });
-  res.json({ success: true, activeEndpointsCount: rpcs.length, endpoints: statusList });
+  res.json({ success: true, activeEndpointsCount: rpcs.length, endpoints: statusList, additionalRpcUrls: addrs });
+});
+
+app.post('/api/solana/test-rpc', adminAuth, async (req, res) => {
+  const { url } = req.body;
+  if (!url || typeof url !== 'string' || !url.trim()) {
+    return res.status(400).json({ error: 'URL requerida' });
+  }
+  const cleanUrl = url.trim();
+  const start = Date.now();
+  try {
+    const connection = new Connection(cleanUrl, { commitment: 'confirmed', disableRetryOnRateLimit: true });
+    const slot = await connection.getSlot();
+    const latency = Date.now() - start;
+    markRpcSuccess(cleanUrl, latency);
+    res.json({ success: true, latency, slot, status: 'healthy' });
+  } catch (e) {
+    const errMsg = e ? (e.message || String(e)) : 'Error desconocido';
+    markRpcBad(cleanUrl, errMsg);
+    res.json({ success: false, error: errMsg, status: 'error' });
+  }
+});
+
+app.post('/api/solana/add-rpc', adminAuth, async (req, res) => {
+  const { url } = req.body;
+  if (!url || typeof url !== 'string' || !url.trim()) {
+    return res.status(400).json({ error: 'URL inválida' });
+  }
+  const cleanUrl = url.trim();
+  if (!appConfig.additionalRpcUrls) {
+    appConfig.additionalRpcUrls = [];
+  }
+  if (!appConfig.additionalRpcUrls.includes(cleanUrl)) {
+    appConfig.additionalRpcUrls.push(cleanUrl);
+    saveState();
+  }
+
+  let testResult = { success: false };
+  try {
+    const start = Date.now();
+    const connection = new Connection(cleanUrl, { commitment: 'confirmed', disableRetryOnRateLimit: true });
+    const slot = await connection.getSlot();
+    const latency = Date.now() - start;
+    markRpcSuccess(cleanUrl, latency);
+    testResult = { success: true, latency, slot };
+  } catch (e) {
+    markRpcBad(cleanUrl, e.message);
+    testResult = { success: false, error: e.message };
+  }
+
+  res.json({ success: true, additionalRpcUrls: appConfig.additionalRpcUrls, testResult });
+});
+
+app.post('/api/solana/remove-rpc', adminAuth, async (req, res) => {
+  const { url } = req.body;
+  if (!url) return res.status(400).json({ error: 'URL requerida' });
+  const cleanUrl = url.trim();
+  if (appConfig.additionalRpcUrls) {
+    appConfig.additionalRpcUrls = appConfig.additionalRpcUrls.filter(u => u !== cleanUrl);
+    saveState();
+  }
+  res.json({ success: true, additionalRpcUrls: appConfig.additionalRpcUrls || [] });
 });
 
 app.get('/api/quote-sol-usdc', adminAuth, async (req, res) => {
