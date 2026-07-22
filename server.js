@@ -1621,52 +1621,33 @@ async function updateSolanaWalletInfo() {
         return;
     }
     
-    const rpcs = getRpcEndpoints();
-    let connection = null;
-    for (const rpc of rpcs) {
-      try {
-        connection = new Connection(rpc, { commitment: 'confirmed', disableRetryOnRateLimit: true });
-        await connection.getSlot(); // Test connection
-        break;
-      } catch (e) {
-        connection = null;
-      }
-    }
-    if (!connection) {
-      console.error("All RPCs failed for updateSolanaWalletInfo.");
-      return;
-    }
-    
     for (let w of watchItems) {
       if (w.network === 'solana' && w.address) {
         try {
-          // Prevent hitting strict RPC rate limits on bulk balance checks
-          await new Promise(r => setTimeout(r, 600));
-          const bal = await getTokenUiBalance(connection, solanaWalletAddress, w.address);
+          await new Promise(r => setTimeout(r, 300));
+          const bal = await withRpcFallback(c => getTokenUiBalance(c, solanaWalletAddress, w.address));
           w.onChainBalance = bal;
         } catch (e) {
-          if (!e.message.includes('429') && !e.message.includes('rate limit')) {
-             console.error(`Error fetching balance for ${w.symbol}:`, e.message);
-          }
+          // Silent fallback for rate-limited background balance checks
         }
       }
     }
     
-    const solLamports = await connection.getBalance(keypair.publicKey);
+    const solLamports = await withRpcFallback(c => c.getBalance(keypair.publicKey));
     solanaSolBalance = solLamports / 1e9;
     
     const usdcMint = 'EPjFWdd5AufqSSqeM2qN1xzybapC8G4wEGGkZwyTDt1v';
-    const usdcBalRaw = await getTokenBalance(connection, solanaWalletAddress, usdcMint);
+    const usdcBalRaw = await withRpcFallback(c => getTokenBalance(c, solanaWalletAddress, usdcMint));
     solanaUsdcBalance = usdcBalRaw / 1e6;
 
     const usdtMint = 'Es9vMFrzaCERmJfrF4H2FYD4KCoNkY11McCe8BenwNYB';
-    const usdtBalRaw = await getTokenBalance(connection, solanaWalletAddress, usdtMint);
+    const usdtBalRaw = await withRpcFallback(c => getTokenBalance(c, solanaWalletAddress, usdtMint));
     solanaUsdtBalance = usdtBalRaw / 1e6;
     
     lastSolanaBalanceUpdate = now;
   } catch (err) {
-    if (!err.message.includes('429') && !err.message.includes('rate limit')) {
-      console.error('Error actualizando balance Solana VPS:', err.message);
+    if (!err.message || (!err.message.includes('429') && !err.message.includes('rate limit') && !err.message.includes('503') && !err.message.includes('403'))) {
+      console.warn('⚠️ [Wallet Info] No se pudo actualizar balance de fondo por saturación de RPCs (reintentando luego):', err.message);
     }
   }
 }
@@ -4694,7 +4675,7 @@ async function detectOnChainPurchasePrice(tokenMintStr) {
       }
     }
     if (!connection) {
-      console.error("All RPCs failed for updateSolanaWalletInfo.");
+      console.warn("⚠️ [TxHistory] No se pudo conectar a los RPCs de Solana.");
       return;
     }
     const userPublicKey = new PublicKey(userPublicKeyStr);
@@ -5468,8 +5449,7 @@ app.post('/api/investor/transfer_external', investorAuth, async (req, res) => {
       }
     }
     if (!connection) {
-      console.error("All RPCs failed for updateSolanaWalletInfo.");
-      return;
+      return res.json({ error: "No se pudo conectar a los RPCs de Solana para el retiro." });
     }
     
     const invKeypair = Keypair.fromSecretKey(bs58.decode(inv.depositWalletPk));
@@ -5895,8 +5875,7 @@ app.post('/api/transfer-funds', adminAuth, async (req, res) => {
       }
     }
     if (!connection) {
-      console.error("All RPCs failed for updateSolanaWalletInfo.");
-      return;
+      return res.status(503).json({ error: "No hay conexión con los nodos de Solana RPC." });
     }
 
     const SOL_MINT = 'So11111111111111111111111111111111111111112';
@@ -5995,8 +5974,7 @@ app.post('/api/pool/rotate_wallet', adminAuth, async (req, res) => {
       }
     }
     if (!connection) {
-      console.error("All RPCs failed for updateSolanaWalletInfo.");
-      return;
+      return res.status(503).json({ error: "No hay conexión con los nodos de Solana RPC para rotar la wallet." });
     }
 
     const oldPkStr = poolConfig.privateKey || process.env.POOL_PRIVATE_KEY || process.env.SOLANA_PRIVATE_KEY;
