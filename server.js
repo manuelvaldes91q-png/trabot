@@ -1536,8 +1536,21 @@ async function updateSolanaWalletInfo() {
         return;
     }
     
-    const rpcUrl = appConfig.solanaRpcUrl || process.env.SOLANA_RPC_URL || 'https://solana-rpc.publicnode.com';
-    const connection = new Connection(rpcUrl, { commitment: 'confirmed', disableRetryOnRateLimit: true });
+    const rpcs = getRpcEndpoints();
+    let connection = null;
+    for (const rpc of rpcs) {
+      try {
+        connection = new Connection(rpc, { commitment: 'confirmed', disableRetryOnRateLimit: true });
+        await connection.getSlot(); // Test connection
+        break;
+      } catch (e) {
+        connection = null;
+      }
+    }
+    if (!connection) {
+      console.error("All RPCs failed for updateSolanaWalletInfo.");
+      return;
+    }
     
     for (let w of watchItems) {
       if (w.network === 'solana' && w.address) {
@@ -1561,7 +1574,7 @@ async function updateSolanaWalletInfo() {
     const usdcBalRaw = await getTokenBalance(connection, solanaWalletAddress, usdcMint);
     solanaUsdcBalance = usdcBalRaw / 1e6;
 
-    const usdtMint = 'Es9vMFrzaCERmJfrF4H2FYD4CoNkY11McCe8BenwNYB';
+    const usdtMint = 'Es9vMFrzaCERmJfrF4H2FYD4KCoNkY11McCe8BenwNYB';
     const usdtBalRaw = await getTokenBalance(connection, solanaWalletAddress, usdtMint);
     solanaUsdtBalance = usdtBalRaw / 1e6;
     
@@ -4569,8 +4582,21 @@ async function detectOnChainPurchasePrice(tokenMintStr) {
   
   const foundSwaps = [];
   try {
-    const rpcUrl = appConfig.solanaRpcUrl || process.env.SOLANA_RPC_URL || 'https://solana-rpc.publicnode.com';
-    const connection = new Connection(rpcUrl, { commitment: 'confirmed', disableRetryOnRateLimit: true });
+    const rpcs = getRpcEndpoints();
+    let connection = null;
+    for (const rpc of rpcs) {
+      try {
+        connection = new Connection(rpc, { commitment: 'confirmed', disableRetryOnRateLimit: true });
+        await connection.getSlot(); // Test connection
+        break;
+      } catch (e) {
+        connection = null;
+      }
+    }
+    if (!connection) {
+      console.error("All RPCs failed for updateSolanaWalletInfo.");
+      return;
+    }
     const userPublicKey = new PublicKey(userPublicKeyStr);
     
     // Find Associated Token Accounts (ATA) to look for exact token signatures
@@ -4652,7 +4678,7 @@ async function detectOnChainPurchasePrice(tokenMintStr) {
           let amountUSDT = 0;
           
           const usdcMint = 'EPjFWdd5AufqSSqeM2qN1xzybapC8G4wEGGkZwyTDt1v';
-          const usdtMint = 'Es9vMFrzaCERmJfrF4H2FYD4CoNkY11McCe8BenwNYB';
+          const usdtMint = 'Es9vMFrzaCERmJfrF4H2FYD4KCoNkY11McCe8BenwNYB';
           const wsolMint = 'So11111111111111111111111111111111111111112';
           
           const usdcDiff = -getMintDiff(tx, usdcMint);
@@ -5330,8 +5356,21 @@ app.post('/api/investor/transfer_external', investorAuth, async (req, res) => {
   if (!poolConfig.privateKey) return res.json({ error: 'El Pool no tiene llaves para pagar comisiones' });
 
   try {
-    const rpcUrl = appConfig.solanaRpcUrl || process.env.SOLANA_RPC_URL || 'https://solana-rpc.publicnode.com';
-    const connection = new Connection(rpcUrl, { commitment: 'confirmed', disableRetryOnRateLimit: true });
+    const rpcs = getRpcEndpoints();
+    let connection = null;
+    for (const rpc of rpcs) {
+      try {
+        connection = new Connection(rpc, { commitment: 'confirmed', disableRetryOnRateLimit: true });
+        await connection.getSlot(); // Test connection
+        break;
+      } catch (e) {
+        connection = null;
+      }
+    }
+    if (!connection) {
+      console.error("All RPCs failed for updateSolanaWalletInfo.");
+      return;
+    }
     
     const invKeypair = Keypair.fromSecretKey(bs58.decode(inv.depositWalletPk));
     const poolKeypair = Keypair.fromSecretKey(bs58.decode(poolConfig.privateKey));
@@ -5425,8 +5464,21 @@ app.post('/api/investor/recover_rent', investorAuth, async (req, res) => {
   }
 
   try {
-    const rpcUrl = appConfig.solanaRpcUrl || process.env.SOLANA_RPC_URL || 'https://solana-rpc.publicnode.com';
-    const connection = new Connection(rpcUrl, { commitment: 'confirmed', disableRetryOnRateLimit: true });
+    const rpcs = getRpcEndpoints();
+    let connection = null;
+    for (const rpc of rpcs) {
+      try {
+        connection = new Connection(rpc, { commitment: 'confirmed', disableRetryOnRateLimit: true });
+        await connection.getSlot(); // Test connection
+        break;
+      } catch (e) {
+        connection = null;
+      }
+    }
+    if (!connection) {
+      console.error("All RPCs failed for updateSolanaWalletInfo.");
+      return;
+    }
 
     const result = await closeEmptyTokenAccounts(connection, inv.depositWalletPk, poolConfig.privateKey);
 
@@ -5480,8 +5532,21 @@ app.use('/api', (req, res, next) => {
 app.get('/api/pool/rent_preview', adminAuth, async (req, res) => {
   if (!poolConfig.privateKey) return res.json({ error: 'La wallet del Pool no tiene llaves configuradas' });
   try {
-    const rpcUrl = appConfig.solanaRpcUrl || process.env.SOLANA_RPC_URL || 'https://solana-rpc.publicnode.com';
-    const connection = new Connection(rpcUrl, { commitment: 'confirmed', disableRetryOnRateLimit: true });
+    const rpcs = getRpcEndpoints();
+    let connection = null;
+    for (const rpc of rpcs) {
+      try {
+        connection = new Connection(rpc, { commitment: 'confirmed', disableRetryOnRateLimit: true });
+        await connection.getSlot(); // Test connection
+        break;
+      } catch (e) {
+        connection = null;
+      }
+    }
+    if (!connection) {
+      console.error("All RPCs failed for updateSolanaWalletInfo.");
+      return;
+    }
     const ownerKeypair = Keypair.fromSecretKey(bs58.decode(poolConfig.privateKey));
     const emptyAccounts = await getEmptyTokenAccounts(connection, ownerKeypair.publicKey);
     res.json({
@@ -5501,8 +5566,21 @@ app.post('/api/pool/recover_rent', adminAuth, async (req, res) => {
   }
 
   try {
-    const rpcUrl = appConfig.solanaRpcUrl || process.env.SOLANA_RPC_URL || 'https://solana-rpc.publicnode.com';
-    const connection = new Connection(rpcUrl, { commitment: 'confirmed', disableRetryOnRateLimit: true });
+    const rpcs = getRpcEndpoints();
+    let connection = null;
+    for (const rpc of rpcs) {
+      try {
+        connection = new Connection(rpc, { commitment: 'confirmed', disableRetryOnRateLimit: true });
+        await connection.getSlot(); // Test connection
+        break;
+      } catch (e) {
+        connection = null;
+      }
+    }
+    if (!connection) {
+      console.error("All RPCs failed for updateSolanaWalletInfo.");
+      return;
+    }
 
     const result = await closeEmptyTokenAccounts(connection, poolConfig.privateKey);
 
@@ -5678,8 +5756,21 @@ app.post('/api/swap-sol-usdc', adminAuth, async (req, res) => {
 
         const tx = VersionedTransaction.deserialize(Buffer.from(swapData.swapTransaction, 'base64'));
         
-        const rpcUrl = appConfig.solanaRpcUrl || process.env.SOLANA_RPC_URL || 'https://solana-rpc.publicnode.com';
-        const connection = new Connection(rpcUrl, { commitment: 'confirmed', disableRetryOnRateLimit: true });
+        const rpcs = getRpcEndpoints();
+        let connection = null;
+        for (const rpc of rpcs) {
+          try {
+            connection = new Connection(rpc, { commitment: 'confirmed', disableRetryOnRateLimit: true });
+            await connection.getSlot(); // Test connection
+            break;
+          } catch (e) {
+            connection = null;
+          }
+        }
+        if (!connection) {
+          console.error("All RPCs failed for solanaUsdcBalance SIM branch.");
+          return;
+        }
 
         if (!force && attempts === 1) {
           try {
@@ -5754,8 +5845,21 @@ app.post('/api/transfer-funds', adminAuth, async (req, res) => {
     const keypair = Keypair.fromSecretKey(bs58.decode(pk));
     const userPublicKey = keypair.publicKey;
 
-    const rpcUrl = appConfig.solanaRpcUrl || process.env.SOLANA_RPC_URL || 'https://solana-rpc.publicnode.com';
-    const connection = new Connection(rpcUrl, { commitment: 'confirmed', disableRetryOnRateLimit: true });
+    const rpcs = getRpcEndpoints();
+    let connection = null;
+    for (const rpc of rpcs) {
+      try {
+        connection = new Connection(rpc, { commitment: 'confirmed', disableRetryOnRateLimit: true });
+        await connection.getSlot(); // Test connection
+        break;
+      } catch (e) {
+        connection = null;
+      }
+    }
+    if (!connection) {
+      console.error("All RPCs failed for updateSolanaWalletInfo.");
+      return;
+    }
 
     const SOL_MINT = 'So11111111111111111111111111111111111111112';
     const USDC_MINT = 'EPjFWdd5AufqSSqeM2qN1xzybapC8G4wEGGkZwyTDt1v';
@@ -5841,8 +5945,21 @@ app.post('/api/transfer-funds', adminAuth, async (req, res) => {
 
 app.post('/api/pool/rotate_wallet', adminAuth, async (req, res) => {
   try {
-    const rpcUrl = appConfig.solanaRpcUrl || process.env.SOLANA_RPC_URL || 'https://solana-rpc.publicnode.com';
-    const connection = new Connection(rpcUrl, { commitment: 'confirmed', disableRetryOnRateLimit: true });
+    const rpcs = getRpcEndpoints();
+    let connection = null;
+    for (const rpc of rpcs) {
+      try {
+        connection = new Connection(rpc, { commitment: 'confirmed', disableRetryOnRateLimit: true });
+        await connection.getSlot(); // Test connection
+        break;
+      } catch (e) {
+        connection = null;
+      }
+    }
+    if (!connection) {
+      console.error("All RPCs failed for updateSolanaWalletInfo.");
+      return;
+    }
 
     const oldPkStr = poolConfig.privateKey || process.env.POOL_PRIVATE_KEY || process.env.SOLANA_PRIVATE_KEY;
     let oldKeypair = null;
