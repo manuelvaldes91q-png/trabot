@@ -2676,19 +2676,33 @@ async function sendViaJitoBundle(connection, signedTransaction, keypair) {
   return data.result;
 }
 
+const badRpcBlacklist = new Map();
+
+function markRpcBad(url, reason) {
+  if (!url) return;
+  console.log(`[RPC Blacklist] Excluyendo temporalmente RPC ${url} por error: ${reason}`);
+  badRpcBlacklist.set(url, Date.now());
+}
+
 const RPC_ENDPOINTS_BASE = [
   "https://api.mainnet-beta.solana.com",
-  "https://solana.drpc.org",
-  "https://rpc.ankr.com/solana",
-  "https://solana-rpc.publicnode.com",
-  "https://solana.public-rpc.com",
-  "https://api.metaplex.solana.com",
-  "https://solana-mainnet.rpc.extnode.com"
+  "https://solana-rpc.publicnode.com"
 ];
+
 function getRpcEndpoints() {
+  const now = Date.now();
+  for (const [url, ts] of badRpcBlacklist.entries()) {
+    if (now - ts > 300000) badRpcBlacklist.delete(url); // 5 min expire
+  }
+
   let configured = appConfig.solanaRpcUrl || process.env.SOLANA_RPC_URL || 'https://api.mainnet-beta.solana.com';
-  const rpcs = [configured, ...RPC_ENDPOINTS_BASE.filter(u => u !== configured)];
-  return [...new Set(rpcs)];
+  const rpcs = [configured, ...RPC_ENDPOINTS_BASE];
+  const valid = [...new Set(rpcs)].filter(u => u && !badRpcBlacklist.has(u));
+
+  if (valid.length === 0) {
+    return [configured || "https://api.mainnet-beta.solana.com"];
+  }
+  return valid;
 }
 
 const SLIPPAGE_ESCALATION_FACTORS = [1, 1.6, 2.4]; // 2.5% -> 4% -> 6% (conservador)
@@ -3248,8 +3262,16 @@ async function executeSolanaTradeInternal(w, side, amountUSDT, price, pk, feePay
       return { ok: true, txid, exactAmountUSDT, exactPrice, exactTokens: tokenDiff };
     } catch (err) {
       lastError = err;
-      addLog(`❌ Error en ejecución de Solana (intento ${attempt + 1}/${MAX_SWAP_ATTEMPTS}): ${err.message}`, 'warn');
-      if (isFatalSwapError(err.message)) {
+      const errMsg = err.message || '';
+      addLog(`❌ Error en ejecución de Solana (intento ${attempt + 1}/${MAX_SWAP_ATTEMPTS}): ${errMsg}`, 'warn');
+      
+      if (errMsg.includes('400') || errMsg.includes('403') || errMsg.includes('free plan') || errMsg.includes('API key is not allowed') || errMsg.includes('401')) {
+        markRpcBad(rpcUrl, errMsg);
+      } else if (errMsg.includes('429') || errMsg.includes('rate limit') || errMsg.includes('Too Many Requests')) {
+        await new Promise(r => setTimeout(r, 1200));
+      }
+
+      if (isFatalSwapError(errMsg)) {
         addLog(`🛑 Error no recuperable para ${w.symbol}, no tiene sentido reintentar (revisa fondos/config).`, 'warn');
         return { ok: false };
       }
