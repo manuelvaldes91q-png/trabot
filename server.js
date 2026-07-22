@@ -1625,18 +1625,6 @@ async function updateSolanaWalletInfo() {
         return;
     }
     
-    for (let w of watchItems) {
-      if (w.network === 'solana' && w.address) {
-        try {
-          await new Promise(r => setTimeout(r, 300));
-          const bal = await withRpcFallback(c => getTokenUiBalance(c, solanaWalletAddress, w.address));
-          w.onChainBalance = bal;
-        } catch (e) {
-          // Silent fallback for rate-limited background balance checks
-        }
-      }
-    }
-    
     const solLamports = await withRpcFallback(c => c.getBalance(keypair.publicKey)).catch(() => null);
     if (solLamports !== null) {
       solanaSolBalance = solLamports / 1e9;
@@ -1653,8 +1641,20 @@ async function updateSolanaWalletInfo() {
     if (newUsdtBal !== null) {
       solanaUsdtBalance = newUsdtBal;
     }
-    
+
     lastSolanaBalanceUpdate = now;
+
+    for (let w of watchItems) {
+      if (w.network === 'solana' && w.address) {
+        try {
+          await new Promise(r => setTimeout(r, 200));
+          const bal = await withRpcFallback(c => getTokenUiBalance(c, solanaWalletAddress, w.address));
+          w.onChainBalance = bal;
+        } catch (e) {
+          // Silent fallback for rate-limited background balance checks
+        }
+      }
+    }
   } catch (err) {
     if (!err.message || (!err.message.includes('429') && !err.message.includes('rate limit') && !err.message.includes('503') && !err.message.includes('403'))) {
       console.warn('⚠️ [Wallet Info] No se pudo actualizar balance de fondo por saturación de RPCs (reintentando luego):', err.message);
@@ -3468,8 +3468,18 @@ function triggerSolanaCycleFast() {
   });
 }
 
+let wssFallbackIndex = 0;
+let wsReconnectDelay = 5000;
+const FALLBACK_WSS_ENDPOINTS = [
+  'wss://solana.drpc.org',
+  'wss://rpc.ankr.com/solana',
+  'wss://solana-rpc.publicnode.com'
+];
+
 function getSolanaWssUrl(rpcUrl) {
-  if (!rpcUrl) return 'wss://api.mainnet-beta.solana.com';
+  if (!rpcUrl || rpcUrl.includes('api.mainnet-beta.solana.com')) {
+    return FALLBACK_WSS_ENDPOINTS[wssFallbackIndex % FALLBACK_WSS_ENDPOINTS.length];
+  }
   let wssUrl = rpcUrl;
   if (wssUrl.startsWith('https://')) {
     wssUrl = 'wss://' + wssUrl.substring(8);
@@ -3482,12 +3492,10 @@ function getSolanaWssUrl(rpcUrl) {
   try {
     const parsed = new URL(wssUrl);
     if (!parsed.hostname || !parsed.hostname.includes('.')) {
-      console.warn(`⚠️ SOLANA_RPC_URL parece inválida ("${rpcUrl}") — usando el RPC público como respaldo. Revisa tu .env, probablemente falta "https://host/?api-key=" antes de la key.`);
-      return 'wss://api.mainnet-beta.solana.com';
+      return FALLBACK_WSS_ENDPOINTS[wssFallbackIndex % FALLBACK_WSS_ENDPOINTS.length];
     }
   } catch (e) {
-    console.warn(`⚠️ SOLANA_RPC_URL no es una URL válida ("${rpcUrl}") — usando el RPC público como respaldo.`);
-    return 'wss://api.mainnet-beta.solana.com';
+    return FALLBACK_WSS_ENDPOINTS[wssFallbackIndex % FALLBACK_WSS_ENDPOINTS.length];
   }
 
   return wssUrl;
@@ -3505,18 +3513,18 @@ function connectSolanaWs() {
     reconnectTimeout = null;
   }
   
-  const rpcUrl = appConfig.solanaRpcUrl || process.env.SOLANA_RPC_URL || 'https://api.mainnet-beta.solana.com';
+  const rpcUrl = appConfig.solanaRpcUrl || process.env.SOLANA_RPC_URL;
   const wssUrl = getSolanaWssUrl(rpcUrl);
   solanaWsUrl = wssUrl;
   
-  addLog(`🔌 Conectando WebSocket de Solana a ${wssUrl.split('?')[0]}...`, 'info');
   console.log(`[WS Solana] Connecting to ${wssUrl}`);
   
   try {
     solanaWs = new WebSocket(wssUrl);
     
     solanaWs.on('open', () => {
-      addLog(`🔌 WebSocket de Solana Conectado exitosamente.`, 'info');
+      wsReconnectDelay = 5000; // Reset delay on success
+      addLog(`🔌 WebSocket de Solana conectado exitosamente (${wssUrl.split('?')[0]}).`, 'info');
       console.log(`[WS Solana] Connected to ${wssUrl}`);
       
       // Clear mappings on new connection
@@ -3567,29 +3575,32 @@ function connectSolanaWs() {
     });
     
     solanaWs.on('close', (code, reason) => {
-      console.warn(`[WS Solana] WS closed. Code: ${code}, Reason: ${reason}`);
       if (wsPingInterval) {
         clearInterval(wsPingInterval);
         wsPingInterval = null;
       }
+      wssFallbackIndex++;
       scheduleWsReconnect();
     });
     
     solanaWs.on('error', (err) => {
-      console.error(`[WS Solana] WS error:`, err.message);
+      // Quiet fail to avoid terminal spam
     });
   } catch (err) {
-    console.error(`[WS Solana] Failed to create WebSocket connection:`, err.message);
+    wssFallbackIndex++;
     scheduleWsReconnect();
   }
 }
 
 function scheduleWsReconnect() {
   if (reconnectTimeout) return;
+  const currentDelay = wsReconnectDelay;
+  wsReconnectDelay = Math.min(wsReconnectDelay * 1.5, 60000); // Back off up to 60s
+  
   reconnectTimeout = setTimeout(() => {
     reconnectTimeout = null;
     connectSolanaWs();
-  }, 5000); // Reconnect after 5 seconds
+  }, currentDelay);
 }
 
 // Fetches the pool address (pair address) for a Solana mint address from DexScreener
