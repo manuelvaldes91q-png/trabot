@@ -2690,13 +2690,16 @@ function markRpcBad(url, reason) {
 const RPC_ENDPOINTS_BASE = [
   "https://solana.lava.build",
   "https://api.mainnet-beta.solana.com",
-  "https://solana-rpc.publicnode.com"
+  "https://solana-rpc.publicnode.com",
+  "https://solana.drpc.org",
+  "https://rpc.ankr.com/solana",
+  "https://mainnet.solana-rpc.com"
 ];
 
 function getRpcEndpoints() {
   const now = Date.now();
   for (const [url, ts] of badRpcBlacklist.entries()) {
-    if (now - ts > 30000) badRpcBlacklist.delete(url); // 30s expire for rate limits
+    if (now - ts > 20000) badRpcBlacklist.delete(url); // 20s expire for rate limits
   }
 
   let configured = appConfig.solanaRpcUrl || process.env.SOLANA_RPC_URL;
@@ -2710,8 +2713,8 @@ function getRpcEndpoints() {
   return valid;
 }
 
-const SLIPPAGE_ESCALATION_FACTORS = [1, 1.6, 2.4]; // 2.5% -> 4% -> 6% (conservador)
-const PRIORITY_FEE_ESCALATION_FACTORS = [1, 3, 6];
+const SLIPPAGE_ESCALATION_FACTORS = [1, 1.3, 1.6, 2.0, 2.5, 3.0];
+const PRIORITY_FEE_ESCALATION_FACTORS = [1, 2, 4, 6, 8, 10];
 const quoteCache = new Map();
 const QUOTE_CACHE_TTL_MS = 4000;
 const PREWARM_PROXIMITY_PCT = 3;
@@ -2772,7 +2775,7 @@ async function preWarmNearbyQuotes() {
 }
 setInterval(() => { if (monitorOn) preWarmNearbyQuotes(); }, 3000);
 
-const MAX_SWAP_ATTEMPTS = 3;
+const MAX_SWAP_ATTEMPTS = 6;
 
 function isFatalSwapError(message) {
   if (!message) return false;
