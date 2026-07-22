@@ -232,6 +232,18 @@ function getSafePoolConfig() {
   return safe;
 }
 
+function getSafeAppConfig() {
+  const safeConfig = { ...appConfig };
+  delete safeConfig.solanaPrivateKey;
+  delete safeConfig.appPassword;
+  delete safeConfig.mexcApiSecret;
+  delete safeConfig.tgBotToken;
+  delete safeConfig.dextoolsApiKey;
+  delete safeConfig.twitterBearerToken;
+  delete safeConfig.solanaTrackerApiKey;
+  return safeConfig;
+}
+
 function distributePnL(pnl) {
   if (!pnl || pnl === 0) return;
   if (!poolConfig.investors || poolConfig.investors.length === 0) return;
@@ -6981,15 +6993,7 @@ app.get('/api/support-wall/:tokenMint', adminAuth, async (req, res) => {
 });
 
 app.get('/api/config', adminAuth, (req, res) => {
-  const safeConfig = { ...appConfig };
-  delete safeConfig.solanaPrivateKey;
-  delete safeConfig.appPassword;
-  delete safeConfig.mexcApiSecret;
-  delete safeConfig.tgBotToken;
-  delete safeConfig.dextoolsApiKey;
-  delete safeConfig.twitterBearerToken;
-  delete safeConfig.solanaTrackerApiKey;
-  res.json(safeConfig);
+  res.json(getSafeAppConfig());
 });
 
 app.post('/api/config', adminAuth, (req, res) => {
@@ -7039,7 +7043,7 @@ app.post('/api/config', adminAuth, (req, res) => {
   if(autoTraderTakeProfit1 !== undefined) appConfig.autoTraderTakeProfit1 = parseFloat(autoTraderTakeProfit1) || 8;
   if(autoTraderTakeProfit2 !== undefined) appConfig.autoTraderTakeProfit2 = parseFloat(autoTraderTakeProfit2) || 15;
   saveState();
-  res.json({ status: 'ok', config: appConfig });
+  res.json({ status: 'ok', config: getSafeAppConfig() });
 });
 
 app.post('/api/ai/twitter-analysis', adminAuth, async (req, res) => {
