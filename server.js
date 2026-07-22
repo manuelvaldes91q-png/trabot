@@ -93,7 +93,7 @@ app.use('/api/investor/login', rateLimiter(10, 60000));
 // APP_PASSWORD), enviada como Authorization: Bearer <password> — que es
 // exactamente lo que el frontend (myFetch) ya manda en cada request.
 function adminAuth(req, res, next) {
-  const pwd = appConfig.appPassword || process.env.APP_PASSWORD || 'admin123';
+  const pwd = process.env.APP_PASSWORD || appConfig.appPassword || 'admin123';
   const auth = req.headers.authorization;
   if (!auth || !auth.startsWith('Bearer ') || auth.substring(7) !== pwd) {
     return res.status(401).json({ error: 'No autorizado' });
@@ -222,7 +222,7 @@ let cycleN = 0;
 let mode = 'simulated';
 let solMode = 'sim'; // 'sim' o 'wallet'
 let appConfig = {
-  appPassword: 'admin123',
+  appPassword: process.env.APP_PASSWORD || 'admin123',
   mexcApiKey: process.env.MEXC_API_KEY || '',
   mexcApiSecret: process.env.MEXC_API_SECRET || '',
   tgBotToken: process.env.TELEGRAM_BOT_TOKEN || '',
@@ -5275,7 +5275,7 @@ app.post('/api/action', adminAuth, async (req, res) => {
 });
 
 app.post('/api/login', async (req, res) => {
-  const pwd = appConfig.appPassword || process.env.APP_PASSWORD || 'admin123';
+  const pwd = process.env.APP_PASSWORD || appConfig.appPassword || 'admin123';
   const { password, code } = req.body || {};
 
   if (password !== pwd) {
@@ -5697,7 +5697,7 @@ app.get('/api/mexc/*', async (req, res) => {
 app.use('/api', (req, res, next) => {
   // If it's a public or investor route that we already matched, skip this (Express already processed it above if matched)
   // Actually, express will hit this for any /api route not matched above.
-  const pwd = appConfig.appPassword || process.env.APP_PASSWORD || 'admin123';
+  const pwd = process.env.APP_PASSWORD || appConfig.appPassword || 'admin123';
   const auth = req.headers.authorization;
   if (auth !== `Bearer ${pwd}`) return res.status(401).json({error: 'Unauthorized'});
   next();

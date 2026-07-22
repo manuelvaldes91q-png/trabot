@@ -273,8 +273,8 @@ function switchTab(tabId) {
 window.addEventListener('DOMContentLoaded', () => {
   const saved = localStorage.getItem('activeTab') || 'dashboard';
   switchTab(saved);
-  if ('serviceWorker' in navigator) {
-    navigator.serviceWorker.register('/sw.js').catch(console.error);
+  if ('serviceWorker' in navigator && window.location.protocol.startsWith('http')) {
+    navigator.serviceWorker.register('/sw.js').catch(() => {});
   }
 });
 </script>
@@ -825,14 +825,37 @@ async function requestNotif(){
 }
 function pushNotif(title,body){
   if(!notifOn||Notification.permission!=='granted')return;
-  if (navigator.serviceWorker && navigator.serviceWorker.controller) {
-    navigator.serviceWorker.controller.postMessage({
-      type: 'SHOW_NOTIFICATION',
-      title: title,
-      body: body
-    });
-  } else {
-    try{new Notification(title,{body});}catch(e){}
+  let sent = false;
+  try {
+    if (navigator.serviceWorker && navigator.serviceWorker.controller && navigator.serviceWorker.controller.state === 'activated') {
+      navigator.serviceWorker.controller.postMessage({
+        type: 'SHOW_NOTIFICATION',
+        title: title,
+        body: body
+      });
+      sent = true;
+    }
+  } catch (err) {
+    sent = false;
+  }
+  if (!sent) {
+    try {
+      if ('serviceWorker' in navigator && navigator.serviceWorker.ready) {
+        navigator.serviceWorker.ready.then(reg => {
+          if (reg && reg.showNotification) {
+            reg.showNotification(title, { body, icon: '/favicon.ico', badge: '/favicon.ico' }).catch(() => {
+              try { new Notification(title, { body }); } catch(e){}
+            });
+          } else {
+            try { new Notification(title, { body }); } catch(e){}
+          }
+        }).catch(() => {
+          try { new Notification(title, { body }); } catch(e){}
+        });
+      } else {
+        new Notification(title, { body });
+      }
+    } catch(e){}
   }
 }
 
