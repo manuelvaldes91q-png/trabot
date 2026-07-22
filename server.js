@@ -1397,8 +1397,8 @@ async function getSolanaPrice(tokenAddress) {
 }
 
 
-async function withRpcFallback(actionFn) {
-  const rpcs = getRpcEndpoints();
+async function withRpcFallback(actionFn, isCritical = false) {
+  const rpcs = getRpcEndpoints(isCritical);
   let lastError = null;
   for (const rpc of rpcs) {
     const start = Date.now();
@@ -2742,7 +2742,7 @@ const RPC_ENDPOINTS_BASE = [
 let priorityRotationIndex = 0;
 let baseRotationIndex = 0;
 
-function getRpcEndpoints() {
+function getRpcEndpoints(isCritical = false) {
   const now = Date.now();
   for (const [url, ts] of badRpcBlacklist.entries()) {
     if (now - ts > 15000) badRpcBlacklist.delete(url); // 15s expire for rate limits / errors
@@ -2780,6 +2780,11 @@ function getRpcEndpoints() {
     for (let i = 0; i < finalBase.length; i++) {
       rotatedBase.push(finalBase[(baseRotationIndex + i) % finalBase.length]);
     }
+  }
+
+  // CRITICAL: If NOT critical (e.g. background monitoring), ONLY use public RPCs to save user credits
+  if (!isCritical && rotatedBase.length > 0) {
+    return rotatedBase;
   }
 
   // Always return priority first, then base. Both internally rotated.
@@ -3194,7 +3199,7 @@ async function executeSolanaTradeInternal(w, side, amountUSDT, price, pk, feePay
         const feeLimitSOL = appConfig.solanaFeeLimit || 0.05;
         const feeInfo = await withRpcFallback(async (conn) => {
           return await conn.getFeeForMessage(transaction.message, 'confirmed');
-        }).catch(() => null);
+        }, true).catch(() => null);
         if (feeInfo && feeInfo.value !== null) {
            const feeSOL = feeInfo.value / 1e9;
            if (feeSOL > feeLimitSOL) {
@@ -3227,19 +3232,19 @@ async function executeSolanaTradeInternal(w, side, amountUSDT, price, pk, feePay
         try {
           bundleUuid = await withRpcFallback(async (conn) => {
             return await sendViaJitoBundle(conn, transaction, keypair);
-          });
+          }, true);
           addLog(`🚀 Transacción enviada vía Jito Bundle para ${w.symbol}... (${txid.slice(0,8)})`, 'info');
         } catch (jitoErr) {
           addLog(`⚠️ Jito bundle falló (${jitoErr.message}). Enviando por RPC directo con rotación y fallback...`, 'warn');
           await withRpcFallback(async (conn) => {
             return await conn.sendRawTransaction(transaction.serialize(), { skipPreflight: true, maxRetries: 3 });
-          });
+          }, true);
         }
       } else {
         addLog(`🚀 Enviando transacción real de Solana para ${w.symbol}... (${txid.slice(0,8)}) con rotación RPC...`, 'info');
         await withRpcFallback(async (conn) => {
           return await conn.sendRawTransaction(transaction.serialize(), { skipPreflight: true, maxRetries: 3 });
-        });
+        }, true);
       }
 
       addLog(`✅ Transacción enviada: ${txid.slice(0, 8)}... Esperando confirmación...`, 'info');
@@ -3255,7 +3260,7 @@ async function executeSolanaTradeInternal(w, side, amountUSDT, price, pk, feePay
           const status = await withRpcFallback(async (conn) => {
             const res = await conn.getSignatureStatuses([txid]);
             return res && res.value && res.value[0];
-          });
+          }, true);
           
           if (status) {
             if (status.err) {
@@ -6172,7 +6177,7 @@ app.post('/api/swap-sol-usdc', adminAuth, async (req, res) => {
         
         if (!force && attempts === 1) {
           try {
-            const feeInfo = await withRpcFallback(c => c.getFeeForMessage(tx.message, 'confirmed'));
+            const feeInfo = await withRpcFallback(c => c.getFeeForMessage(tx.message, 'confirmed'), true);
             if (feeInfo && feeInfo.value !== null) {
               const feeSol = feeInfo.value / 1e9;
               const feeLimit = appConfig.solanaFeeLimit || 0.05;
@@ -6187,7 +6192,7 @@ app.post('/api/swap-sol-usdc', adminAuth, async (req, res) => {
         }
 
         tx.sign([keypair]);
-        txid = await withRpcFallback(c => c.sendRawTransaction(tx.serialize(), { skipPreflight: true, maxRetries: 3 }));
+        txid = await withRpcFallback(c => c.sendRawTransaction(tx.serialize(), { skipPreflight: true, maxRetries: 3 }), true);
         console.log(`[Swap ${inputSymbol}-${outputSymbol}] Transacción enviada con éxito: ${txid}`);
         break; // Éxito, salir de la estructura de repetición
       } catch (err) {
