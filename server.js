@@ -1382,7 +1382,7 @@ async function getTokenUiBalance(connection, ownerPubKey, tokenMintStr, retries 
       }
     } catch(e) {
        const msg = (e && e.message) ? e.message.toLowerCase() : '';
-       const isAccountMissing = msg.includes('could not find account') || msg.includes('account not found') || msg.includes('invalid account owner') || msg.includes('does not exist');
+       const isAccountMissing = msg.includes('could not find account') || msg.includes('account not found') || msg.includes('failed to get balance') || msg.includes('invalid account owner') || msg.includes('does not exist') || msg.includes('invalid param') || msg.includes('not found');
        if (!isAccountMissing) {
          throw e;
        }
@@ -1405,7 +1405,7 @@ async function getTokenUiBalance(connection, ownerPubKey, tokenMintStr, retries 
          }
        } catch (err) {
          const err2Msg = (err && err.message) ? err.message.toLowerCase() : '';
-         const isAccountMissing2 = err2Msg.includes('could not find account') || err2Msg.includes('account not found');
+         const isAccountMissing2 = err2Msg.includes('could not find account') || err2Msg.includes('account not found') || err2Msg.includes('failed to get balance') || err2Msg.includes('invalid param') || err2Msg.includes('not found');
          if (!isAccountMissing2) {
            throw err;
          }
@@ -1443,7 +1443,7 @@ async function getTokenBalance(connection, ownerPubKey, tokenMintStr, retries = 
       return Number(balInfo.value.amount) || 0;
     } catch(e) {
        const msg = (e && e.message) ? e.message.toLowerCase() : '';
-       const isAccountMissing = msg.includes('could not find account') || msg.includes('account not found') || msg.includes('invalid account owner') || msg.includes('does not exist');
+       const isAccountMissing = msg.includes('could not find account') || msg.includes('account not found') || msg.includes('failed to get balance') || msg.includes('invalid account owner') || msg.includes('does not exist') || msg.includes('invalid param') || msg.includes('not found');
        if (!isAccountMissing) {
          throw e;
        }
@@ -1459,7 +1459,7 @@ async function getTokenBalance(connection, ownerPubKey, tokenMintStr, retries = 
          }
        } catch(err) {
          const err2Msg = (err && err.message) ? err.message.toLowerCase() : '';
-         const isAccountMissing2 = err2Msg.includes('could not find account') || err2Msg.includes('account not found');
+         const isAccountMissing2 = err2Msg.includes('could not find account') || err2Msg.includes('account not found') || err2Msg.includes('failed to get balance') || err2Msg.includes('invalid param') || err2Msg.includes('not found');
          if (!isAccountMissing2) {
            throw err;
          }
@@ -1637,19 +1637,22 @@ async function updateSolanaWalletInfo() {
       }
     }
     
-    const solLamports = await withRpcFallback(c => c.getBalance(keypair.publicKey));
-    const newSolBal = solLamports / 1e9;
+    const solLamports = await withRpcFallback(c => c.getBalance(keypair.publicKey)).catch(() => null);
+    if (solLamports !== null) {
+      solanaSolBalance = solLamports / 1e9;
+    }
     
     const usdcMint = 'EPjFWdd5AufqSSqeM2qN1xzybapC8G4wEGGkZwyTDt1v';
-    const newUsdcBal = await withRpcFallback(c => getTokenUiBalance(c, solanaWalletAddress, usdcMint));
+    const newUsdcBal = await withRpcFallback(c => getTokenUiBalance(c, solanaWalletAddress, usdcMint)).catch(() => null);
+    if (newUsdcBal !== null) {
+      solanaUsdcBalance = newUsdcBal;
+    }
 
     const usdtMint = 'Es9vMFrzaCERmJfrF4H2FYD4KCoNkY11McCe8BenwNYB';
-    const newUsdtBal = await withRpcFallback(c => getTokenUiBalance(c, solanaWalletAddress, usdtMint));
-    
-    // Atomic update: only update global balances when all RPC queries succeed
-    solanaSolBalance = newSolBal;
-    solanaUsdcBalance = newUsdcBal;
-    solanaUsdtBalance = newUsdtBal;
+    const newUsdtBal = await withRpcFallback(c => getTokenUiBalance(c, solanaWalletAddress, usdtMint)).catch(() => null);
+    if (newUsdtBal !== null) {
+      solanaUsdtBalance = newUsdtBal;
+    }
     
     lastSolanaBalanceUpdate = now;
   } catch (err) {
