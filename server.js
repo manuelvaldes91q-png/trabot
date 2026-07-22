@@ -1042,10 +1042,13 @@ async function getSolanaPrices(addresses) {
 
     if (toFetch.length > 0) {
       if (!solanaWsConnection) {
-        const rpcUrl = appConfig.solanaRpcUrl || process.env.SOLANA_RPC_URL || 'https://solana-rpc.publicnode.com';
-        try {
-          solanaWsConnection = new Connection(rpcUrl, { commitment: 'processed', disableRetryOnRateLimit: true });
-        } catch (e) {}
+        const rpcs = getRpcEndpoints();
+        for (const rpc of rpcs) {
+          try {
+            solanaWsConnection = new Connection(rpc, { commitment: 'processed', disableRetryOnRateLimit: true });
+            break;
+          } catch (e) {}
+        }
       }
 
       if (solanaWsConnection) {
@@ -1327,6 +1330,23 @@ async function getSolanaPrices(addresses) {
 async function getSolanaPrice(tokenAddress) {
   const res = await getSolanaPrices([tokenAddress]);
   return res[tokenAddress]?.price || 0;
+}
+
+
+async function withRpcFallback(actionFn) {
+  const rpcs = getRpcEndpoints();
+  let lastError = null;
+  for (const rpc of rpcs) {
+    try {
+      const connection = new Connection(rpc, { commitment: 'confirmed', disableRetryOnRateLimit: true });
+      return await actionFn(connection);
+    } catch (e) {
+      lastError = e;
+      // Continue to next RPC on error
+      continue;
+    }
+  }
+  throw lastError;
 }
 
 async function getTokenUiBalance(connection, ownerPubKey, tokenMintStr, retries = 2) {
@@ -3654,9 +3674,15 @@ const activeVaultSubs = new Map(); // tokenAddress -> { pool, baseVault, quoteVa
 let solanaWsConnection = null;
 
 async function trackRaydiumVaults(addresses) {
-  if (!appConfig.solanaRpcUrl || addresses.length === 0) return;
+  if (addresses.length === 0) return;
   if (!solanaWsConnection) {
-    solanaWsConnection = new Connection(appConfig.solanaRpcUrl, { commitment: 'processed', disableRetryOnRateLimit: true });
+    const rpcs = getRpcEndpoints();
+    for (const rpc of rpcs) {
+      try {
+        solanaWsConnection = new Connection(rpc, { commitment: 'processed', disableRetryOnRateLimit: true });
+        break;
+      } catch (e) {}
+    }
   }
 
   await Promise.all(addresses.map(async (token) => {
@@ -3679,7 +3705,7 @@ async function trackRaydiumVaults(addresses) {
           pumpProgramId
         );
 
-        const bondingCurveInfo = await solanaWsConnection.getAccountInfo(bondingCurve);
+        const bondingCurveInfo = await withRpcFallback(c => c.getAccountInfo(bondingCurve));
         if (bondingCurveInfo && bondingCurveInfo.data && bondingCurveInfo.data.length >= 49) {
           const isComplete = bondingCurveInfo.data[48] === 1;
           if (!isComplete) {
@@ -3774,7 +3800,7 @@ async function trackRaydiumVaults(addresses) {
         poolAddress = new PublicKey(bestPair.pairAddress);
         
         // 2. Fetch pool data to get vaults using official decoder
-        const poolInfo = await solanaWsConnection.getAccountInfo(poolAddress);
+        const poolInfo = await withRpcFallback(c => c.getAccountInfo(poolAddress));
         if (!poolInfo || !poolInfo.data) {
           activeVaultSubs.set(token, { failedAt: Date.now() });
           return;
@@ -3861,8 +3887,8 @@ async function trackRaydiumVaults(addresses) {
       // Fetch initial balances asynchronously so updatePrice runs immediately with non-zero values
       try {
         const [baseAcc, quoteAcc] = await Promise.all([
-          solanaWsConnection.getAccountInfo(new PublicKey(baseVault)),
-          solanaWsConnection.getAccountInfo(new PublicKey(quoteVault))
+          withRpcFallback(c => c.getAccountInfo(new PublicKey(baseVault))),
+          withRpcFallback(c => c.getAccountInfo(new PublicKey(quoteVault)))
         ]);
         if (baseAcc && baseAcc.data && baseAcc.data.length >= 72) {
           baseBalance = Number(baseAcc.data.readBigUInt64LE(64));
