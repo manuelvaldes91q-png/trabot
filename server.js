@@ -1370,20 +1370,49 @@ async function getTokenUiBalance(connection, ownerPubKey, tokenMintStr, retries 
     try {
       const ata = await getAssociatedTokenAddress(mint, owner, true);
       const balInfo = await connection.getTokenAccountBalance(ata);
-      return balInfo.value.uiAmount || 0;
+      if (balInfo && balInfo.value) {
+        if (typeof balInfo.value.uiAmount === 'number' && balInfo.value.uiAmount !== null) {
+          return balInfo.value.uiAmount;
+        }
+        if (balInfo.value.uiAmountString) {
+          return parseFloat(balInfo.value.uiAmountString);
+        }
+        const dec = balInfo.value.decimals || 6;
+        return Number(balInfo.value.amount) / Math.pow(10, dec);
+      }
     } catch(e) {
+       const msg = (e && e.message) ? e.message.toLowerCase() : '';
+       if (msg.includes('429') || msg.includes('rate limit') || msg.includes('fetch') || msg.includes('403') || msg.includes('503') || msg.includes('timeout')) {
+         throw e;
+       }
        // if ata doesn't exist, try getting parsed accounts just in case
        try {
          const accounts = await connection.getParsedTokenAccountsByOwner(owner, { mint });
          if (accounts && accounts.value && accounts.value.length) {
-           return accounts.value[0].account.data.parsed.info.tokenAmount.uiAmount || 0;
+           let total = 0;
+           for (const acc of accounts.value) {
+             const amt = acc.account.data.parsed.info.tokenAmount;
+             if (typeof amt.uiAmount === 'number' && amt.uiAmount !== null) {
+               total += amt.uiAmount;
+             } else if (amt.uiAmountString) {
+               total += parseFloat(amt.uiAmountString);
+             } else {
+               total += (Number(amt.amount) / Math.pow(10, amt.decimals || 6));
+             }
+           }
+           return total;
          }
-       } catch (err) {}
+       } catch (err) {
+         const err2Msg = (err && err.message) ? err.message.toLowerCase() : '';
+         if (err2Msg.includes('429') || err2Msg.includes('rate limit') || err2Msg.includes('fetch') || err2Msg.includes('403') || err2Msg.includes('503') || err2Msg.includes('timeout')) {
+           throw err;
+         }
+       }
     }
     return 0;
   } catch (err) {
     if (retries > 0) {
-      await new Promise(r => setTimeout(r, 1500));
+      await new Promise(r => setTimeout(r, 1000));
       return getTokenUiBalance(connection, ownerPubKey, tokenMintStr, retries - 1);
     }
     throw err;
@@ -1411,21 +1440,31 @@ async function getTokenBalance(connection, ownerPubKey, tokenMintStr, retries = 
       const balInfo = await connection.getTokenAccountBalance(ata);
       return Number(balInfo.value.amount) || 0;
     } catch(e) {
-       if (e.message && (e.message.includes('429') || e.message.includes('rate limit'))) throw e;
+       const msg = (e && e.message) ? e.message.toLowerCase() : '';
+       if (msg.includes('429') || msg.includes('rate limit') || msg.includes('fetch') || msg.includes('403') || msg.includes('503') || msg.includes('timeout')) {
+         throw e;
+       }
        // fallback
        try {
          const accounts = await connection.getParsedTokenAccountsByOwner(owner, { mint });
          if (accounts && accounts.value && accounts.value.length) {
-           return Number(accounts.value[0].account.data.parsed.info.tokenAmount.amount) || 0;
+           let total = 0;
+           for (const acc of accounts.value) {
+             total += Number(acc.account.data.parsed.info.tokenAmount.amount) || 0;
+           }
+           return total;
          }
        } catch(err) {
-         if (err.message && (err.message.includes('429') || err.message.includes('rate limit'))) throw err;
+         const err2Msg = (err && err.message) ? err.message.toLowerCase() : '';
+         if (err2Msg.includes('429') || err2Msg.includes('rate limit') || err2Msg.includes('fetch') || err2Msg.includes('403') || err2Msg.includes('503') || err2Msg.includes('timeout')) {
+           throw err;
+         }
        }
     }
     return 0;
   } catch (err) {
     if (retries > 0) {
-      await new Promise(r => setTimeout(r, 1500));
+      await new Promise(r => setTimeout(r, 1000));
       return getTokenBalance(connection, ownerPubKey, tokenMintStr, retries - 1);
     }
     throw err;
