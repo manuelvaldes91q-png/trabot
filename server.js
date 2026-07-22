@@ -1407,7 +1407,22 @@ async function withRpcFallback(actionFn) {
     } catch (e) {
       lastError = e;
       const errMsg = e ? (e.message || String(e)) : '';
-      if (errMsg.includes('429') || errMsg.includes('rate limit') || errMsg.includes('Too Many Requests') || errMsg.includes('403') || errMsg.includes('401') || errMsg.includes('exceeded')) {
+      if (
+        errMsg.includes('429') || 
+        errMsg.includes('405') || 
+        errMsg.includes('500') || 
+        errMsg.includes('502') || 
+        errMsg.includes('503') || 
+        errMsg.includes('504') || 
+        errMsg.includes('rate limit') || 
+        errMsg.includes('Too Many Requests') || 
+        errMsg.includes('403') || 
+        errMsg.includes('401') || 
+        errMsg.includes('exceeded') ||
+        errMsg.includes('fetch') ||
+        errMsg.includes('timeout') ||
+        errMsg.includes('ECONNREFUSED')
+      ) {
         markRpcBad(rpc, errMsg);
       }
       continue;
@@ -2688,12 +2703,11 @@ function markRpcBad(url, reason) {
 }
 
 const RPC_ENDPOINTS_BASE = [
-  "https://solana.lava.build",
-  "https://api.mainnet-beta.solana.com",
   "https://solana-rpc.publicnode.com",
   "https://solana.drpc.org",
   "https://rpc.ankr.com/solana",
-  "https://mainnet.solana-rpc.com"
+  "https://solana.lava.build",
+  "https://api.mainnet-beta.solana.com"
 ];
 
 function getRpcEndpoints() {
