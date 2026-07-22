@@ -1401,9 +1401,12 @@ async function withRpcFallback(actionFn) {
   const rpcs = getRpcEndpoints();
   let lastError = null;
   for (const rpc of rpcs) {
+    const start = Date.now();
     try {
       const connection = new Connection(rpc, { commitment: 'confirmed', disableRetryOnRateLimit: true });
-      return await actionFn(connection);
+      const result = await actionFn(connection);
+      markRpcSuccess(rpc, Date.now() - start);
+      return result;
     } catch (e) {
       lastError = e;
       const errMsg = e ? (e.message || String(e)) : '';
@@ -2697,36 +2700,64 @@ async function sendViaJitoBundle(connection, signedTransaction, keypair) {
 }
 
 const badRpcBlacklist = new Map();
+const rpcHealthStats = new Map(); // url -> { successes: 0, errors: 0, lastError: '', lastLatency: 0, lastCheck: 0, status: 'healthy' }
 
 function markRpcBad(url, reason) {
   if (!url) return;
-  console.log(`[RPC Blacklist] Excluyendo temporalmente RPC ${url} por error: ${reason}`);
+  console.log(`[RPC Rotation] Excluyendo temporalmente RPC ${url} por error: ${reason}`);
   badRpcBlacklist.set(url, Date.now());
+  const stats = rpcHealthStats.get(url) || { successes: 0, errors: 0 };
+  stats.errors++;
+  stats.lastError = reason;
+  stats.lastCheck = Date.now();
+  stats.status = 'blacklisted';
+  rpcHealthStats.set(url, stats);
+}
+
+function markRpcSuccess(url, latency = 0) {
+  if (!url) return;
+  const stats = rpcHealthStats.get(url) || { successes: 0, errors: 0 };
+  stats.successes++;
+  stats.lastLatency = latency;
+  stats.lastCheck = Date.now();
+  stats.status = 'healthy';
+  rpcHealthStats.set(url, stats);
 }
 
 const RPC_ENDPOINTS_BASE = [
+  "https://api.mainnet-beta.solana.com",
+  "https://solana-rpc.publicnode.com",
   "https://1rpc.io/sol",
   "https://solana-mainnet.g.alchemy.com/v2/demo",
-  "https://api.mainnet-beta.solana.com",
-  "https://solana.blockpi.network/v1/rpc/public",
   "https://mainnet.rpcpool.com",
-  "https://solana-rpc.publicnode.com"
+  "https://solana.blockpi.network/v1/rpc/public",
+  "https://solana.lava.build",
+  "https://rpc.ankr.com/solana"
 ];
 
 function getRpcEndpoints() {
   const now = Date.now();
   for (const [url, ts] of badRpcBlacklist.entries()) {
-    if (now - ts > 10000) badRpcBlacklist.delete(url); // 10s expire for rate limits
+    if (now - ts > 15000) badRpcBlacklist.delete(url); // 15s expire for rate limits / errors
   }
 
   let configured = appConfig.solanaRpcUrl || process.env.SOLANA_RPC_URL;
-  const rpcs = configured ? [configured, ...RPC_ENDPOINTS_BASE] : [...RPC_ENDPOINTS_BASE];
-  let valid = [...new Set(rpcs)].filter(u => u && !badRpcBlacklist.has(u));
+  let rpcs = configured ? [configured, ...RPC_ENDPOINTS_BASE] : [...RPC_ENDPOINTS_BASE];
+  rpcs = [...new Set(rpcs)].filter(u => u);
+
+  let valid = rpcs.filter(u => !badRpcBlacklist.has(u));
 
   if (valid.length === 0) {
     badRpcBlacklist.clear();
-    valid = [...new Set(rpcs)];
+    valid = [...rpcs];
   }
+
+  // Rotate round-robin to balance load and prevent rate-limiting a single node
+  if (valid.length > 1) {
+    const first = valid.shift();
+    valid.push(first);
+  }
+
   return valid;
 }
 
@@ -5838,6 +5869,25 @@ app.get('/api/pool/backup', adminAuth, (req, res) => {
   } else {
     res.json({ error: 'No hay llave privada generada' });
   }
+});
+
+app.get('/api/solana/rpc-status', adminAuth, (req, res) => {
+  const rpcs = getRpcEndpoints();
+  const allBase = [...new Set([appConfig.solanaRpcUrl, process.env.SOLANA_RPC_URL, ...RPC_ENDPOINTS_BASE].filter(Boolean))];
+  const statusList = allBase.map(url => {
+    const isBlacklisted = badRpcBlacklist.has(url);
+    const stats = rpcHealthStats.get(url) || { successes: 0, errors: 0, lastLatency: 0, status: 'unknown' };
+    return {
+      url,
+      blacklisted: isBlacklisted,
+      blacklistRemainingMs: isBlacklisted ? Math.max(0, 15000 - (Date.now() - badRpcBlacklist.get(url))) : 0,
+      successes: stats.successes,
+      errors: stats.errors,
+      lastLatency: stats.lastLatency,
+      status: isBlacklisted ? 'blacklisted' : (stats.status || 'healthy')
+    };
+  });
+  res.json({ success: true, activeEndpointsCount: rpcs.length, endpoints: statusList });
 });
 
 app.get('/api/quote-sol-usdc', adminAuth, async (req, res) => {

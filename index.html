@@ -266,6 +266,7 @@ function switchTab(tabId) {
   
   if (tabId === 'config' || tabId === 'copilot') {
     if (typeof loadConfigData === 'function') loadConfigData();
+    if (tabId === 'config' && typeof loadRpcStatus === 'function') loadRpcStatus();
   } else if (tabId === 'pool') {
     if (typeof loadPoolData === 'function') loadPoolData();
   }
@@ -1545,6 +1546,47 @@ async function loadConfigData() {
     }
   } catch(e) {
     console.error('Error loading config:', e);
+  }
+}
+
+async function loadRpcStatus() {
+  const container = document.getElementById('rpcStatusList');
+  if (!container) return;
+  container.innerHTML = '<div style="color:var(--t2); font-size:11px; padding:10px; text-align:center;">Verificando estado de los nodos RPC en tiempo real...</div>';
+  try {
+    const res = await myFetch('/api/solana/rpc-status');
+    if (res.ok) {
+      const data = await res.json();
+      if (data.endpoints && data.endpoints.length > 0) {
+        let html = '';
+        data.endpoints.forEach(ep => {
+          const isBad = ep.blacklisted;
+          const statusColor = isBad ? 'var(--r)' : (ep.status === 'healthy' ? 'var(--g)' : 'var(--y)');
+          const statusText = isBad ? `Excluido (${Math.ceil(ep.blacklistRemainingMs / 1000)}s)` : 'Saludable';
+          html += `
+            <div style="display:flex; align-items:center; justify-content:space-between; background:var(--bg3); padding:8px 12px; border-radius:6px; border:1px solid var(--bdr); font-family:var(--mono); font-size:11px;">
+              <div style="display:flex; align-items:center; gap:8px; overflow:hidden;">
+                <div style="width:8px; height:8px; border-radius:50%; background:${statusColor}; flex-shrink:0;"></div>
+                <span style="color:var(--t); white-space:nowrap; overflow:hidden; text-overflow:ellipsis; max-width:300px;" title="${ep.url}">${ep.url}</span>
+              </div>
+              <div style="display:flex; align-items:center; gap:12px; font-size:10px; color:var(--t2); flex-shrink:0;">
+                <span>Éxitos: <strong style="color:var(--g)">${ep.successes}</strong></span>
+                <span>Errores: <strong style="color:var(--r)">${ep.errors}</strong></span>
+                <span>Latencia: <strong>${ep.lastLatency}ms</strong></span>
+                <span style="padding:2px 6px; border-radius:4px; background:${isBad ? 'rgba(239,68,68,0.1)' : 'rgba(0,229,160,0.1)'}; color:${statusColor}; font-weight:600;">${statusText}</span>
+              </div>
+            </div>
+          `;
+        });
+        container.innerHTML = html;
+      } else {
+        container.innerHTML = '<div style="color:var(--t2); font-size:11px; padding:10px; text-align:center;">No hay endpoints RPC configurados.</div>';
+      }
+    } else {
+      container.innerHTML = '<div style="color:var(--r); font-size:11px; padding:10px; text-align:center;">Error al cargar estado de RPCs. (Requiere sesión de administrador iniciada)</div>';
+    }
+  } catch (e) {
+    container.innerHTML = `<div style="color:var(--r); font-size:11px; padding:10px; text-align:center;">Error de red: ${e.message}</div>`;
   }
 }
 
@@ -5119,6 +5161,20 @@ addLog('DIP HUNTER v6 listo — Escáner + Monitor 10s + Auto-Ejecución + Edito
             </div>
           </div>
 
+        </div>
+      </div>
+      
+      <!-- SECCIÓN MONITOREO RPC SOLANA -->
+      <div style="background:rgba(255,255,255,0.015); border:1px solid var(--bdr); border-radius:6px; padding:15px; margin-bottom:20px;">
+        <div style="display:flex; justify-content:space-between; align-items:center; margin-bottom:10px;">
+          <div style="font-weight:600;color:var(--g);font-size:12px;text-transform:uppercase;letter-spacing:0.05em">📡 Monitoreo de Estado RPCs Solana</div>
+          <button class="btn btn-sm btn-b" onclick="loadRpcStatus()">🔄 Actualizar Estado</button>
+        </div>
+        <div style="font-size:11px;color:var(--t2);margin-bottom:12px">
+          Estado en tiempo real de los nodos RPC, latencia, aciertos, errores y exclusiones automáticas por rate limit (429) o prohibido (403).
+        </div>
+        <div id="rpcStatusList" style="display:flex; flex-direction:column; gap:8px;">
+          <div style="color:var(--t2); font-size:11px; text-align:center; padding:10px;">Haz clic en "Actualizar Estado" o entra a esta pestaña para cargar los nodos.</div>
         </div>
       </div>
       
