@@ -1477,45 +1477,49 @@ async function getEmptyTokenAccounts(connection, ownerPublicKey) {
   const TOKEN_2022_PROGRAM_ID = new PublicKey('TokenzQdBNbLqP5VEhdkAS6EPFLC1PHnBqCXEpPxuEb');
   
   try {
-    const standardAccounts = await connection.getParsedTokenAccountsByOwner(
+    const standardAccounts = await withRpcFallback(c => c.getParsedTokenAccountsByOwner(
       ownerPublicKey,
       { programId: TOKEN_PROGRAM_ID }
-    );
+    ));
     
-    for (const acc of standardAccounts.value) {
-      const info = acc.account.data.parsed.info;
-      const amount = info.tokenAmount.amount;
-      if (amount === "0") {
-        emptyAccounts.push({
-          pubkey: acc.pubkey,
-          mint: info.mint,
-          programId: TOKEN_PROGRAM_ID
-        });
+    if (standardAccounts && standardAccounts.value) {
+      for (const acc of standardAccounts.value) {
+        const info = acc.account.data.parsed.info;
+        const amount = info.tokenAmount.amount;
+        if (amount === "0") {
+          emptyAccounts.push({
+            pubkey: acc.pubkey,
+            mint: info.mint,
+            programId: TOKEN_PROGRAM_ID
+          });
+        }
       }
     }
   } catch (e) {
-    console.error('Error fetching standard token accounts:', e);
+    console.error('Error fetching standard token accounts:', e.message || e);
   }
 
   try {
-    const token2022Accounts = await connection.getParsedTokenAccountsByOwner(
+    const token2022Accounts = await withRpcFallback(c => c.getParsedTokenAccountsByOwner(
       ownerPublicKey,
       { programId: TOKEN_2022_PROGRAM_ID }
-    );
+    ));
     
-    for (const acc of token2022Accounts.value) {
-      const info = acc.account.data.parsed.info;
-      const amount = info.tokenAmount.amount;
-      if (amount === "0") {
-        emptyAccounts.push({
-          pubkey: acc.pubkey,
-          mint: info.mint,
-          programId: TOKEN_2022_PROGRAM_ID
-        });
+    if (token2022Accounts && token2022Accounts.value) {
+      for (const acc of token2022Accounts.value) {
+        const info = acc.account.data.parsed.info;
+        const amount = info.tokenAmount.amount;
+        if (amount === "0") {
+          emptyAccounts.push({
+            pubkey: acc.pubkey,
+            mint: info.mint,
+            programId: TOKEN_2022_PROGRAM_ID
+          });
+        }
       }
     }
   } catch (e) {
-    console.error('Error fetching Token-2022 accounts:', e);
+    console.error('Error fetching Token-2022 accounts:', e.message || e);
   }
 
   return emptyAccounts;
@@ -1550,17 +1554,21 @@ async function closeEmptyTokenAccounts(connection, ownerPk, feePayerPk = null) {
     }
     
     transaction.feePayer = feePayerKeypair.publicKey;
-    const { blockhash } = await connection.getLatestBlockhash('confirmed');
+    const { blockhash } = await withRpcFallback(c => c.getLatestBlockhash('confirmed'));
     transaction.recentBlockhash = blockhash;
     
-    if (feePayerPk) {
+    if (feePayerPk && feePayerPk !== ownerPk) {
       transaction.sign(ownerKeypair, feePayerKeypair);
     } else {
       transaction.sign(ownerKeypair);
     }
     
-    const txid = await connection.sendRawTransaction(transaction.serialize());
-    await connection.confirmTransaction(txid, 'confirmed');
+    const txid = await withRpcFallback(c => c.sendRawTransaction(transaction.serialize(), { skipPreflight: false, maxRetries: 3 }));
+    try {
+      await withRpcFallback(c => c.confirmTransaction(txid, 'confirmed'));
+    } catch(e) {
+      console.warn('Rent recovery tx confirmation warning:', e.message || e);
+    }
     txids.push(txid);
   }
 
@@ -5556,23 +5564,7 @@ app.post('/api/investor/recover_rent', investorAuth, async (req, res) => {
   }
 
   try {
-    const rpcs = getRpcEndpoints();
-    let connection = null;
-    for (const rpc of rpcs) {
-      try {
-        connection = new Connection(rpc, { commitment: 'confirmed', disableRetryOnRateLimit: true });
-        await connection.getSlot(); // Test connection
-        break;
-      } catch (e) {
-        connection = null;
-      }
-    }
-    if (!connection) {
-      console.error("All RPCs failed for updateSolanaWalletInfo.");
-      return;
-    }
-
-    const result = await closeEmptyTokenAccounts(connection, inv.depositWalletPk, poolConfig.privateKey);
+    const result = await closeEmptyTokenAccounts(null, inv.depositWalletPk, poolConfig.privateKey);
 
     if (result.success) {
       if (result.closedCount > 0) {
@@ -5624,23 +5616,8 @@ app.use('/api', (req, res, next) => {
 app.get('/api/pool/rent_preview', adminAuth, async (req, res) => {
   if (!poolConfig.privateKey) return res.json({ error: 'La wallet del Pool no tiene llaves configuradas' });
   try {
-    const rpcs = getRpcEndpoints();
-    let connection = null;
-    for (const rpc of rpcs) {
-      try {
-        connection = new Connection(rpc, { commitment: 'confirmed', disableRetryOnRateLimit: true });
-        await connection.getSlot(); // Test connection
-        break;
-      } catch (e) {
-        connection = null;
-      }
-    }
-    if (!connection) {
-      console.error("All RPCs failed for updateSolanaWalletInfo.");
-      return;
-    }
     const ownerKeypair = Keypair.fromSecretKey(bs58.decode(poolConfig.privateKey));
-    const emptyAccounts = await getEmptyTokenAccounts(connection, ownerKeypair.publicKey);
+    const emptyAccounts = await getEmptyTokenAccounts(null, ownerKeypair.publicKey);
     res.json({
       success: true,
       count: emptyAccounts.length,
@@ -5658,23 +5635,7 @@ app.post('/api/pool/recover_rent', adminAuth, async (req, res) => {
   }
 
   try {
-    const rpcs = getRpcEndpoints();
-    let connection = null;
-    for (const rpc of rpcs) {
-      try {
-        connection = new Connection(rpc, { commitment: 'confirmed', disableRetryOnRateLimit: true });
-        await connection.getSlot(); // Test connection
-        break;
-      } catch (e) {
-        connection = null;
-      }
-    }
-    if (!connection) {
-      console.error("All RPCs failed for updateSolanaWalletInfo.");
-      return;
-    }
-
-    const result = await closeEmptyTokenAccounts(connection, poolConfig.privateKey);
+    const result = await closeEmptyTokenAccounts(null, poolConfig.privateKey);
 
     if (result.success) {
       if (result.closedCount > 0) {
