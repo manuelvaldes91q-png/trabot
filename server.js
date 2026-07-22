@@ -2685,6 +2685,7 @@ function markRpcBad(url, reason) {
 }
 
 const RPC_ENDPOINTS_BASE = [
+  "https://solana.lava.build",
   "https://api.mainnet-beta.solana.com",
   "https://solana-rpc.publicnode.com"
 ];
@@ -2692,15 +2693,16 @@ const RPC_ENDPOINTS_BASE = [
 function getRpcEndpoints() {
   const now = Date.now();
   for (const [url, ts] of badRpcBlacklist.entries()) {
-    if (now - ts > 300000) badRpcBlacklist.delete(url); // 5 min expire
+    if (now - ts > 30000) badRpcBlacklist.delete(url); // 30s expire for rate limits
   }
 
-  let configured = appConfig.solanaRpcUrl || process.env.SOLANA_RPC_URL || 'https://api.mainnet-beta.solana.com';
-  const rpcs = [configured, ...RPC_ENDPOINTS_BASE];
-  const valid = [...new Set(rpcs)].filter(u => u && !badRpcBlacklist.has(u));
+  let configured = appConfig.solanaRpcUrl || process.env.SOLANA_RPC_URL;
+  const rpcs = configured ? [configured, ...RPC_ENDPOINTS_BASE] : [...RPC_ENDPOINTS_BASE];
+  let valid = [...new Set(rpcs)].filter(u => u && !badRpcBlacklist.has(u));
 
   if (valid.length === 0) {
-    return [configured || "https://api.mainnet-beta.solana.com"];
+    badRpcBlacklist.clear();
+    valid = [...new Set(rpcs)];
   }
   return valid;
 }
@@ -2819,7 +2821,8 @@ async function executeSolanaTradeInternal(w, side, amountUSDT, price, pk, feePay
   let tokenBalBefore = null;
 
   for (let attempt = 0; attempt < MAX_SWAP_ATTEMPTS; attempt++) {
-    const rpcUrl = rpcEndpoints[attempt % rpcEndpoints.length];
+    const currentRpcEndpoints = getRpcEndpoints();
+    const rpcUrl = currentRpcEndpoints[attempt % currentRpcEndpoints.length];
     const connection = new Connection(rpcUrl, { commitment: 'confirmed', disableRetryOnRateLimit: true });
 
     try {
@@ -3265,9 +3268,8 @@ async function executeSolanaTradeInternal(w, side, amountUSDT, price, pk, feePay
       const errMsg = err.message || '';
       addLog(`❌ Error en ejecución de Solana (intento ${attempt + 1}/${MAX_SWAP_ATTEMPTS}): ${errMsg}`, 'warn');
       
-      if (errMsg.includes('400') || errMsg.includes('403') || errMsg.includes('free plan') || errMsg.includes('API key is not allowed') || errMsg.includes('401')) {
+      if (errMsg.includes('400') || errMsg.includes('403') || errMsg.includes('free plan') || errMsg.includes('API key is not allowed') || errMsg.includes('401') || errMsg.includes('429') || errMsg.includes('rate limit') || errMsg.includes('Too Many Requests') || errMsg.includes('exceeded')) {
         markRpcBad(rpcUrl, errMsg);
-      } else if (errMsg.includes('429') || errMsg.includes('rate limit') || errMsg.includes('Too Many Requests')) {
         await new Promise(r => setTimeout(r, 1200));
       }
 
@@ -3276,6 +3278,10 @@ async function executeSolanaTradeInternal(w, side, amountUSDT, price, pk, feePay
         return { ok: false };
       }
     }
+  }
+
+  if (lastError && (lastError.message || '').includes('429')) {
+    addLog(`💡 Tip: Las RPCs públicas gratuitas de Solana sufren límites de tasa (429). Puedes colocar tu propio RPC privado (ej. Helius o QuickNode) en Configuración.`, 'info');
   }
 
   addLog(`🚫 Swap para ${w.symbol} falló tras ${MAX_SWAP_ATTEMPTS} intentos con distintos parámetros. Último error: ${lastError ? lastError.message : 'desconocido'}`, 'warn');
