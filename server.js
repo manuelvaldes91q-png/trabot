@@ -5875,17 +5875,33 @@ app.post('/api/swap-sol-usdc', adminAuth, async (req, res) => {
 
     if (solMode !== 'wallet' && solMode !== 'pool') {
       const solPrice = await mxPrice('SOL') || 140;
-      if (inputSymbol === 'SOL' && outputSymbol === 'USDC') {
-        SIM.balance += amount * solPrice;
+      if (!SIM.usdtBalance) SIM.usdtBalance = 1000;
+      if (!SIM.solBalance) SIM.solBalance = 10;
+      if (!SIM.balance) SIM.balance = 1000;
+
+      let estimatedOutput = amount;
+      if (inputSymbol === 'SOL' && (outputSymbol === 'USDC' || outputSymbol === 'USDT')) {
+        estimatedOutput = amount * solPrice;
         SIM.solBalance = Math.max(0, SIM.solBalance - amount);
-      } else if (inputSymbol === 'USDC' && outputSymbol === 'SOL') {
+        if (outputSymbol === 'USDC') SIM.balance += estimatedOutput;
+        else SIM.usdtBalance += estimatedOutput;
+      } else if ((inputSymbol === 'USDC' || inputSymbol === 'USDT') && outputSymbol === 'SOL') {
+        estimatedOutput = amount / solPrice;
+        if (inputSymbol === 'USDC') SIM.balance = Math.max(0, SIM.balance - amount);
+        else SIM.usdtBalance = Math.max(0, SIM.usdtBalance - amount);
+        SIM.solBalance += estimatedOutput;
+      } else if (inputSymbol === 'USDC' && outputSymbol === 'USDT') {
         SIM.balance = Math.max(0, SIM.balance - amount);
-        SIM.solBalance += amount / solPrice;
+        SIM.usdtBalance += amount;
+      } else if (inputSymbol === 'USDT' && outputSymbol === 'USDC') {
+        SIM.usdtBalance = Math.max(0, SIM.usdtBalance - amount);
+        SIM.balance += amount;
       }
+
       const simTxid = 'sim_tx_' + Math.random().toString(36).substring(2, 12);
-      addLog(`✅ [Simulación] Swap exitoso: ${amount} ${inputSymbol} ➡ ${outputSymbol} (TxID: ${simTxid})`, 'buy');
+      addLog(`✅ [Simulación] Swap exitoso: ${amount} ${inputSymbol} ➡ ${estimatedOutput.toFixed(4)} ${outputSymbol} (TxID: ${simTxid})`, 'buy');
       saveState();
-      return res.json({ success: true, txid: simTxid });
+      return res.json({ success: true, txid: simTxid, outAmount: estimatedOutput });
     }
 
     const pk = poolConfig.privateKey || appConfig.solanaPrivateKey || process.env.SOLANA_PRIVATE_KEY;
