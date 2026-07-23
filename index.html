@@ -5551,10 +5551,101 @@ addLog('DIP HUNTER v6 listo — Escáner + Monitor 10s + Auto-Ejecución + Edito
               <th style="padding:12px 10px;">Última Actividad</th>
               <th style="padding:12px 10px;">Endpoint / Ruta</th>
               <th style="padding:12px 10px;">Dispositivo / User Agent</th>
+              <th style="padding:12px 10px;">Acciones</th>
             </tr>
           </thead>
           <tbody id="securitySessionsList">
             <tr><td colspan="4" style="padding:30px; text-align:center; color:var(--t2);">Cargando información de seguridad...</td></tr>
+          </tbody>
+        </table>
+      </div>
+    </div>
+
+    <!-- IPS BLOQUEADAS (LISTA NEGRA) -->
+    <div style="background:rgba(239,68,68,0.03); border:1px solid rgba(239,68,68,0.2); border-radius:12px; padding:25px; margin-bottom:25px; box-shadow:0 4px 15px rgba(0,0,0,0.1);">
+      <div style="display:flex; justify-content:space-between; align-items:center; margin-bottom:20px; flex-wrap:wrap; gap:10px;">
+        <div>
+          <div style="font-size:15px; font-weight:bold; color:var(--r); margin-bottom:5px; display:flex; align-items:center; gap:8px;">
+            <span>🚫</span> IPs Bloqueadas (Lista Negra)
+          </div>
+          <div style="font-size:12px; color:var(--t2);">Direcciones IP que tienen el acceso completamente denegado al servidor.</div>
+        </div>
+        <div style="display:flex; gap:8px;">
+          <input type="text" id="manualBlockIpInput" placeholder="Ej: 143.198.55.47" class="inp" style="width:160px; font-size:11px; padding:4px 8px;">
+          <button class="btn btn-r btn-sm" onclick="manualBlockIp()">🚫 Bloquear IP</button>
+        </div>
+      </div>
+      
+      <div style="overflow-x:auto;">
+        <table style="width:100%; border-collapse:collapse; font-size:12px; text-align:left;">
+          <thead>
+            <tr style="border-bottom:2px solid var(--bdr); color:var(--t2);">
+              <th style="padding:12px 10px;">Dirección IP</th>
+              <th style="padding:12px 10px;">Fecha Bloqueo</th>
+              <th style="padding:12px 10px;">Motivo</th>
+              <th style="padding:12px 10px;">Acción</th>
+            </tr>
+          </thead>
+          <tbody id="blockedIpsList">
+            <tr><td colspan="4" style="padding:20px; text-align:center; color:var(--t2);">Cargando lista negra...</td></tr>
+          </tbody>
+        </table>
+      </div>
+    </div>
+
+    <!-- AUDITORIA DE ACCIONES POR IP -->
+    <div style="background:var(--bg2); border:1px solid var(--bdr); border-radius:12px; padding:25px; margin-bottom:25px; box-shadow:0 4px 15px rgba(0,0,0,0.1);">
+      <div style="display:flex; justify-content:space-between; align-items:center; margin-bottom:20px; flex-wrap:wrap; gap:12px;">
+        <div>
+          <div style="font-size:15px; font-weight:bold; color:var(--g); margin-bottom:5px; display:flex; align-items:center; gap:8px;">
+            <span>📜</span> Registro de Auditoría de Acciones por IP
+          </div>
+          <div style="font-size:12px; color:var(--t2);">
+            Monitoreo detallado de cada operación ejecutada (transferencias, swaps, logins y llamadas a API).
+          </div>
+        </div>
+        <div style="display:flex; gap:8px; flex-wrap:wrap; align-items:center;">
+          <input type="text" id="auditIpFilter" placeholder="🔍 Filtrar por IP (ej: 143.198.55.47)" class="inp" style="width:210px; font-size:11px; padding:6px 10px;" oninput="renderAuditLogs()">
+          <select id="auditCategoryFilter" class="inp" style="width:140px; font-size:11px; padding:6px 8px;" onchange="renderAuditLogs()">
+            <option value="ALL">Todas las Categorías</option>
+            <option value="TRANSFERENCIA">🔴 Transferencias</option>
+            <option value="LOGIN">🟣 Logins / Autenticación</option>
+            <option value="SWAP">🟢 Swaps / Operaciones</option>
+            <option value="CONFIGURACION">⚙️ Configuración</option>
+            <option value="SEGURIDAD">🛡️ Seguridad / IP</option>
+            <option value="PETICION_API">🌐 API General</option>
+          </select>
+          <button class="btn btn-b btn-sm" onclick="loadSecurityData()">🔄 Actualizar Audit</button>
+        </div>
+      </div>
+
+      <!-- BANNER DE VERIFICACION RAPIDA -->
+      <div id="transferAuditAlert" style="background:rgba(0,229,160,0.06); border:1px solid rgba(0,229,160,0.25); border-radius:8px; padding:12px 16px; margin-bottom:18px; display:flex; align-items:center; justify-content:space-between; flex-wrap:wrap; gap:10px;">
+        <div style="display:flex; align-items:center; gap:10px;">
+          <span style="font-size:18px;">🛡️</span>
+          <div>
+            <div style="font-size:12px; font-weight:bold; color:var(--g);" id="transferAuditSummary">Estado de Transferencias por IP</div>
+            <div style="font-size:11px; color:var(--t2);" id="transferAuditDetail">Verificando registro de transferencias...</div>
+          </div>
+        </div>
+        <div id="transferAuditCountBadge" style="font-family:var(--mono); font-size:10px; background:rgba(0,229,160,0.15); color:var(--g); padding:4px 10px; border-radius:4px; font-weight:bold;">
+          0 Transferencias
+        </div>
+      </div>
+
+      <div style="overflow-x:auto;">
+        <table style="width:100%; border-collapse:collapse; font-size:12px; text-align:left;">
+          <thead>
+            <tr style="border-bottom:2px solid var(--bdr); color:var(--t2);">
+              <th style="padding:12px 10px;">Fecha / Hora</th>
+              <th style="padding:12px 10px;">Dirección IP</th>
+              <th style="padding:12px 10px;">Acción / Categoría</th>
+              <th style="padding:12px 10px;">Detalles de la Operación</th>
+              <th style="padding:12px 10px;">Ruta / User Agent</th>
+            </tr>
+          </thead>
+          <tbody id="auditLogsList">
+            <tr><td colspan="5" style="padding:30px; text-align:center; color:var(--t2);">Cargando registros de auditoría...</td></tr>
           </tbody>
         </table>
       </div>
@@ -5614,22 +5705,52 @@ addLog('DIP HUNTER v6 listo — Escáner + Monitor 10s + Auto-Ejecución + Edito
 async function loadSecurityData() {
   const list = document.getElementById('securitySessionsList');
   const failedList = document.getElementById('failedLoginsList');
+  const blockedList = document.getElementById('blockedIpsList');
   try {
     const r = await myFetch('/api/admin/active-sessions');
     const d = await r.json();
     if (!d.success) throw new Error(d.error);
     
     if (!d.sessions || d.sessions.length === 0) {
-      list.innerHTML = '<tr><td colspan="4" style="padding:20px; text-align:center; color:var(--t2);">No hay sesiones activas registradas.</td></tr>';
+      list.innerHTML = '<tr><td colspan="5" style="padding:20px; text-align:center; color:var(--t2);">No hay sesiones activas registradas.</td></tr>';
     } else {
       list.innerHTML = d.sessions.map(s => `
         <tr style="border-bottom:1px solid var(--bdr);">
           <td style="padding:12px 10px; font-family:var(--mono); color:var(--b); font-weight:bold;">${escapeHtml(s.ip)}</td>
           <td style="padding:12px 10px;">${new Date(s.lastAccess).toLocaleTimeString()} <span style="font-size:9px; color:var(--t2);">(${Math.floor((Date.now()-s.lastAccess)/1000)}s ago)</span></td>
           <td style="padding:12px 10px;"><span class="tag tb">${s.path}</span></td>
-          <td style="padding:12px 10px; font-size:10px; color:var(--t2); max-width:250px; overflow:hidden; text-overflow:ellipsis; white-space:nowrap;" title="${escapeHtml(s.userAgent)}">${escapeHtml(s.userAgent)}</td>
+          <td style="padding:12px 10px; font-size:10px; color:var(--t2); max-width:220px; overflow:hidden; text-overflow:ellipsis; white-space:nowrap;" title="${escapeHtml(s.userAgent)}">${escapeHtml(s.userAgent)}</td>
+          <td style="padding:12px 10px;">
+            <div style="display:flex; gap:6px;">
+              <button class="btn btn-r btn-xs" onclick="blockIp('${escapeHtml(s.ip)}')">🚫 Bloquear</button>
+              <button class="btn btn-d btn-xs" onclick="terminateSession('${escapeHtml(s.ip)}')">❌ Cerrar</button>
+            </div>
+          </td>
         </tr>
       `).join('');
+    }
+
+    window.lastAuditLogs = d.ipAuditLogs || [];
+    renderAuditLogs();
+    if (!blockedList) return;
+    if (!d.blockedIps || d.blockedIps.length === 0) {
+      blockedList.innerHTML = '<tr><td colspan="4" style="padding:20px; text-align:center; color:var(--t2);">No hay direcciones IP bloqueadas en la lista negra.</td></tr>';
+    } else {
+      blockedList.innerHTML = d.blockedIps.map(b => {
+        const ip = typeof b === 'string' ? b : b.ip;
+        const reason = typeof b === 'object' && b.reason ? b.reason : 'Bloqueado';
+        const dateStr = typeof b === 'object' && b.blockedAt ? new Date(b.blockedAt).toLocaleDateString() : '—';
+        return `
+          <tr style="border-bottom:1px solid var(--bdr);">
+            <td style="padding:12px 10px; font-family:var(--mono); color:var(--r); font-weight:bold;">${escapeHtml(ip)}</td>
+            <td style="padding:12px 10px; color:var(--t2);">${dateStr}</td>
+            <td style="padding:12px 10px; color:var(--t); font-size:11px;">${escapeHtml(reason)}</td>
+            <td style="padding:12px 10px;">
+              <button class="btn btn-g btn-xs" onclick="unblockIp('${escapeHtml(ip)}')">🟢 Desbloquear</button>
+            </td>
+          </tr>
+        `;
+      }).join('');
     }
 
     if (!d.failedLogins || d.failedLogins.length === 0) {

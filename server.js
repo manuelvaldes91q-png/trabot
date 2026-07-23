@@ -54,7 +54,8 @@ app.disable('x-powered-by');
 // Simple IP-based Rate Limiter to prevent brute-force attacks
 const rateLimitMap = new Map();
 const pending2FACodes = new Map();
-const activeSessions = new Map(); // Track last access by IP
+const activeSessions = new Map();
+let ipAuditLogs = []; // Audit log of actions by IP // Track last access by IP
 const failedLogins = []; // Track failed login attempts
 const knownIps = new Set(); // Track known IPs for login
 
@@ -63,6 +64,13 @@ app.use((req, res, next) => {
   const forwarded = req.headers['x-forwarded-for'];
   const ip = forwarded ? forwarded.split(',')[0].trim() : (req.socket.remoteAddress || 'unknown');
   
+  // Check if IP is in blacklist
+  const blockedList = appConfig.blockedIps || [];
+  const isBlocked = blockedList.some(b => (typeof b === 'string' ? b : b.ip) === ip);
+  if (isBlocked) {
+    return res.status(403).json({ error: 'Acceso Denegado: Dirección IP bloqueada por seguridad.' });
+  }
+
   // Track active session for the security tab
   if (!req.path.startsWith('/assets') && !req.path.startsWith('/favicon')) {
     activeSessions.set(ip, {
@@ -72,11 +80,62 @@ app.use((req, res, next) => {
     });
   }
 
+  // Auto-log POST / PUT / DELETE API requests
+  if (req.method !== 'GET' && !req.path.startsWith('/assets') && !req.path.startsWith('/favicon')) {
+    res.on('finish', () => {
+      let category = 'PETICION_API';
+      if (req.path.includes('transfer')) category = 'TRANSFERENCIA';
+      else if (req.path.includes('swap')) category = 'SWAP';
+      else if (req.path.includes('login')) category = 'LOGIN';
+      else if (req.path.includes('config')) category = 'CONFIGURACION';
+      else if (req.path.includes('block') || req.path.includes('terminate')) category = 'SEGURIDAD';
+
+      let bodyStr = '';
+      if (req.body && typeof req.body === 'object') {
+        const safe = { ...req.body };
+        delete safe.password;
+        delete safe.secret;
+        delete safe.privateKey;
+        delete safe.twoFactorCode;
+        bodyStr = JSON.stringify(safe);
+        if (bodyStr.length > 120) bodyStr = bodyStr.slice(0, 120) + '...';
+      }
+
+      logIpAction(
+        ip,
+        category,
+        `${req.method} ${req.path} -> Status ${res.statusCode} | Body: ${bodyStr || '{}'}`,
+        req.path,
+        req
+      );
+    });
+  }
+
   res.setHeader('X-Content-Type-Options', 'nosniff');
   res.setHeader('X-Frame-Options', 'DENY');
   res.setHeader('X-XSS-Protection', '1; mode=block');
   next();
 });
+
+
+function logIpAction(ip, action, details, reqPath, req) {
+  try {
+    const entry = {
+      id: Date.now() + '_' + Math.random().toString(36).substr(2, 4),
+      timestamp: Date.now(),
+      ip: ip || 'unknown',
+      action: action || 'ACCION',
+      details: details || '',
+      path: reqPath || (req ? req.path : ''),
+      userAgent: req ? (req.headers['user-agent'] || 'unknown') : 'system'
+    };
+    ipAuditLogs.unshift(entry);
+    if (ipAuditLogs.length > 500) ipAuditLogs.pop();
+    saveState();
+  } catch(e) {
+    console.error('Error recording IP action audit:', e);
+  }
+}
 
 function rateLimiter(maxRequests = 30, windowMs = 60000) {
   return (req, res, next) => {
@@ -964,7 +1023,7 @@ function saveState() {
     delete safeAppConfig.solanaTrackerApiKey;
     delete safeAppConfig.solanaRpcUrl;
 
-    fs.writeFileSync(tmp, JSON.stringify({ SIM, watchItems, autopilotTradedMints, autopilotRejectedMints, logs, monitorOn, monitorInterval, mode, solMode, appConfig: safeAppConfig, poolConfig: safePoolConfig }));
+    fs.writeFileSync(tmp, JSON.stringify({ SIM, watchItems, autopilotTradedMints, autopilotRejectedMints, logs, monitorOn, monitorInterval, mode, solMode, ipAuditLogs, appConfig: safeAppConfig, poolConfig: safePoolConfig }));
     fs.renameSync(tmp, STATE_FILE);
   } catch (e) {
     console.error("Error guardando estado:", e);
@@ -980,6 +1039,7 @@ function loadState() {
       if (data.autopilotTradedMints) autopilotTradedMints = data.autopilotTradedMints;
       if (data.autopilotRejectedMints) autopilotRejectedMints = data.autopilotRejectedMints;
       if (data.logs) logs = data.logs;
+      if (data.ipAuditLogs) ipAuditLogs = data.ipAuditLogs;
       if (data.monitorOn !== undefined) monitorOn = data.monitorOn;
       if (data.monitorInterval) monitorInterval = data.monitorInterval;
       if (data.mode) mode = data.mode;
@@ -6314,7 +6374,48 @@ app.get('/api/admin/active-sessions', adminAuth, (req, res) => {
     }
     sessions.push({ ip, ...data });
   }
-  res.json({ success: true, sessions, failedLogins });
+  res.json({ 
+    success: true, 
+    sessions, 
+    failedLogins,
+    blockedIps: appConfig.blockedIps || [],
+    ipAuditLogs: ipAuditLogs || []
+  });
+});
+
+app.post('/api/admin/terminate-session', adminAuth, (req, res) => {
+  const { ip } = req.body;
+  if (!ip) return res.status(400).json({ error: 'IP requerida' });
+  activeSessions.delete(ip);
+  saveState();
+  res.json({ success: true, message: `Sesión de IP ${ip} eliminada.` });
+});
+
+app.post('/api/admin/block-ip', adminAuth, (req, res) => {
+  const { ip, reason } = req.body;
+  if (!ip) return res.status(400).json({ error: 'IP requerida' });
+  if (!appConfig.blockedIps) appConfig.blockedIps = [];
+  
+  const exists = appConfig.blockedIps.some(b => (typeof b === 'string' ? b : b.ip) === ip);
+  if (!exists) {
+    appConfig.blockedIps.push({
+      ip,
+      reason: reason || 'Bloqueado manualmente desde el panel de seguridad',
+      blockedAt: Date.now()
+    });
+  }
+  activeSessions.delete(ip);
+  saveState();
+  res.json({ success: true, message: `IP ${ip} bloqueada correctamente.` });
+});
+
+app.post('/api/admin/unblock-ip', adminAuth, (req, res) => {
+  const { ip } = req.body;
+  if (!ip) return res.status(400).json({ error: 'IP requerida' });
+  if (!appConfig.blockedIps) appConfig.blockedIps = [];
+  appConfig.blockedIps = appConfig.blockedIps.filter(b => (typeof b === 'string' ? b : b.ip) !== ip);
+  saveState();
+  res.json({ success: true, message: `IP ${ip} desbloqueada correctamente.` });
 });
 
 app.post('/api/transfer-funds', adminAuth, async (req, res) => {
