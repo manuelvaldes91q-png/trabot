@@ -58,7 +58,8 @@ const activeSessions = new Map(); // Track last access by IP
 
 // Global session tracking & Security headers
 app.use((req, res, next) => {
-  const ip = req.headers['x-forwarded-for'] || req.socket.remoteAddress || 'unknown';
+  const forwarded = req.headers['x-forwarded-for'];
+  const ip = forwarded ? forwarded.split(',')[0].trim() : (req.socket.remoteAddress || 'unknown');
   
   // Track active session for the security tab
   if (!req.path.startsWith('/assets') && !req.path.startsWith('/favicon')) {
@@ -2721,7 +2722,7 @@ const rpcHealthStats = new Map(); // url -> { successes: 0, errors: 0, lastError
 
 function markRpcBad(url, reason) {
   if (!url) return;
-  console.log(`[RPC Rotation] Excluyendo temporalmente RPC ${url} por error: ${reason}`);
+  // console.log(`[RPC Rotation] Excluyendo temporalmente RPC ${url} por error: ${reason}`);
   badRpcBlacklist.set(url, Date.now());
   const stats = rpcHealthStats.get(url) || { successes: 0, errors: 0 };
   stats.errors++;
@@ -3736,7 +3737,7 @@ function connectSolanaWs() {
   const wssUrl = getSolanaWssUrl(rpcUrl);
   solanaWsUrl = wssUrl;
   
-  console.log(`[WS Solana] Connecting to ${wssUrl}`);
+  // console.log(`[WS Solana] Connecting to ${wssUrl}`);
   
   try {
     solanaWs = new WebSocket(wssUrl);
@@ -3744,7 +3745,7 @@ function connectSolanaWs() {
     solanaWs.on('open', () => {
       wsReconnectDelay = 5000; // Reset delay on success
       addLog(`🔌 WebSocket de Solana conectado exitosamente (${wssUrl.split('?')[0]}).`, 'info');
-      console.log(`[WS Solana] Connected to ${wssUrl}`);
+      // console.log(`[WS Solana] Connected to ${wssUrl}`);
       
       // Clear mappings on new connection
       wsReqMap = {};
@@ -3774,7 +3775,7 @@ function connectSolanaWs() {
             const subId = msg.result;
             wsSubIdToAddress[subId] = address;
             wsAddressToSubId[address] = subId;
-            console.log(`[WS Solana] Subscribed to address ${address} with subId ${subId}`);
+            // console.log(`[WS Solana] Subscribed to address ${address} with subId ${subId}`);
             delete wsReqMap[msg.id];
           }
         }
@@ -3784,7 +3785,7 @@ function connectSolanaWs() {
           const subId = msg.params.subscription;
           const address = wsSubIdToAddress[subId];
           if (address) {
-            console.log(`🔔 [WS Solana] Change detected on ${address}!`);
+            // console.log(`🔔 [WS Solana] Change detected on ${address}!`);
             triggerSolanaCycleFast();
           }
         }
@@ -3899,7 +3900,7 @@ async function syncSolanaSubscriptions() {
         };
         try {
           solanaWs.send(JSON.stringify(req));
-          console.log(`[WS Solana] Sent unsubscribe for subId ${subId} (Address: ${addr})`);
+          // console.log(`[WS Solana] Sent unsubscribe for subId ${subId} (Address: ${addr})`);
         } catch (e) {
           console.error(`[WS Solana] Error sending unsubscribe for ${addr}:`, e.message);
         }
@@ -3931,7 +3932,7 @@ async function syncSolanaSubscriptions() {
       try {
         solanaWs.send(JSON.stringify(req));
         addLog(`🔌 WebSocket Solana: Suscribiendo a cambios para ${mint.slice(0, 8)}... (Pool: ${addr.slice(0, 8)}...)`, 'info');
-        console.log(`[WS Solana] Sent subscribe for ${addr}`);
+        // console.log(`[WS Solana] Sent subscribe for ${addr}`);
       } catch (e) {
         console.error(`[WS Solana] Error sending subscribe for ${addr}:`, e.message);
       }
