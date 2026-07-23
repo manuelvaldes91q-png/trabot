@@ -54,9 +54,19 @@ app.disable('x-powered-by');
 // Simple IP-based Rate Limiter to prevent brute-force attacks
 const rateLimitMap = new Map();
 const pending2FACodes = new Map();
+const activeSessions = new Map(); // Track last access by IP
+
 function rateLimiter(maxRequests = 30, windowMs = 60000) {
   return (req, res, next) => {
     const ip = req.headers['x-forwarded-for'] || req.socket.remoteAddress || 'unknown';
+    
+    // Track active session
+    activeSessions.set(ip, {
+      lastAccess: Date.now(),
+      userAgent: req.headers['user-agent'] || 'unknown',
+      path: req.path
+    });
+    
     const now = Date.now();
     const clientData = rateLimitMap.get(ip) || { count: 0, resetTime: now + windowMs };
 
@@ -6222,9 +6232,63 @@ app.post('/api/swap-sol-usdc', adminAuth, async (req, res) => {
   }
 });
 
+app.get('/api/admin/active-sessions', adminAuth, (req, res) => {
+  const sessions = [];
+  const now = Date.now();
+  // Clean up old sessions (older than 30 mins) while iterating
+  for (const [ip, data] of activeSessions.entries()) {
+    if (now - data.lastAccess > 30 * 60 * 1000) {
+      activeSessions.delete(ip);
+      continue;
+    }
+    sessions.push({ ip, ...data });
+  }
+  res.json({ success: true, sessions });
+});
+
 app.post('/api/transfer-funds', adminAuth, async (req, res) => {
   try {
-    const { asset, destination, amount } = req.body;
+    const { asset, destination, amount, twoFactorCode } = req.body;
+
+    // --- 2FA SECURITY CHECK VIA TELEGRAM ---
+    const tgToken = appConfig.tgBotToken || process.env.TELEGRAM_BOT_TOKEN;
+    const tgChat = appConfig.tgChatId || process.env.TELEGRAM_CHAT_ID;
+
+    if (tgToken && tgChat) {
+      if (!twoFactorCode) {
+        // Generate a 6-digit random code
+        const newCode = Math.floor(100000 + Math.random() * 900000).toString();
+        pending2FACodes.set('transfer_2fa', {
+          code: newCode,
+          expiresAt: Date.now() + 5 * 60 * 1000 // 5 minutes validity
+        });
+
+        const msg = `🛡️ <b>Verificación de Transferencia</b>\n\nSe ha solicitado una transferencia de fondos:\n<b>Monto:</b> ${amount} ${asset}\n<b>Destino:</b> <code>${destination}</code>\n\nTu código de seguridad es: <code>${newCode}</code>\n\n<i>Si no solicitaste esta operación, revisa la seguridad de tu panel inmediatamente.</i>`;
+        await sendTelegram(msg);
+
+        return res.json({ 
+          requires2FA: true, 
+          message: 'Se requiere código 2FA enviado a Telegram para confirmar la transferencia.' 
+        });
+      }
+
+      // Verify code
+      const active2FA = pending2FACodes.get('transfer_2fa');
+      if (!active2FA || Date.now() > active2FA.expiresAt) {
+        return res.status(401).json({ error: 'El código 2FA ha expirado o no ha sido solicitado.' });
+      }
+
+      if (String(twoFactorCode).trim() !== active2FA.code) {
+        sendTelegram(`🚨 <b>ALERTA: Código 2FA de Transferencia INCORRECTO</b>\n\nSe ingresó un código erróneo para transferir ${amount} ${asset} a <code>${destination}</code>.`).catch(() => {});
+        return res.status(401).json({ error: 'Código 2FA incorrecto.' });
+      }
+
+      // Code valid -> consume it
+      pending2FACodes.delete('transfer_2fa');
+      sendTelegram(`✅ <b>Transferencia Autorizada</b>\n\nCódigo 2FA validado correctamente para el envío de ${amount} ${asset}.`).catch(() => {});
+    }
+    // --- END 2FA ---
+
     if (!asset || !['SOL', 'USDC', 'USDT'].includes(asset)) {
       return res.status(400).json({ error: 'Asset inválido (debe ser SOL, USDC o USDT)' });
     }

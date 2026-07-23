@@ -269,6 +269,8 @@ function switchTab(tabId) {
     if (tabId === 'config' && typeof loadRpcStatus === 'function') loadRpcStatus();
   } else if (tabId === 'pool') {
     if (typeof loadPoolData === 'function') loadPoolData();
+  } else if (tabId === 'security') {
+    if (typeof loadSecurityData === 'function') loadSecurityData();
   }
 }
 window.addEventListener('DOMContentLoaded', () => {
@@ -286,6 +288,7 @@ window.addEventListener('DOMContentLoaded', () => {
   <button id="tabbtn-config" class="tab-btn" onclick="switchTab('config')">⚙️ Configuración</button>
   <button id="tabbtn-history" class="tab-btn" onclick="switchTab('history')">📜 Historial</button>
   <button id="tabbtn-swap" class="tab-btn" onclick="switchTab('swap')">🔄 Swap</button>
+  <button id="tabbtn-security" class="tab-btn" onclick="switchTab('security')">🛡️ Seguridad</button>
 </div>
 
 <!-- HEADER -->
@@ -5345,14 +5348,101 @@ addLog('DIP HUNTER v6 listo — Escáner + Monitor 10s + Auto-Ejecución + Edito
       <div class="lbl" style="font-size:14px; margin-bottom:8px;">Monto</div>
       <input type="number" id="sendAmount" class="inp" placeholder="0.0" step="any" style="margin-bottom:15px; font-size:15px; padding:10px; width:100%;">
 
-      <button class="btn btn-b" style="width:100%; padding:12px; font-size:14px;" onclick="executeTransfer()">Enviar Fondos</button>
+      <div id="send2faGroup" style="display:none;">
+        <div class="lbl" style="font-size:14px; margin-bottom:8px; color:var(--b);">Código 2FA (Telegram)</div>
+        <input type="text" id="send2faCode" class="inp" placeholder="Ingresa el código de 6 dígitos" style="margin-bottom:15px; font-size:15px; padding:10px; width:100%; border:1px solid var(--b);">
+      </div>
+
+      <button id="sendBtn" class="btn btn-b" style="width:100%; padding:12px; font-size:14px;" onclick="executeTransfer()">Enviar Fondos</button>
       <div id="sendResult" style="margin-top:15px; font-size:12px; color:var(--t2);"></div>
     </div>
 
   </div>
 </div>
 
+<!-- SECURITY TAB -->
+<div class="tab-panel" id="tab-security" style="display:none; padding:20px; height:100%; overflow-y:auto;">
+  <div style="max-width:1000px; margin:0 auto;">
+    <h2 style="font-family:var(--mono); font-size:18px; margin-bottom:20px; display:flex; align-items:center; gap:10px;">
+      <span style="background:rgba(59,130,246,0.15); padding:8px; border-radius:8px; color:var(--b);">🛡️</span> Seguridad y Sesiones
+    </h2>
+    
+    <div style="background:var(--bg2); border:1px solid var(--bdr); border-radius:12px; padding:25px; margin-bottom:25px; box-shadow:0 4px 15px rgba(0,0,0,0.1);">
+      <div style="display:flex; justify-content:space-between; align-items:center; margin-bottom:20px;">
+        <div>
+          <div style="font-size:15px; font-weight:bold; color:var(--t); margin-bottom:5px;">Sesiones Activas (IP)</div>
+          <div style="font-size:12px; color:var(--t2);">Monitoreo en tiempo real de accesos al panel administrativo.</div>
+        </div>
+        <button class="btn" style="font-size:11px; padding:6px 12px; background:var(--bg3); border:1px solid var(--bdr);" onclick="loadSecurityData()">🔄 Refrescar</button>
+      </div>
+      
+      <div style="overflow-x:auto;">
+        <table style="width:100%; border-collapse:collapse; font-size:12px; text-align:left;">
+          <thead>
+            <tr style="border-bottom:2px solid var(--bdr); color:var(--t2);">
+              <th style="padding:12px 10px;">Dirección IP</th>
+              <th style="padding:12px 10px;">Última Actividad</th>
+              <th style="padding:12px 10px;">Endpoint / Ruta</th>
+              <th style="padding:12px 10px;">Dispositivo / User Agent</th>
+            </tr>
+          </thead>
+          <tbody id="securitySessionsList">
+            <tr><td colspan="4" style="padding:30px; text-align:center; color:var(--t2);">Cargando información de seguridad...</td></tr>
+          </tbody>
+        </table>
+      </div>
+    </div>
+
+    <div style="display:grid; grid-template-columns:1fr 1fr; gap:20px;">
+      <div style="background:rgba(0,229,160,0.05); border:1px solid rgba(0,229,160,0.2); border-radius:10px; padding:20px;">
+        <div style="font-size:14px; font-weight:bold; color:var(--g); margin-bottom:10px; display:flex; align-items:center; gap:8px;">
+          <span>✅</span> Protección 2FA Activa
+        </div>
+        <p style="font-size:11.5px; color:var(--t); line-height:1.6; margin:0;">
+          La autenticación de dos factores está habilitada para <b>Inicio de Sesión</b> y <b>Transferencias</b>. 
+          Los códigos se envían automáticamente al Telegram configurado.
+        </p>
+      </div>
+      
+      <div style="background:rgba(239,68,68,0.05); border:1px solid rgba(239,68,68,0.2); border-radius:10px; padding:20px;">
+        <div style="font-size:14px; font-weight:bold; color:var(--r); margin-bottom:10px; display:flex; align-items:center; gap:8px;">
+          <span>⚠️</span> Consejos de Seguridad
+        </div>
+        <p style="font-size:11.5px; color:var(--t); line-height:1.6; margin:0;">
+          Nunca compartas tu <b>contraseña maestra</b> ni el <b>bot token</b> de Telegram. 
+          Si ves una IP desconocida en la lista superior, cambia tus credenciales inmediatamente.
+        </p>
+      </div>
+    </div>
+  </div>
+</div>
+
 <script>
+async function loadSecurityData() {
+  const list = document.getElementById('securitySessionsList');
+  try {
+    const r = await myFetch('/api/admin/active-sessions');
+    const d = await r.json();
+    if (!d.success) throw new Error(d.error);
+    
+    if (!d.sessions || d.sessions.length === 0) {
+      list.innerHTML = '<tr><td colspan="4" style="padding:20px; text-align:center; color:var(--t2);">No hay sesiones activas registradas.</td></tr>';
+      return;
+    }
+    
+    list.innerHTML = d.sessions.map(s => `
+      <tr style="border-bottom:1px solid var(--bdr);">
+        <td style="padding:12px 10px; font-family:var(--mono); color:var(--b); font-weight:bold;">${s.ip}</td>
+        <td style="padding:12px 10px;">${new Date(s.lastAccess).toLocaleTimeString()} <span style="font-size:9px; color:var(--t2);">(${Math.floor((Date.now()-s.lastAccess)/1000)}s ago)</span></td>
+        <td style="padding:12px 10px;"><span class="tag tb">${s.path}</span></td>
+        <td style="padding:12px 10px; font-size:10px; color:var(--t2); max-width:250px; overflow:hidden; text-overflow:ellipsis; white-space:nowrap;" title="${s.userAgent}">${s.userAgent}</td>
+      </tr>
+    `).join('');
+  } catch (e) {
+    list.innerHTML = `<tr><td colspan="4" style="padding:20px; text-align:center; color:var(--r);">Error al cargar sesiones: ${e.message}</td></tr>`;
+  }
+}
+
 let quoteTimeout = null;
 async function updateSwapQuote() {
   const amount = parseFloat(document.getElementById('swapAmount').value);
@@ -5500,18 +5590,29 @@ async function executeTransfer() {
     return;
   }
 
-  resultDiv.textContent = 'Enviando fondos...';
+  resultDiv.textContent = 'Procesando...';
   try {
+    const twoFactorCode = document.getElementById('send2faCode').value;
     const r = await myFetch('/api/transfer-funds', {
       method: 'POST',
-      body: JSON.stringify({ asset, destination, amount })
+      body: JSON.stringify({ asset, destination, amount, twoFactorCode })
     });
 
     const d = await r.json();
+
+    if (d.requires2FA) {
+      document.getElementById('send2faGroup').style.display = 'block';
+      document.getElementById('send2faCode').focus();
+      resultDiv.innerHTML = `<span style="color:var(--b)">🔐 ${d.message}</span>`;
+      return;
+    }
+
     if (d.success) {
       resultDiv.innerHTML = `<span style="color:var(--g)">✅ Envío exitoso! TxID: <a href="https://solscan.io/tx/${d.txid}" target="_blank" style="color:var(--b); text-decoration:underline;">${d.txid.slice(0, 8)}...${d.txid.slice(-8)}</a></span>`;
       document.getElementById('sendDest').value = '';
       document.getElementById('sendAmount').value = '';
+      document.getElementById('send2faCode').value = '';
+      document.getElementById('send2faGroup').style.display = 'none';
     } else {
       resultDiv.textContent = '❌ Error: ' + d.error;
     }
