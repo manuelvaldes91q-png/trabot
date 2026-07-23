@@ -6333,9 +6333,10 @@ app.post('/api/swap-sol-usdc', adminAuth, async (req, res) => {
 });
 
 app.get('/api/admin/active-sessions', adminAuth, (req, res) => {
+  const forwarded = req.headers['x-forwarded-for'];
+  const yourIp = forwarded ? forwarded.split(',')[0].trim() : (req.socket.remoteAddress || 'unknown');
   const sessions = [];
   const now = Date.now();
-  // Clean up old sessions (older than 30 mins) while iterating
   for (const [ip, data] of activeSessions.entries()) {
     if (now - data.lastAccess > 30 * 60 * 1000) {
       activeSessions.delete(ip);
@@ -6345,6 +6346,7 @@ app.get('/api/admin/active-sessions', adminAuth, (req, res) => {
   }
   res.json({ 
     success: true, 
+    yourIp,
     sessions, 
     failedLogins,
     blockedIps: appConfig.blockedIps || [],
@@ -6352,7 +6354,7 @@ app.get('/api/admin/active-sessions', adminAuth, (req, res) => {
   });
 });
 
-app.post('/api/admin/terminate-session', adminAuth, (req, res) => {
+const _dummyOldEndpoint = app.post('/api/admin/terminate-session', adminAuth, (req, res) => {
   const { ip } = req.body;
   if (!ip) return res.status(400).json({ error: 'IP requerida' });
   activeSessions.delete(ip);

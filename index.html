@@ -5711,25 +5711,36 @@ async function loadSecurityData() {
     const d = await r.json();
     if (!d.success) throw new Error(d.error);
     
+    const myIp = d.yourIp || '';
     if (!d.sessions || d.sessions.length === 0) {
       list.innerHTML = '<tr><td colspan="5" style="padding:20px; text-align:center; color:var(--t2);">No hay sesiones activas registradas.</td></tr>';
     } else {
-      list.innerHTML = d.sessions.map(s => `
-        <tr style="border-bottom:1px solid var(--bdr);">
-          <td style="padding:12px 10px; font-family:var(--mono); color:var(--b); font-weight:bold;">${escapeHtml(s.ip)}</td>
+      list.innerHTML = d.sessions.map(s => {
+        const isMySession = Boolean(myIp && s.ip === myIp);
+        const ipDisplay = isMySession 
+          ? `<span style="color:#10b981; font-weight:bold;">${escapeHtml(s.ip)}</span> <span class="tag tg" style="margin-left:6px; font-size:10px; padding:2px 6px; background:rgba(16,185,129,0.15); color:#10b981; border:1px solid rgba(16,185,129,0.3);">🟢 TU SESIÓN (Tú)</span>`
+          : `<span style="color:var(--b); font-weight:bold;">${escapeHtml(s.ip)}</span> <span class="tag tr" style="margin-left:6px; font-size:10px; padding:2px 6px; background:rgba(239,68,68,0.15); color:#ef4444; border:1px solid rgba(239,68,68,0.3);">⚠️ Externa / Escáner</span>`;
+        
+        return `
+        <tr style="border-bottom:1px solid var(--bdr); ${isMySession ? 'background: rgba(16,185,129,0.06);' : ''}">
+          <td style="padding:12px 10px; font-family:var(--mono);">${ipDisplay}</td>
           <td style="padding:12px 10px;">${new Date(s.lastAccess).toLocaleTimeString()} <span style="font-size:9px; color:var(--t2);">(${Math.floor((Date.now()-s.lastAccess)/1000)}s ago)</span></td>
-          <td style="padding:12px 10px;"><span class="tag tb">${s.path}</span></td>
+          <td style="padding:12px 10px;"><span class="tag tb">${escapeHtml(s.path)}</span></td>
           <td style="padding:12px 10px; font-size:10px; color:var(--t2); max-width:220px; overflow:hidden; text-overflow:ellipsis; white-space:nowrap;" title="${escapeHtml(s.userAgent)}">${escapeHtml(s.userAgent)}</td>
           <td style="padding:12px 10px;">
-            <div style="display:flex; gap:6px;">
-              <button class="btn btn-r btn-xs" onclick="blockIp('${escapeHtml(s.ip)}')">🚫 Bloquear</button>
-              <button class="btn btn-d btn-xs" onclick="terminateSession('${escapeHtml(s.ip)}')">❌ Cerrar</button>
+            <div style="display:flex; gap:6px; align-items:center;">
+              ${isMySession ? '<span style="font-size:11px; color:#10b981; font-weight:bold;">🛡️ Sesión Activa</span>' : `
+                <button class="btn btn-r btn-xs" onclick="blockIp('${escapeHtml(s.ip)}')">🚫 Bloquear IP</button>
+                <button class="btn btn-d btn-xs" onclick="terminateSession('${escapeHtml(s.ip)}')">❌ Cerrar</button>
+              `}
             </div>
           </td>
         </tr>
-      `).join('');
+      `;
+      }).join('');
     }
 
+    window.lastAuditLogs = d.ipAuditLogs || [];
     window.lastAuditLogs = d.ipAuditLogs || [];
     renderAuditLogs();
     if (!blockedList) return;
