@@ -1572,7 +1572,9 @@ async function loadConfigData() {
       validateSolanaKey();
     }
   } catch(e) {
-    console.error('Error loading config:', e);
+    if (e.message !== 'Unauthorized') {
+      console.error('Error loading config:', e);
+    }
   }
 }
 
