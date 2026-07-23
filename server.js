@@ -7081,7 +7081,9 @@ app.get('/api/state', async (req, res) => {
       usdt: solanaUsdtBalance,
       baseToken: appConfig.solanaBaseToken || 'SOL'
     },
-    solanaSwapLogs
+    solanaSwapLogs,
+    activeCriticalRpc: getRpcEndpoints(true)[0] || null,
+    activeNonCriticalRpc: getRpcEndpoints()[0] || null
   });
 });
 
