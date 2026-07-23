@@ -1664,7 +1664,7 @@ async function closeEmptyTokenAccounts(connection, ownerPk, feePayerPk = null) {
     }
     
     transaction.feePayer = feePayerKeypair.publicKey;
-    const { blockhash } = await withRpcFallback(c => c.getLatestBlockhash('confirmed'));
+    const { blockhash } = await withRpcFallback(c => c.getLatestBlockhash('confirmed'), true);
     transaction.recentBlockhash = blockhash;
     
     if (feePayerPk && feePayerPk !== ownerPk) {
@@ -1673,9 +1673,9 @@ async function closeEmptyTokenAccounts(connection, ownerPk, feePayerPk = null) {
       transaction.sign(ownerKeypair);
     }
     
-    const txid = await withRpcFallback(c => c.sendRawTransaction(transaction.serialize(), { skipPreflight: false, maxRetries: 3 }));
+    const txid = await withRpcFallback(c => c.sendRawTransaction(transaction.serialize(), { skipPreflight: false, maxRetries: 3 }), true);
     try {
-      await withRpcFallback(c => c.confirmTransaction(txid, 'confirmed'));
+      await withRpcFallback(c => c.confirmTransaction(txid, 'confirmed'), true);
     } catch(e) {
       console.warn('Rent recovery tx confirmation warning:', e.message || e);
     }
@@ -2789,9 +2789,20 @@ function getRpcEndpoints(isCritical = false) {
     }
   }
 
+
   endpoints = [...new Set(endpoints.filter(Boolean))];
+
+  // Filter by user-defined roles
+  const roles = appConfig.rpcRoles || {};
+  endpoints = endpoints.filter(url => {
+    const r = roles[url] || 'all';
+    if (isCritical) return r === 'all' || r === 'critical';
+    return r === 'all' || r === 'monitoring';
+  });
+
   const validEndpoints = endpoints.filter(u => !badRpcBlacklist.has(u));
   return validEndpoints.length > 0 ? validEndpoints : endpoints;
+
 }
 
 const SLIPPAGE_ESCALATION_FACTORS = [1, 1.3, 1.6, 2.0, 2.5, 3.0];
@@ -5479,6 +5490,10 @@ app.post('/api/login', async (req, res) => {
     }
 
     if (String(code).trim() !== active2FA.code) {
+      active2FA.attempts = (active2FA.attempts || 0) + 1;
+      if (active2FA.attempts >= 3) {
+         pending2FACodes.delete('admin_2fa');
+      }
       failedLogins.unshift({ ip, userAgent, reason: '2FA incorrecto', timestamp: Date.now() });
       if (failedLogins.length > 50) failedLogins.pop();
       sendTelegram(`🚨 <b>ALERTA DE SEGURIDAD: Código 2FA INCORRECTO</b>\n\nSe ingresó un código de verificación 2FA ERRÓNEO en el Panel Admin.\nIP: <code>${ip}</code>`).catch(() => {});
@@ -5933,10 +5948,17 @@ app.get('/api/pool/backup', adminAuth, (req, res) => {
   }
 });
 
+
 app.get('/api/solana/rpc-status', adminAuth, (req, res) => {
   const rpcs = getRpcEndpoints();
+  const criticalRpcs = getRpcEndpoints(true);
+  const activeNonCriticalRpc = rpcs.length > 0 ? rpcs[0] : null;
+  const activeCriticalRpc = criticalRpcs.length > 0 ? criticalRpcs[0] : null;
+  
+  const envRpcs = Object.keys(process.env).filter(k => k.includes('RPC_URL') || k.includes('RPC')).map(k => process.env[k]).filter(v => typeof v === 'string' && v.startsWith('http'));
   const addrs = appConfig.additionalRpcUrls || [];
-  const allBase = [...new Set([appConfig.solanaRpcUrl, process.env.SOLANA_RPC_URL, ...addrs, ...RPC_ENDPOINTS_BASE].filter(Boolean))];
+  const allBase = [...new Set([appConfig.solanaRpcUrl, ...envRpcs, ...addrs, ...RPC_ENDPOINTS_BASE, "https://mainnet.helius-rpc.com/?api-key=9fc11e40-bd50-4889-8d77-628dcd98b3c8", "https://solana.lava.build"].filter(Boolean))];
+
   const statusList = allBase.map(url => {
     const isBlacklisted = badRpcBlacklist.has(url);
     const stats = rpcHealthStats.get(url) || { successes: 0, errors: 0, lastLatency: 0, status: 'unknown' };
@@ -5955,12 +5977,35 @@ app.get('/api/solana/rpc-status', adminAuth, (req, res) => {
     success: true, 
     activeEndpointsCount: rpcs.length, 
     endpoints: statusList, 
+
     additionalRpcUrls: addrs,
-    rpcPriorityList: appConfig.rpcPriorityList || []
+    rpcPriorityList: appConfig.rpcPriorityList || [],
+    rpcRoles: appConfig.rpcRoles || {},
+    activeCriticalRpc,
+    activeNonCriticalRpc
   });
 });
 
+app.post('/api/solana/update-rpc-role', adminAuth, async (req, res) => {
+  const { url, role } = req.body;
+  if (!url) return res.status(400).json({ error: 'URL requerida' });
+  
+  if (!appConfig.rpcRoles) {
+    appConfig.rpcRoles = {};
+  }
+  
+  if (role === 'all') {
+    delete appConfig.rpcRoles[url];
+  } else {
+    appConfig.rpcRoles[url] = role;
+  }
+  
+  saveState();
+  res.json({ success: true, rpcRoles: appConfig.rpcRoles });
+});
+
 app.post('/api/solana/test-rpc', adminAuth, async (req, res) => {
+
   const { url } = req.body;
   if (!url || typeof url !== 'string' || !url.trim()) {
     return res.status(400).json({ error: 'URL requerida' });
@@ -6305,6 +6350,10 @@ app.post('/api/transfer-funds', adminAuth, async (req, res) => {
       }
 
       if (String(twoFactorCode).trim() !== active2FA.code) {
+        active2FA.attempts = (active2FA.attempts || 0) + 1;
+        if (active2FA.attempts >= 3) {
+           pending2FACodes.delete('transfer_2fa');
+        }
         sendTelegram(`🚨 <b>ALERTA: Código 2FA de Transferencia INCORRECTO</b>\n\nSe ingresó un código erróneo para transferir ${amount} ${asset} a <code>${destination}</code>.`).catch(() => {});
         return res.status(401).json({ error: 'Código 2FA incorrecto.' });
       }

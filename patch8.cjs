@@ -1,58 +1,9 @@
 const fs = require('fs');
-let server = fs.readFileSync('server.js', 'utf8');
+let code = fs.readFileSync('index.html', 'utf8');
 
-const target2 = `        // Verifica si el precio bajó hasta el punto de entrada
-        if (cp <= o.price * 1.005) {
-          o.status = 'filled'; 
-          o.filledAt = Date.now(); 
-          o.filledPrice = cp;
-          
-          if (!w.filledBuys) w.filledBuys = [];
-          w.filledBuys.push({ price: cp, amount: o.amount, level: o.level });
-          
-          addLog(\`⚡ [Solana Instant] Disparando swap compra para \${w.symbol} a $\${fpZ(cp,cp)}...\`, 'info');
-          const realRes = await executeOrder(w, 'BUY', o.amount, cp);
-          if (realRes && realRes.ok) {
-            if (solMode !== 'wallet' && solMode !== 'pool') {
-                SIM.balance -= o.amount;
-                SIM.solBalance += (o.amount / cp);
-            }
-            SIM.totalExec++;
-            addLog(\`✅ COMPRA SOLANA COMPLETADA: \${w.symbol} (Nivel \${o.level}) a $\${fpZ(cp,cp)}\`, 'buy');
-          } else {
-            o.status = 'pending';
-            o.filledAt = null;
-            o.filledPrice = null;
-            w.filledBuys.pop();
-            addLog(\`⚠️ Falló la orden real en Solana. Volviendo a pendiente.\`, 'warn');
-          }
-        }`;
+code = code.replace(
+  'Agrega tus nodos RPC personalizados (ej. Alchemy, Quicknode, Helius) y establécelos como prioritarios en el orden deseado. Los nodos de la lista de prioridad se usarán secuencialmente; el resto actuará como failover en rotación.',
+  'Agrega tus nodos RPC personalizados (ej. Alchemy, Quicknode, Helius) y establécelos como prioritarios en el orden deseado. Los nodos de la lista de prioridad se usarán secuencialmente; el resto actuará como failover en rotación.'
+); // Do nothing really, just verify I have no stray things
 
-const replacement2 = `        // Verifica si el precio bajó hasta el punto de entrada
-        if (cp <= o.price * 1.005) {
-          addLog(\`⚡ [Solana Instant] Disparando swap compra para \${w.symbol} a $\${fpZ(cp,cp)}...\`, 'info');
-          const realRes = await executeOrder(w, 'BUY', o.amount, cp);
-          if (realRes && realRes.ok) {
-            const finalPrice = realRes.exactPrice || cp;
-            w.currentPrice = finalPrice;
-            o.status = 'filled'; 
-            o.filledAt = Date.now(); 
-            o.filledPrice = finalPrice;
-            const executedAmount = realRes.exactAmountUSDT || o.amount;
-            
-            if (!w.filledBuys) w.filledBuys = [];
-            w.filledBuys.push({ price: finalPrice, amount: executedAmount, level: o.level });
-            
-            if (solMode !== 'wallet' && solMode !== 'pool') {
-                SIM.balance -= executedAmount;
-                SIM.solBalance += (executedAmount / finalPrice);
-            }
-            SIM.totalExec++;
-            addLog(\`✅ COMPRA SOLANA COMPLETADA: \${w.symbol} (Nivel \${o.level}) a $\${fpZ(finalPrice,finalPrice)}\`, 'buy');
-          } else {
-             addLog(\`⚠️ Falló la orden real en Solana.\`, 'warn');
-          }
-        }`;
-
-server = server.replace(target2, replacement2);
-fs.writeFileSync('server.js', server);
+fs.writeFileSync('index.html', code);
