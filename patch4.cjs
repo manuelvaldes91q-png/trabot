@@ -1,38 +1,9 @@
 const fs = require('fs');
-let server = fs.readFileSync('server.js', 'utf8');
+let code = fs.readFileSync('index.html', 'utf8');
 
-const target = `      addLog(\`⚡ [Compra Mercado Rápida] Disparando swap compra para \${w.symbol} de $\${amount}...\`, 'info');
-      const realRes = await executeOrder(w, 'BUY', amount, cp);
-      if (realRes && realRes.ok) {
-        const order = {
-          level: w.orders.length + 1,
-          price: cp,
-          amount: amount,
-          sl, tp1, tp2,
-          note: 'Compra de Mercado Rápida',
-          status: 'filled',
-          type: 'dca',
-          filledAt: Date.now(),
-          filledPrice: cp
-        };`;
+code = code.replace(
+  'Agrega tus propios nodos RPC personalizados. El sistema los prueba automáticamente al agregarlos y los integra de inmediato en la rotación y failover inteligente.',
+  'Agrega tus nodos RPC personalizados y establécelos como prioritarios en el orden deseado. Los nodos de la lista de prioridad se usarán secuencialmente; el resto actuará como failover en rotación.'
+);
 
-const replacement = `      addLog(\`⚡ [Compra Mercado Rápida] Disparando swap compra para \${w.symbol} de $\${amount}...\`, 'info');
-      const realRes = await executeOrder(w, 'BUY', amount, cp);
-      if (realRes && realRes.ok) {
-        const finalPrice = realRes.exactPrice || cp;
-        w.currentPrice = finalPrice;
-        
-        const order = {
-          level: w.orders.length + 1,
-          price: finalPrice,
-          amount: realRes.exactAmountUSDT || amount,
-          sl, tp1, tp2,
-          note: 'Compra de Mercado Rápida',
-          status: 'filled',
-          type: 'dca',
-          filledAt: Date.now(),
-          filledPrice: finalPrice
-        };`;
-
-server = server.replace(target, replacement);
-fs.writeFileSync('server.js', server);
+fs.writeFileSync('index.html', code);

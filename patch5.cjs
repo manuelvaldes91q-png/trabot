@@ -1,64 +1,35 @@
 const fs = require('fs');
-let server = fs.readFileSync('server.js', 'utf8');
+let code = fs.readFileSync('server.js', 'utf8');
 
-const target = `     let allOk = true;
-     let totalExactAmountUSDT = 0;
-     const mainTxid = 'pool_multi';
+const replacement = `
+  const HELIUS_RPC = "https://mainnet.helius-rpc.com/?api-key=9fc11e40-bd50-4889-8d77-628dcd98b3c8";
+  const LAVA_RPC = "https://solana.lava.build";
+  const configured = appConfig.solanaRpcUrl || process.env.SOLANA_RPC_URL;
+  const addrs = appConfig.additionalRpcUrls || [];
+  
+  let customRpcs = [...new Set([configured, ...addrs].filter(Boolean))];
+  let base = RPC_ENDPOINTS_BASE.filter(u => !customRpcs.includes(u) && u !== HELIUS_RPC && u !== LAVA_RPC);
 
-     addLog(\`👥 Ejecutando trade \${side} en \${activeInvestors.length} wallets del pool...\`, 'info');
+  let endpoints = [];
 
-     for (const inv of activeInvestors) {
-        const invShare = inv.deposit / totalDeposit;
-        const invAmountUSDT = amountUSDT * invShare;
-        if (invAmountUSDT < 0.5) { 
-           addLog(\`⏭️ Saltando \${inv.name} por monto muy pequeño ($\${invAmountUSDT.toFixed(2)})\`, 'info');
-           continue;
-        }
+  // If user defined a strict priority list, use it directly (respecting their exact order), then append others
+  if (appConfig.rpcPriorityList && appConfig.rpcPriorityList.length > 0) {
+    let prioritySet = new Set(appConfig.rpcPriorityList);
+    let fallback = [HELIUS_RPC, LAVA_RPC, ...customRpcs, ...base].filter(u => !prioritySet.has(u));
+    endpoints = [...appConfig.rpcPriorityList, ...fallback];
+  } else {
+    if (isCritical) {
+      endpoints = [HELIUS_RPC, LAVA_RPC, ...customRpcs, ...base];
+    } else {
+      endpoints = [LAVA_RPC, ...customRpcs, ...base, HELIUS_RPC];
+    }
+  }
 
-        const adminPk = poolConfig.privateKey || appConfig.solanaPrivateKey || process.env.SOLANA_PRIVATE_KEY;
-        const res = await executeSolanaTradeInternal(w, side, invAmountUSDT, price, inv.depositWalletPk, adminPk);
-        if (res.ok) {
-           if (res.exactAmountUSDT) totalExactAmountUSDT += res.exactAmountUSDT;
-        } else {
-           allOk = false;
-        }
+  endpoints = [...new Set(endpoints.filter(Boolean))];
+  const validEndpoints = endpoints.filter(u => !badRpcBlacklist.has(u));
+  return validEndpoints.length > 0 ? validEndpoints : endpoints;
+`;
 
-        await new Promise(r => setTimeout(r, 500)); // avoid rate limits
-     }
+code = code.replace(/  \/\/ If user defined a strict priority list, use it directly \(respecting their exact order\)[\s\S]*?return validEndpoints\.length > 0 \? validEndpoints : endpoints;\n/m, replacement);
 
-     return { ok: allOk, txid: mainTxid, exactAmountUSDT: totalExactAmountUSDT };`;
-
-const replacement = `     let allOk = true;
-     let totalExactAmountUSDT = 0;
-     let totalTokens = 0;
-     const mainTxid = 'pool_multi';
-
-     addLog(\`👥 Ejecutando trade \${side} en \${activeInvestors.length} wallets del pool...\`, 'info');
-
-     for (const inv of activeInvestors) {
-        const invShare = inv.deposit / totalDeposit;
-        const invAmountUSDT = amountUSDT * invShare;
-        if (invAmountUSDT < 0.5) { 
-           addLog(\`⏭️ Saltando \${inv.name} por monto muy pequeño ($\${invAmountUSDT.toFixed(2)})\`, 'info');
-           continue;
-        }
-
-        const adminPk = poolConfig.privateKey || appConfig.solanaPrivateKey || process.env.SOLANA_PRIVATE_KEY;
-        const res = await executeSolanaTradeInternal(w, side, invAmountUSDT, price, inv.depositWalletPk, adminPk);
-        if (res.ok) {
-           if (res.exactAmountUSDT) totalExactAmountUSDT += res.exactAmountUSDT;
-           if (res.exactTokens) totalTokens += res.exactTokens;
-        } else {
-           allOk = false;
-        }
-
-        await new Promise(r => setTimeout(r, 500)); // avoid rate limits
-     }
-
-     let avgExactPrice = price;
-     if (totalTokens > 0 && totalExactAmountUSDT > 0) avgExactPrice = totalExactAmountUSDT / totalTokens;
-
-     return { ok: allOk, txid: mainTxid, exactAmountUSDT: totalExactAmountUSDT, exactPrice: avgExactPrice, exactTokens: totalTokens };`;
-
-server = server.replace(target, replacement);
-fs.writeFileSync('server.js', server);
+fs.writeFileSync('server.js', code);

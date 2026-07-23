@@ -55,6 +55,8 @@ app.disable('x-powered-by');
 const rateLimitMap = new Map();
 const pending2FACodes = new Map();
 const activeSessions = new Map(); // Track last access by IP
+const failedLogins = []; // Track failed login attempts
+const knownIps = new Set(); // Track known IPs for login
 
 // Global session tracking & Security headers
 app.use((req, res, next) => {
@@ -258,6 +260,7 @@ let appConfig = {
   solanaPrivateKey: process.env.SOLANA_PRIVATE_KEY || '',
   solanaRpcUrl: process.env.SOLANA_RPC_URL || 'https://api.mainnet-beta.solana.com',
   additionalRpcUrls: [],
+  rpcPriorityList: [],
   solanaBaseToken: process.env.SOLANA_BASE_TOKEN || 'SOL',
   solanaSlippage: process.env.SOLANA_SLIPPAGE ? parseFloat(process.env.SOLANA_SLIPPAGE) : 2.5,
   solanaPriorityFee: process.env.SOLANA_PRIORITY_FEE || 'auto',
@@ -2762,47 +2765,33 @@ function getRpcEndpoints(isCritical = false) {
     if (now - ts > 15000) badRpcBlacklist.delete(url); // 15s expire for rate limits / errors
   }
 
+
+  const HELIUS_RPC = "https://mainnet.helius-rpc.com/?api-key=9fc11e40-bd50-4889-8d77-628dcd98b3c8";
+  const LAVA_RPC = "https://solana.lava.build";
   const configured = appConfig.solanaRpcUrl || process.env.SOLANA_RPC_URL;
   const addrs = appConfig.additionalRpcUrls || [];
   
-  // Priority: Configured + User Custom
-  let priority = [...new Set([configured, ...addrs].filter(Boolean))];
-  
-  // Base: Public endpoints minus what is already in priority
-  let base = RPC_ENDPOINTS_BASE.filter(u => !priority.includes(u));
+  let customRpcs = [...new Set([configured, ...addrs].filter(Boolean))];
+  let base = RPC_ENDPOINTS_BASE.filter(u => !customRpcs.includes(u) && u !== HELIUS_RPC && u !== LAVA_RPC);
 
-  const validPriority = priority.filter(u => !badRpcBlacklist.has(u));
-  const validBase = base.filter(u => !badRpcBlacklist.has(u));
+  let endpoints = [];
 
-  // If a group is completely blacklisted, fallback to trying them anyway
-  const finalPriority = validPriority.length > 0 ? validPriority : (priority.length > 0 ? priority : []);
-  const finalBase = validBase.length > 0 ? validBase : base;
-
-  // Internal rotation for priority
-  let rotatedPriority = [];
-  if (finalPriority.length > 0) {
-    priorityRotationIndex = (priorityRotationIndex + 1) % finalPriority.length;
-    for (let i = 0; i < finalPriority.length; i++) {
-      rotatedPriority.push(finalPriority[(priorityRotationIndex + i) % finalPriority.length]);
+  // If user defined a strict priority list, use it directly (respecting their exact order), then append others
+  if (appConfig.rpcPriorityList && appConfig.rpcPriorityList.length > 0) {
+    let prioritySet = new Set(appConfig.rpcPriorityList);
+    let fallback = [HELIUS_RPC, LAVA_RPC, ...customRpcs, ...base].filter(u => !prioritySet.has(u));
+    endpoints = [...appConfig.rpcPriorityList, ...fallback];
+  } else {
+    if (isCritical) {
+      endpoints = [HELIUS_RPC, LAVA_RPC, ...customRpcs, ...base];
+    } else {
+      endpoints = [LAVA_RPC, ...customRpcs, ...base, HELIUS_RPC];
     }
   }
 
-  // Internal rotation for base
-  let rotatedBase = [];
-  if (finalBase.length > 0) {
-    baseRotationIndex = (baseRotationIndex + 1) % finalBase.length;
-    for (let i = 0; i < finalBase.length; i++) {
-      rotatedBase.push(finalBase[(baseRotationIndex + i) % finalBase.length]);
-    }
-  }
-
-  // CRITICAL: If NOT critical (e.g. background monitoring), ONLY use public RPCs to save user credits
-  if (!isCritical && rotatedBase.length > 0) {
-    return rotatedBase;
-  }
-
-  // Always return priority first, then base. Both internally rotated.
-  return [...rotatedPriority, ...rotatedBase];
+  endpoints = [...new Set(endpoints.filter(Boolean))];
+  const validEndpoints = endpoints.filter(u => !badRpcBlacklist.has(u));
+  return validEndpoints.length > 0 ? validEndpoints : endpoints;
 }
 
 const SLIPPAGE_ESCALATION_FACTORS = [1, 1.3, 1.6, 2.0, 2.5, 3.0];
@@ -5447,9 +5436,14 @@ app.post('/api/action', adminAuth, async (req, res) => {
 
 app.post('/api/login', async (req, res) => {
   const { password, code } = req.body || {};
+  const forwarded = req.headers['x-forwarded-for'];
+  const ip = forwarded ? forwarded.split(',')[0].trim() : (req.socket.remoteAddress || 'unknown');
+  const userAgent = req.headers['user-agent'] || 'unknown';
 
   if (!checkValidPassword(password)) {
-    sendTelegram(`🚨 <b>ALERTA DE SEGURIDAD: Intento de Acceso Fallido</b>\n\nSe ingresó una contraseña de administrador INCORRECTA desde la Web.`).catch(() => {});
+    failedLogins.unshift({ ip, userAgent, reason: 'Contraseña incorrecta', timestamp: Date.now() });
+    if (failedLogins.length > 50) failedLogins.pop();
+    sendTelegram(`🚨 <b>ALERTA DE SEGURIDAD: Intento de Acceso Fallido</b>\n\nSe ingresó una contraseña de administrador INCORRECTA desde la Web.\n\nIP: <code>${ip}</code>\nDispositivo: <code>${userAgent}</code>`).catch(() => {});
     return res.status(401).json({ error: 'Contraseña incorrecta' });
   }
 
@@ -5466,7 +5460,7 @@ app.post('/api/login', async (req, res) => {
         expiresAt: Date.now() + 5 * 60 * 1000 // 5 minutos de validez
       });
 
-      const sentMsg = `🔐 <b>Código de Seguridad 2FA - Panel Admin</b>\n\nSe ha solicitado acceso al Panel Administrativo.\n\nTu código de verificación es: <code>${newCode}</code>\n\n<i>Este código vence en 5 minutos. Si no solicitaste este acceso, por favor mantén tus llaves seguras.</i>`;
+      const sentMsg = `🔐 <b>Código de Seguridad 2FA - Panel Admin</b>\n\nSe ha solicitado acceso al Panel Administrativo desde:\nIP: <code>${ip}</code>\nDispositivo: <code>${userAgent}</code>\n\nTu código de verificación es: <code>${newCode}</code>\n\n<i>Este código vence en 5 minutos. Si no solicitaste este acceso, por favor mantén tus llaves seguras.</i>`;
       await sendTelegram(sentMsg);
 
       return res.json({
@@ -5478,24 +5472,36 @@ app.post('/api/login', async (req, res) => {
     // Verificar código 2FA
     const active2FA = pending2FACodes.get('admin_2fa');
     if (!active2FA || Date.now() > active2FA.expiresAt) {
-      sendTelegram(`⚠️ <b>ALERTA DE SEGURIDAD: Código 2FA Expirado</b>\n\nSe intentó verificar un código 2FA caducado o no solicitado.`).catch(() => {});
+      failedLogins.unshift({ ip, userAgent, reason: '2FA expirado/ausente', timestamp: Date.now() });
+      if (failedLogins.length > 50) failedLogins.pop();
+      sendTelegram(`⚠️ <b>ALERTA DE SEGURIDAD: Código 2FA Expirado</b>\n\nSe intentó verificar un código 2FA caducado o no solicitado.\nIP: <code>${ip}</code>`).catch(() => {});
       return res.status(401).json({ error: 'El código 2FA ha expirado o no ha sido solicitado. Por favor solicita uno nuevo.' });
     }
 
     if (String(code).trim() !== active2FA.code) {
-      sendTelegram(`🚨 <b>ALERTA DE SEGURIDAD: Código 2FA INCORRECTO</b>\n\nSe ingresó un código de verificación 2FA ERRÓNEO en el Panel Admin.`).catch(() => {});
+      failedLogins.unshift({ ip, userAgent, reason: '2FA incorrecto', timestamp: Date.now() });
+      if (failedLogins.length > 50) failedLogins.pop();
+      sendTelegram(`🚨 <b>ALERTA DE SEGURIDAD: Código 2FA INCORRECTO</b>\n\nSe ingresó un código de verificación 2FA ERRÓNEO en el Panel Admin.\nIP: <code>${ip}</code>`).catch(() => {});
       return res.status(401).json({ error: 'Código 2FA incorrecto. Revisa Telegram e inténtalo de nuevo.' });
     }
 
     // Código válido -> consumimos el código
     pending2FACodes.delete('admin_2fa');
+  }
 
-    // Notificación de seguridad en Telegram
-    sendTelegram(`✅ <b>Acceso Concedido</b>\n\nSesión iniciada con éxito en el Panel Admin (Verificación 2FA completada).`).catch(() => {});
+  // Check if IP is new
+  const isNewIp = knownIps.size > 0 && !knownIps.has(ip);
+  knownIps.add(ip);
+
+  if (isNewIp && tgToken && tgChat) {
+    sendTelegram(`🌍 <b>ALERTA DE SEGURIDAD: Nuevo Acceso Detectado</b>\n\nSe ha iniciado sesión desde una nueva ubicación/IP desconocida:\nIP: <code>${ip}</code>\nDispositivo: <code>${userAgent}</code>\n\n<i>Si fuiste tú, puedes ignorar este mensaje. Si no lo reconoces, cambia tu contraseña inmediatamente.</i>`).catch(() => {});
+  } else if (tgToken && tgChat) {
+    // Notificación de seguridad en Telegram (normal)
+    sendTelegram(`✅ <b>Acceso Concedido</b>\n\nSesión iniciada con éxito en el Panel Admin (Verificación completada).\nIP: <code>${ip}</code>`).catch(() => {});
   }
 
   const pwd = password;
-  res.json({ status: 'ok', token: pwd });
+  res.json({ status: 'ok', token: pwd, newIpDetected: isNewIp });
 });
 
 app.post('/api/investor/login', async (req, res) => {
@@ -5945,7 +5951,13 @@ app.get('/api/solana/rpc-status', adminAuth, (req, res) => {
       isCustom: addrs.includes(url)
     };
   });
-  res.json({ success: true, activeEndpointsCount: rpcs.length, endpoints: statusList, additionalRpcUrls: addrs });
+  res.json({ 
+    success: true, 
+    activeEndpointsCount: rpcs.length, 
+    endpoints: statusList, 
+    additionalRpcUrls: addrs,
+    rpcPriorityList: appConfig.rpcPriorityList || []
+  });
 });
 
 app.post('/api/solana/test-rpc', adminAuth, async (req, res) => {
@@ -6007,6 +6019,16 @@ app.post('/api/solana/remove-rpc', adminAuth, async (req, res) => {
     saveState();
   }
   res.json({ success: true, additionalRpcUrls: appConfig.additionalRpcUrls || [] });
+});
+
+app.post('/api/solana/update-rpc-priority', adminAuth, async (req, res) => {
+  const { list } = req.body;
+  if (Array.isArray(list)) {
+    appConfig.rpcPriorityList = list.filter(u => typeof u === 'string' && u.trim());
+    saveState();
+    return res.json({ success: true, rpcPriorityList: appConfig.rpcPriorityList });
+  }
+  res.status(400).json({ error: 'Invalid list' });
 });
 
 app.get('/api/quote-sol-usdc', adminAuth, async (req, res) => {
@@ -6247,7 +6269,7 @@ app.get('/api/admin/active-sessions', adminAuth, (req, res) => {
     }
     sessions.push({ ip, ...data });
   }
-  res.json({ success: true, sessions });
+  res.json({ success: true, sessions, failedLogins });
 });
 
 app.post('/api/transfer-funds', adminAuth, async (req, res) => {

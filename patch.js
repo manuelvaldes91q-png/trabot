@@ -1,54 +1,23 @@
 const fs = require('fs');
-let html = fs.readFileSync('index.html', 'utf8');
+let code = fs.readFileSync('server.js', 'utf8');
 
-const target = `  if (!amount || +amount <= 0) return;
-  
-  myFetch('/api/action', {
-    method: 'POST', 
-    headers: {'Content-Type': 'application/json'}, 
-    body: JSON.stringify({
-      action: 'quickMarketBuy', 
-      payload: { 
-        symbol: curDet.symbol, 
-        network: curDet.network, 
-        address: curDet.address, 
-        pair: curDet.pair, 
-        amount: +amount 
-      }
-    })
-  }).then(r => r.json()).then(d => {`;
+const replacement = `
+  const now = Date.now();
+  for (const [url, ts] of badRpcBlacklist.entries()) {
+    if (now - ts > 15000) badRpcBlacklist.delete(url);
+  }
 
-const replacement = `  if (!amount || +amount <= 0) return;
-  
-  const slStr = prompt('Stop Loss (%)', '10');
-  if (slStr === null) return;
-  const sl = +slStr;
-  
-  const tp1Str = prompt('Take Profit 1 (%)', '8');
-  if (tp1Str === null) return;
-  const tp1 = +tp1Str;
-  
-  const tp2Str = prompt('Take Profit 2 (%)', '15');
-  if (tp2Str === null) return;
-  const tp2 = +tp2Str;
-  
-  myFetch('/api/action', {
-    method: 'POST', 
-    headers: {'Content-Type': 'application/json'}, 
-    body: JSON.stringify({
-      action: 'quickMarketBuy', 
-      payload: { 
-        symbol: curDet.symbol, 
-        network: curDet.network, 
-        address: curDet.address, 
-        pair: curDet.pair, 
-        amount: +amount,
-        sl: sl,
-        tp1: tp1,
-        tp2: tp2
-      }
-    })
-  }).then(r => r.json()).then(d => {`;
+  // If user defined a strict priority list in appConfig, use it
+  if (appConfig.rpcPriorityList && appConfig.rpcPriorityList.length > 0) {
+    let endpoints = [...appConfig.rpcPriorityList];
+    const validEndpoints = endpoints.filter(u => !badRpcBlacklist.has(u));
+    return validEndpoints.length > 0 ? validEndpoints : endpoints;
+  }
 
-html = html.replace(target, replacement);
-fs.writeFileSync('index.html', html);
+  const HELIUS_RPC = "https://mainnet.helius-rpc.com/?api-key=9fc11e40-bd50-4889-8d77-628dcd98b3c8";
+  const LAVA_RPC = "https://solana.lava.build";
+`;
+
+code = code.replace(/  const now = Date.now\(\);\n  for \(const \[url, ts\] of badRpcBlacklist\.entries\(\)\) \{\n    if \(now - ts > 15000\) badRpcBlacklist\.delete\(url\); \/\/ 15s expire for rate limits \/ errors\n  \}\n\n  const HELIUS_RPC = "https:\/\/mainnet\.helius-rpc\.com\/\?api-key=9fc11e40-bd50-4889-8d77-628dcd98b3c8";\n  const LAVA_RPC = "https:\/\/solana\.lava\.build";/, replacement);
+
+fs.writeFileSync('server.js', code);
