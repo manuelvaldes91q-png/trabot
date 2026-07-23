@@ -64,50 +64,39 @@ app.use((req, res, next) => {
   const forwarded = req.headers['x-forwarded-for'];
   const ip = forwarded ? forwarded.split(',')[0].trim() : (req.socket.remoteAddress || 'unknown');
   
-  // Check if IP is in blacklist
+  // 1. Check if IP is in blacklist
   const blockedList = appConfig.blockedIps || [];
   const isBlocked = blockedList.some(b => (typeof b === 'string' ? b : b.ip) === ip);
   if (isBlocked) {
     return res.status(403).json({ error: 'Acceso Denegado: Dirección IP bloqueada por seguridad.' });
   }
 
-  // Track active session for the security tab
-  if (!req.path.startsWith('/assets') && !req.path.startsWith('/favicon')) {
+  // 2. Auto-block suspicious scanners probing bad paths
+  const reqPathLower = req.path.toLowerCase();
+  const isScannerPath = ['/mcp', '/xxx', '/.env', '/wp-admin', '/phpmyadmin', '/.git', '/actuator', '/shell', '/eval', '/config.php'].some(p => reqPathLower.startsWith(p));
+  
+  if (isScannerPath) {
+    if (!appConfig.blockedIps) appConfig.blockedIps = [];
+    appConfig.blockedIps.push({
+      ip,
+      reason: `Bloqueo Automático: Intento de escaneo en ruta sospechosa (${req.path})`,
+      blockedAt: Date.now()
+    });
+    activeSessions.delete(ip);
+    saveState();
+    logIpAction(ip, 'SEGURIDAD', `🚫 AUTO-BLOQUEO: Escaneo detectado en ${req.path}`, req.path, req);
+    return res.status(403).json({ error: 'IP bloqueada por detección de escaneo malicioso.' });
+  }
+
+  // 3. Track active session ONLY for admin API or real panel activity (exclude automated bot user-agents and assets)
+  const ua = (req.headers['user-agent'] || '').toLowerCase();
+  const isBot = ua.includes('infrawatch') || ua.includes('bot') || ua.includes('crawler') || ua.includes('spider') || ua.includes('headless');
+  
+  if (!req.path.startsWith('/assets') && !req.path.startsWith('/favicon') && !isBot) {
     activeSessions.set(ip, {
       lastAccess: Date.now(),
       userAgent: req.headers['user-agent'] || 'unknown',
       path: req.path
-    });
-  }
-
-  // Auto-log POST / PUT / DELETE API requests
-  if (req.method !== 'GET' && !req.path.startsWith('/assets') && !req.path.startsWith('/favicon')) {
-    res.on('finish', () => {
-      let category = 'PETICION_API';
-      if (req.path.includes('transfer')) category = 'TRANSFERENCIA';
-      else if (req.path.includes('swap')) category = 'SWAP';
-      else if (req.path.includes('login')) category = 'LOGIN';
-      else if (req.path.includes('config')) category = 'CONFIGURACION';
-      else if (req.path.includes('block') || req.path.includes('terminate')) category = 'SEGURIDAD';
-
-      let bodyStr = '';
-      if (req.body && typeof req.body === 'object') {
-        const safe = { ...req.body };
-        delete safe.password;
-        delete safe.secret;
-        delete safe.privateKey;
-        delete safe.twoFactorCode;
-        bodyStr = JSON.stringify(safe);
-        if (bodyStr.length > 120) bodyStr = bodyStr.slice(0, 120) + '...';
-      }
-
-      logIpAction(
-        ip,
-        category,
-        `${req.method} ${req.path} -> Status ${res.statusCode} | Body: ${bodyStr || '{}'}`,
-        req.path,
-        req
-      );
     });
   }
 
@@ -116,26 +105,6 @@ app.use((req, res, next) => {
   res.setHeader('X-XSS-Protection', '1; mode=block');
   next();
 });
-
-
-function logIpAction(ip, action, details, reqPath, req) {
-  try {
-    const entry = {
-      id: Date.now() + '_' + Math.random().toString(36).substr(2, 4),
-      timestamp: Date.now(),
-      ip: ip || 'unknown',
-      action: action || 'ACCION',
-      details: details || '',
-      path: reqPath || (req ? req.path : ''),
-      userAgent: req ? (req.headers['user-agent'] || 'unknown') : 'system'
-    };
-    ipAuditLogs.unshift(entry);
-    if (ipAuditLogs.length > 500) ipAuditLogs.pop();
-    saveState();
-  } catch(e) {
-    console.error('Error recording IP action audit:', e);
-  }
-}
 
 function rateLimiter(maxRequests = 30, windowMs = 60000) {
   return (req, res, next) => {
