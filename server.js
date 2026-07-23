@@ -56,17 +56,28 @@ const rateLimitMap = new Map();
 const pending2FACodes = new Map();
 const activeSessions = new Map(); // Track last access by IP
 
-function rateLimiter(maxRequests = 30, windowMs = 60000) {
-  return (req, res, next) => {
-    const ip = req.headers['x-forwarded-for'] || req.socket.remoteAddress || 'unknown';
-    
-    // Track active session
+// Global session tracking & Security headers
+app.use((req, res, next) => {
+  const ip = req.headers['x-forwarded-for'] || req.socket.remoteAddress || 'unknown';
+  
+  // Track active session for the security tab
+  if (!req.path.startsWith('/assets') && !req.path.startsWith('/favicon')) {
     activeSessions.set(ip, {
       lastAccess: Date.now(),
       userAgent: req.headers['user-agent'] || 'unknown',
       path: req.path
     });
-    
+  }
+
+  res.setHeader('X-Content-Type-Options', 'nosniff');
+  res.setHeader('X-Frame-Options', 'DENY');
+  res.setHeader('X-XSS-Protection', '1; mode=block');
+  next();
+});
+
+function rateLimiter(maxRequests = 30, windowMs = 60000) {
+  return (req, res, next) => {
+    const ip = req.headers['x-forwarded-for'] || req.socket.remoteAddress || 'unknown';
     const now = Date.now();
     const clientData = rateLimitMap.get(ip) || { count: 0, resetTime: now + windowMs };
 
@@ -85,14 +96,6 @@ function rateLimiter(maxRequests = 30, windowMs = 60000) {
     next();
   };
 }
-
-// Security headers middleware
-app.use((req, res, next) => {
-  res.setHeader('X-Content-Type-Options', 'nosniff');
-  res.setHeader('X-Frame-Options', 'DENY');
-  res.setHeader('X-XSS-Protection', '1; mode=block');
-  next();
-});
 
 app.use(express.json({ limit: '1mb' }));
 app.use('/api/login', rateLimiter(10, 60000));
