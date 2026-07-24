@@ -397,6 +397,7 @@ let appConfig = {
   solanaRpcUrl: process.env.SOLANA_RPC_URL || 'https://api.mainnet-beta.solana.com',
   additionalRpcUrls: [],
   rpcPriorityList: [],
+  rpcRoles: {},
   solanaBaseToken: process.env.SOLANA_BASE_TOKEN || 'SOL',
   solanaSlippage: process.env.SOLANA_SLIPPAGE ? parseFloat(process.env.SOLANA_SLIPPAGE) : 2.5,
   solanaPriorityFee: process.env.SOLANA_PRIORITY_FEE || 'auto',
@@ -1108,9 +1109,6 @@ function saveState() {
     delete safeAppConfig.dextoolsApiKey;
     delete safeAppConfig.twitterBearerToken;
     delete safeAppConfig.solanaTrackerApiKey;
-    delete safeAppConfig.solanaRpcUrl;
-    delete safeAppConfig.additionalRpcUrls;
-    delete safeAppConfig.rpcRoles;
 
     fs.writeFileSync(tmp, JSON.stringify({ SIM, watchItems, autopilotTradedMints, autopilotRejectedMints, logs, monitorOn, monitorInterval, mode, solMode, ipAuditLogs, appConfig: safeAppConfig, poolConfig: safePoolConfig }));
     fs.renameSync(tmp, STATE_FILE);
@@ -1133,7 +1131,12 @@ function loadState() {
       if (data.monitorInterval) monitorInterval = data.monitorInterval;
       if (data.mode) mode = data.mode;
       if (data.solMode) solMode = data.solMode;
-      if (data.appConfig) appConfig = {...appConfig, ...data.appConfig};
+      if (data.appConfig) {
+        appConfig = { ...appConfig, ...data.appConfig };
+        if (Array.isArray(data.appConfig.additionalRpcUrls)) appConfig.additionalRpcUrls = data.appConfig.additionalRpcUrls;
+        if (Array.isArray(data.appConfig.rpcPriorityList)) appConfig.rpcPriorityList = data.appConfig.rpcPriorityList;
+        if (data.appConfig.rpcRoles && typeof data.appConfig.rpcRoles === 'object') appConfig.rpcRoles = data.appConfig.rpcRoles;
+      }
       if (data.poolConfig) {
         const envPrivateKey = process.env.POOL_PRIVATE_KEY || process.env.SOLANA_PRIVATE_KEY || '';
         poolConfig = { ...data.poolConfig, privateKey: envPrivateKey };
@@ -7774,6 +7777,15 @@ app.post('/api/config', adminAuth, (req, res) => {
     } else if (typeof req.body.squadsMembers === 'string') {
       appConfig.squadsMembers = req.body.squadsMembers.split(',').map(s => s.trim()).filter(Boolean);
     }
+  }
+  if(req.body.additionalRpcUrls !== undefined && Array.isArray(req.body.additionalRpcUrls)) {
+    appConfig.additionalRpcUrls = req.body.additionalRpcUrls;
+  }
+  if(req.body.rpcPriorityList !== undefined && Array.isArray(req.body.rpcPriorityList)) {
+    appConfig.rpcPriorityList = req.body.rpcPriorityList;
+  }
+  if(req.body.rpcRoles !== undefined && typeof req.body.rpcRoles === 'object') {
+    appConfig.rpcRoles = req.body.rpcRoles;
   }
   saveState();
   res.json({ status: 'ok', config: getSafeAppConfig() });
