@@ -6322,7 +6322,7 @@ app.post('/api/swap-sol-usdc', adminAuth, async (req, res) => {
     }
 
     // Balance checks
-    const solBal = await withRpcFallback(c => getTokenUiBalance(c, userPublicKey, 'So11111111111111111111111111111111111111112'));
+    const solBal = await withRpcFallback(c => getTokenUiBalance(c, userPublicKey, 'So11111111111111111111111111111111111111112'), true);
     
     if (inputSymbol === 'SOL') {
       const disponible = Math.max(0, solBal - RESERVA_GAS_SOL);
@@ -6331,7 +6331,7 @@ app.post('/api/swap-sol-usdc', adminAuth, async (req, res) => {
       }
     } else {
       const inputMintToCheck = inputSymbol === 'USDC' ? 'EPjFWdd5AufqSSqeM2qN1xzybapC8G4wEGGkZwyTDt1v' : 'Es9vMFrzaCERmJfrF4H2FYD4KCoNkY11McCe8BenwNYB';
-      const tokenBal = await withRpcFallback(c => getTokenUiBalance(c, userPublicKey, inputMintToCheck));
+      const tokenBal = await withRpcFallback(c => getTokenUiBalance(c, userPublicKey, inputMintToCheck), true);
       if (amount > tokenBal) {
         return res.status(400).json({ error: `Balance insuficiente de ${inputSymbol}. Tienes ${tokenBal.toFixed(2)} ${inputSymbol}.` });
       }
