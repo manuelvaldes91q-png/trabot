@@ -991,6 +991,8 @@ function saveState() {
     delete safeAppConfig.twitterBearerToken;
     delete safeAppConfig.solanaTrackerApiKey;
     delete safeAppConfig.solanaRpcUrl;
+    delete safeAppConfig.additionalRpcUrls;
+    delete safeAppConfig.rpcRoles;
 
     fs.writeFileSync(tmp, JSON.stringify({ SIM, watchItems, autopilotTradedMints, autopilotRejectedMints, logs, monitorOn, monitorInterval, mode, solMode, ipAuditLogs, appConfig: safeAppConfig, poolConfig: safePoolConfig }));
     fs.renameSync(tmp, STATE_FILE);
