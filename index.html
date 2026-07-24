@@ -284,6 +284,18 @@ function switchTab(tabId) {
     if (typeof loadSecurityData === 'function') loadSecurityData();
   }
 }
+window.addEventListener('error', (e) => {
+  if (e && e.message && e.message.includes('disconnected port object')) {
+    e.stopImmediatePropagation();
+    e.preventDefault();
+  }
+}, true);
+window.addEventListener('unhandledrejection', (e) => {
+  if (e && e.reason && (e.reason.message || String(e.reason)).includes('disconnected port object')) {
+    e.stopImmediatePropagation();
+    e.preventDefault();
+  }
+}, true);
 window.addEventListener('DOMContentLoaded', () => {
   const saved = localStorage.getItem('activeTab') || 'dashboard';
   switchTab(saved);
@@ -5563,6 +5575,90 @@ addLog('DIP HUNTER v6 listo — Escáner + Monitor 10s + Auto-Ejecución + Edito
       </div>
     </div>
 
+    <!-- RESUMEN Y DETECCION DE ESCANEOS BLOQUEADOS -->
+    <div style="background:rgba(239,68,68,0.03); border:1px solid rgba(239,68,68,0.25); border-radius:12px; padding:25px; margin-bottom:25px; box-shadow:0 4px 15px rgba(0,0,0,0.1);">
+      <div style="display:flex; justify-content:space-between; align-items:center; margin-bottom:15px; flex-wrap:wrap; gap:10px;">
+        <div>
+          <div style="font-size:16px; font-weight:bold; color:var(--r); display:flex; align-items:center; gap:8px;">
+            <span>🛡️</span> Resumen de Escaneos Sospechosos y Bloqueos Automáticos
+          </div>
+          <div style="font-size:12px; color:var(--t2); margin-top:4px;">
+            Monitoreo proactivo y métricas de ataques/escaneos neutralizados automáticamente por el cortafuegos.
+          </div>
+        </div>
+        <div style="display:flex; gap:8px;">
+          <button class="btn btn-sm" style="background:var(--bg3); border:1px solid var(--bdr); font-size:11px;" onclick="loadSecurityData()">🔄 Actualizar Métricas</button>
+        </div>
+      </div>
+
+      <!-- Tarjetas de Métricas Rápidas -->
+      <div style="display:grid; grid-template-columns:repeat(auto-fit, minmax(180px, 1fr)); gap:12px; margin-bottom:20px;">
+        <div style="background:var(--bg2); border:1px solid var(--bdr); border-radius:8px; padding:14px; text-align:center;">
+          <div style="font-size:11px; color:var(--t2); text-transform:uppercase; font-weight:600; letter-spacing:0.5px;">IPs Bloqueadas</div>
+          <div id="scanStatTotal" style="font-size:24px; font-weight:bold; color:var(--r); margin-top:4px; font-family:var(--mono);">0</div>
+          <div style="font-size:10px; color:var(--t2); margin-top:2px;">En lista negra activa</div>
+        </div>
+        <div style="background:var(--bg2); border:1px solid var(--bdr); border-radius:8px; padding:14px; text-align:center;">
+          <div style="font-size:11px; color:var(--t2); text-transform:uppercase; font-weight:600; letter-spacing:0.5px;">Rutas Sospechosas</div>
+          <div id="scanStatPaths" style="font-size:24px; font-weight:bold; color:#f59e0b; margin-top:4px; font-family:var(--mono);">0</div>
+          <div style="font-size:10px; color:var(--t2); margin-top:2px;">/.env, /mcp, /wp-admin</div>
+        </div>
+        <div style="background:var(--bg2); border:1px solid var(--bdr); border-radius:8px; padding:14px; text-align:center;">
+          <div style="font-size:11px; color:var(--t2); text-transform:uppercase; font-weight:600; letter-spacing:0.5px;">User-Agents Bots</div>
+          <div id="scanStatUa" style="font-size:24px; font-weight:bold; color:#a855f7; margin-top:4px; font-family:var(--mono);">0</div>
+          <div style="font-size:10px; color:var(--t2); margin-top:2px;">Nmap, Python, Masscan</div>
+        </div>
+        <div style="background:var(--bg2); border:1px solid var(--bdr); border-radius:8px; padding:14px; text-align:center;">
+          <div style="font-size:11px; color:var(--t2); text-transform:uppercase; font-weight:600; letter-spacing:0.5px;">Exceso Peticiones</div>
+          <div id="scanStatLimit" style="font-size:24px; font-weight:bold; color:#3b82f6; margin-top:4px; font-family:var(--mono);">0</div>
+          <div style="font-size:10px; color:var(--t2); margin-top:2px;">Rate limit / 404 repetidos</div>
+        </div>
+      </div>
+
+      <!-- Gráfico de Distribución Visual por Tipo de Amenaza -->
+      <div style="background:var(--bg2); border:1px solid var(--bdr); border-radius:8px; padding:14px; margin-bottom:20px;">
+        <div style="display:flex; justify-content:space-between; align-items:center; margin-bottom:8px; font-size:12px; font-weight:bold; color:var(--t);">
+          <span>📊 Distribución por Causa de Bloqueo</span>
+          <span id="scanDistributionText" style="font-size:11px; color:var(--t2); font-weight:normal;">0 amenazas detectadas</span>
+        </div>
+        <div style="height:12px; width:100%; background:var(--bg3); border-radius:6px; overflow:hidden; display:flex;" id="scanProgressBar">
+          <div id="barPaths" style="width:0%; background:#f59e0b; height:100%; transition:width 0.4s;" title="Rutas Sospechosas"></div>
+          <div id="barUa" style="width:0%; background:#a855f7; height:100%; transition:width 0.4s;" title="User-Agent Malicioso"></div>
+          <div id="barLimit" style="width:0%; background:#3b82f6; height:100%; transition:width 0.4s;" title="Exceso de Peticiones"></div>
+          <div id="barManual" style="width:0%; background:#ef4444; height:100%; transition:width 0.4s;" title="Manual/Otros"></div>
+        </div>
+        <div style="display:flex; gap:15px; margin-top:10px; flex-wrap:wrap; font-size:11px; color:var(--t2);">
+          <div style="display:flex; align-items:center; gap:5px;"><span style="width:10px; height:10px; background:#f59e0b; border-radius:2px; display:inline-block;"></span> <span>Rutas Sospechosas (<b id="lblPaths">0%</b>)</span></div>
+          <div style="display:flex; align-items:center; gap:5px;"><span style="width:10px; height:10px; background:#a855f7; border-radius:2px; display:inline-block;"></span> <span>User-Agent Malicioso (<b id="lblUa">0%</b>)</span></div>
+          <div style="display:flex; align-items:center; gap:5px;"><span style="width:10px; height:10px; background:#3b82f6; border-radius:2px; display:inline-block;"></span> <span>Exceso Peticiones / 404 (<b id="lblLimit">0%</b>)</span></div>
+          <div style="display:flex; align-items:center; gap:5px;"><span style="width:10px; height:10px; background:#ef4444; border-radius:2px; display:inline-block;"></span> <span>Manual / Otros (<b id="lblManual">0%</b>)</span></div>
+        </div>
+      </div>
+
+      <!-- Tabla de Intentos de Escaneo Recientes -->
+      <div style="display:flex; justify-content:space-between; align-items:center; margin-bottom:12px; flex-wrap:wrap; gap:8px;">
+        <div style="font-size:13px; font-weight:bold; color:var(--t);">Historial de Escaneos Neutralizados</div>
+        <input type="text" id="scanHistorySearch" placeholder="🔍 Buscar por IP o motivo..." class="inp" style="width:220px; font-size:11px; padding:5px 10px;" oninput="renderScanHistoryTable()">
+      </div>
+
+      <div style="overflow-x:auto;">
+        <table style="width:100%; border-collapse:collapse; font-size:12px; text-align:left;">
+          <thead>
+            <tr style="border-bottom:2px solid var(--bdr); color:var(--t2);">
+              <th style="padding:10px;">Fecha / Hora</th>
+              <th style="padding:10px;">IP Atacante</th>
+              <th style="padding:10px;">Tipo de Amenaza</th>
+              <th style="padding:10px;">Motivo / Detalle del Bloqueo</th>
+              <th style="padding:10px;">Acción</th>
+            </tr>
+          </thead>
+          <tbody id="scanHistoryTableList">
+            <tr><td colspan="5" style="padding:20px; text-align:center; color:var(--t2);">Cargando registro de escaneos...</td></tr>
+          </tbody>
+        </table>
+      </div>
+    </div>
+
     <!-- IPS BLOQUEADAS (LISTA NEGRA) -->
     <div style="background:rgba(239,68,68,0.03); border:1px solid rgba(239,68,68,0.2); border-radius:12px; padding:25px; margin-bottom:25px; box-shadow:0 4px 15px rgba(0,0,0,0.1);">
       <div style="display:flex; justify-content:space-between; align-items:center; margin-bottom:20px; flex-wrap:wrap; gap:10px;">
@@ -5743,8 +5839,8 @@ async function loadSecurityData() {
     }
 
     window.lastAuditLogs = d.ipAuditLogs || [];
-    window.lastAuditLogs = d.ipAuditLogs || [];
     renderAuditLogs();
+    renderScanSummaryData(d);
     if (!blockedList) return;
     if (!d.blockedIps || d.blockedIps.length === 0) {
       blockedList.innerHTML = '<tr><td colspan="4" style="padding:20px; text-align:center; color:var(--t2);">No hay direcciones IP bloqueadas en la lista negra.</td></tr>';
@@ -5782,6 +5878,122 @@ async function loadSecurityData() {
     list.innerHTML = `<tr><td colspan="4" style="padding:20px; text-align:center; color:var(--r);">Error al cargar sesiones: ${e.message}</td></tr>`;
     failedList.innerHTML = `<tr><td colspan="4" style="padding:20px; text-align:center; color:var(--r);">Error al cargar historial: ${e.message}</td></tr>`;
   }
+}
+
+function renderScanSummaryData(d) {
+  const blocked = d.blockedIps || [];
+  const auditLogs = d.ipAuditLogs || [];
+
+  window.lastRawBlockedIps = blocked;
+  window.lastRawAuditLogs = auditLogs;
+
+  let totalBlocked = blocked.length;
+  let countPaths = 0;
+  let countUa = 0;
+  let countLimit = 0;
+  let countManual = 0;
+
+  blocked.forEach(b => {
+    const reason = (typeof b === 'object' && b.reason ? b.reason : String(b)).toLowerCase();
+    if (reason.includes('user-agent') || reason.includes('bot') || reason.includes('ua:')) {
+      countUa++;
+    } else if (reason.includes('escaneo') || reason.includes('ruta') || reason.includes('path') || reason.includes('/mcp')) {
+      countPaths++;
+    } else if (reason.includes('exceso') || reason.includes('404') || reason.includes('intentos') || reason.includes('rate limit')) {
+      countLimit++;
+    } else {
+      countManual++;
+    }
+  });
+
+  const elTotal = document.getElementById('scanStatTotal');
+  const elPaths = document.getElementById('scanStatPaths');
+  const elUa = document.getElementById('scanStatUa');
+  const elLimit = document.getElementById('scanStatLimit');
+
+  if (elTotal) elTotal.textContent = totalBlocked;
+  if (elPaths) elPaths.textContent = countPaths;
+  if (elUa) elUa.textContent = countUa;
+  if (elLimit) elLimit.textContent = countLimit;
+
+  const totalCat = totalBlocked || 1;
+  const pPaths = Math.round((countPaths / totalCat) * 100);
+  const pUa = Math.round((countUa / totalCat) * 100);
+  const pLimit = Math.round((countLimit / totalCat) * 100);
+  const pManual = Math.max(0, 100 - pPaths - pUa - pLimit);
+
+  const barPaths = document.getElementById('barPaths');
+  const barUa = document.getElementById('barUa');
+  const barLimit = document.getElementById('barLimit');
+  const barManual = document.getElementById('barManual');
+
+  if (barPaths) barPaths.style.width = (totalBlocked > 0 ? pPaths : 0) + '%';
+  if (barUa) barUa.style.width = (totalBlocked > 0 ? pUa : 0) + '%';
+  if (barLimit) barLimit.style.width = (totalBlocked > 0 ? pLimit : 0) + '%';
+  if (barManual) barManual.style.width = (totalBlocked > 0 ? pManual : 0) + '%';
+
+  const lblPaths = document.getElementById('lblPaths');
+  const lblUa = document.getElementById('lblUa');
+  const lblLimit = document.getElementById('lblLimit');
+  const lblManual = document.getElementById('lblManual');
+  const txtDist = document.getElementById('scanDistributionText');
+
+  if (lblPaths) lblPaths.textContent = (totalBlocked > 0 ? pPaths : 0) + '%';
+  if (lblUa) lblUa.textContent = (totalBlocked > 0 ? pUa : 0) + '%';
+  if (lblLimit) lblLimit.textContent = (totalBlocked > 0 ? pLimit : 0) + '%';
+  if (lblManual) lblManual.textContent = (totalBlocked > 0 ? pManual : 0) + '%';
+  if (txtDist) txtDist.textContent = `${totalBlocked} IP(s) neutralizadas de forma activa`;
+
+  renderScanHistoryTable();
+}
+
+function renderScanHistoryTable() {
+  const table = document.getElementById('scanHistoryTableList');
+  if (!table) return;
+
+  const blocked = window.lastRawBlockedIps || [];
+  const searchInput = document.getElementById('scanHistorySearch');
+  const query = (searchInput ? searchInput.value : '').trim().toLowerCase();
+
+  let items = blocked.map(b => {
+    const ip = typeof b === 'string' ? b : b.ip;
+    const reason = typeof b === 'object' && b.reason ? b.reason : 'Bloqueado por seguridad';
+    const dateTs = typeof b === 'object' && b.blockedAt ? b.blockedAt : Date.now();
+    
+    let threatBadge = '<span class="tag tr" style="background:rgba(239,68,68,0.15); color:#ef4444; border:1px solid rgba(239,68,68,0.3); font-size:10px; padding:2px 6px;">🛡️ Bloqueo Manual / General</span>';
+
+    const rLower = reason.toLowerCase();
+    if (rLower.includes('user-agent') || rLower.includes('bot') || rLower.includes('ua:')) {
+      threatBadge = '<span class="tag tp" style="background:rgba(168,85,247,0.15); color:#a855f7; border:1px solid rgba(168,85,247,0.3); font-size:10px; padding:2px 6px;">🤖 User-Agent Malicioso</span>';
+    } else if (rLower.includes('escaneo') || rLower.includes('ruta') || rLower.includes('path') || rLower.includes('/mcp')) {
+      threatBadge = '<span class="tag ty" style="background:rgba(245,158,11,0.15); color:#f59e0b; border:1px solid rgba(245,158,11,0.3); font-size:10px; padding:2px 6px;">🛑 Escaneo de Ruta</span>';
+    } else if (rLower.includes('exceso') || rLower.includes('404') || rLower.includes('intentos') || rLower.includes('rate limit')) {
+      threatBadge = '<span class="tag tb" style="background:rgba(59,130,246,0.15); color:#3b82f6; border:1px solid rgba(59,130,246,0.3); font-size:10px; padding:2px 6px;">⚡ Exceso Peticiones (404)</span>';
+    }
+
+    return { ip, reason, dateTs, threatBadge };
+  });
+
+  if (query) {
+    items = items.filter(it => it.ip.toLowerCase().includes(query) || it.reason.toLowerCase().includes(query));
+  }
+
+  if (items.length === 0) {
+    table.innerHTML = `<tr><td colspan="5" style="padding:20px; text-align:center; color:var(--t2);">No hay registros de escaneos bloqueados ${query ? 'que coincidan con la búsqueda' : 'recientemente'}.</td></tr>`;
+    return;
+  }
+
+  table.innerHTML = items.map(it => `
+    <tr style="border-bottom:1px solid var(--bdr);">
+      <td style="padding:10px; font-family:var(--mono); color:var(--t2); font-size:11px;">${new Date(it.dateTs).toLocaleString()}</td>
+      <td style="padding:10px; font-family:var(--mono); font-weight:bold; color:var(--r);">${escapeHtml(it.ip)}</td>
+      <td style="padding:10px;">${it.threatBadge}</td>
+      <td style="padding:10px; color:var(--t); font-size:11.5px; max-width:320px; overflow:hidden; text-overflow:ellipsis; white-space:nowrap;" title="${escapeHtml(it.reason)}">${escapeHtml(it.reason)}</td>
+      <td style="padding:10px;">
+        <button class="btn btn-g btn-xs" onclick="unblockIp('${escapeHtml(it.ip)}')">🟢 Desbloquear</button>
+      </td>
+    </tr>
+  `).join('');
 }
 
 
