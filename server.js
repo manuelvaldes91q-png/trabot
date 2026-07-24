@@ -200,12 +200,15 @@ app.use((req, res, next) => {
   res.setHeader('X-Content-Type-Options', 'nosniff');
   res.setHeader('X-Frame-Options', 'DENY');
   res.setHeader('X-XSS-Protection', '1; mode=block');
+  res.setHeader('Strict-Transport-Security', 'max-age=31536000; includeSubDomains');
+  res.setHeader('Referrer-Policy', 'strict-origin-when-cross-origin');
+  res.setHeader('Permissions-Policy', 'camera=(), microphone=(), geolocation=()');
   next();
 });
 
 function rateLimiter(maxRequests = 30, windowMs = 60000) {
   return (req, res, next) => {
-    const ip = req.headers['x-forwarded-for'] || req.socket.remoteAddress || 'unknown';
+    const ip = req.headers['x-forwarded-for'] ? req.headers['x-forwarded-for'].split(',')[0].trim() : (req.socket.remoteAddress || 'unknown');
     const now = Date.now();
     const clientData = rateLimitMap.get(ip) || { count: 0, resetTime: now + windowMs };
 
@@ -219,6 +222,7 @@ function rateLimiter(maxRequests = 30, windowMs = 60000) {
     rateLimitMap.set(ip, clientData);
 
     if (clientData.count > maxRequests) {
+      recordSuspiciousActivity(ip, req.path, `Exceso de peticiones (${clientData.count}/${maxRequests} en ${windowMs / 1000}s)`, req);
       return res.status(429).json({ error: 'Demasiadas peticiones. Intenta de nuevo más tarde.' });
     }
     next();
@@ -226,8 +230,10 @@ function rateLimiter(maxRequests = 30, windowMs = 60000) {
 }
 
 app.use(express.json({ limit: '1mb' }));
-app.use('/api/login', rateLimiter(10, 60000));
-app.use('/api/investor/login', rateLimiter(10, 60000));
+app.use('/api/login', rateLimiter(8, 60000));
+app.use('/api/investor/login', rateLimiter(8, 60000));
+app.use('/api/admin/transfer-onchain', rateLimiter(10, 60000));
+app.use('/api/admin/swap-market', rateLimiter(15, 60000));
 
 // Middleware de autenticación para rutas admin que mueven fondos reales.
 // Reutiliza la MISMA contraseña que ya usa /api/login (appConfig.appPassword /
@@ -245,12 +251,17 @@ function checkValidPassword(inputPwd) {
 }
 
 function adminAuth(req, res, next) {
+  const forwarded = req.headers['x-forwarded-for'];
+  const ip = forwarded ? forwarded.split(',')[0].trim() : (req.socket.remoteAddress || 'unknown');
   const auth = req.headers.authorization;
+
   if (!auth || !auth.startsWith('Bearer ')) {
+    recordSuspiciousActivity(ip, req.path, 'Intento de acceso admin sin cabecera Authorization', req);
     return res.status(401).json({ error: 'No autorizado' });
   }
   const token = auth.substring(7);
   if (!checkValidPassword(token)) {
+    recordSuspiciousActivity(ip, req.path, 'Intento de acceso admin con contraseña/token incorrecto', req);
     return res.status(401).json({ error: 'No autorizado' });
   }
   next();
