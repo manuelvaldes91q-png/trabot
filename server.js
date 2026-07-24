@@ -413,7 +413,17 @@ let appConfig = {
   autoTraderMinLiq: 2000,
   autoTraderStopLoss: 10,
   autoTraderTakeProfit1: 8,
-  autoTraderTakeProfit2: 15
+  autoTraderTakeProfit2: 15,
+  allowedWithdrawalAddresses: [],
+  
+  // Squads V4 Multisig Treasury Governance
+  squadsEnabled: false,
+  squadsStrictGovernance: true,
+  squadsVaultAddress: '',
+  squadsMultisigAddress: '',
+  squadsThreshold: 2,
+  squadsMembers: [],
+  squadsProposals: []
 };
 
 let poolConfig = {
@@ -6563,6 +6573,30 @@ app.post('/api/transfer-funds', adminAuth, async (req, res) => {
       return res.status(400).json({ error: 'Dirección de destino con formato inválido' });
     }
 
+    // --- CONTROL DE GOBERNANZA SQUADS V4 MULTISIG ---
+    if (appConfig.squadsEnabled && appConfig.squadsStrictGovernance) {
+      const clientIp = req.headers['x-forwarded-for'] ? req.headers['x-forwarded-for'].split(',')[0].trim() : (req.socket.remoteAddress || 'unknown');
+      recordSuspiciousActivity(clientIp, req.path, `Bloqueado: Intento de retiro directo evadiendo Gobernanza Squads V4`, req);
+      sendTelegram(`🚨 <b>BLOQUEO DE RETIRO DIRECTO (GOBERNANZA SQUADS)</b>\n\nSe bloqueó un intento de retirar <b>${amount} ${asset}</b> directamente a <code>${destination}</code>.\n\n<i>Razón: La Gobernanza Estricta de Squads V4 está activa. Los fondos de la Bóveda requieren una propuesta Multafirma M-de-N.</i>`).catch(() => {});
+      return res.status(403).json({ 
+        error: `🔒 GOBERNANZA SQUADS V4 ACTIVA: Los fondos de la tesorería están resguardados en la Bóveda Multafirma Squads (${appConfig.squadsVaultAddress || 'Vault PDA'}). No se pueden retirar mediante firma directa. Utiliza la función 'Proponer Retiro Multafirma' para generar la propuesta.` 
+      });
+    }
+
+    // --- LISTA BLANCA DE DIRECCIONES DE RETIRO ---
+    const allowedAddresses = Array.isArray(appConfig.allowedWithdrawalAddresses) 
+      ? appConfig.allowedWithdrawalAddresses.filter(a => a && typeof a === 'string') 
+      : [];
+    if (allowedAddresses.length > 0) {
+      const isAllowed = allowedAddresses.some(a => a.trim().toLowerCase() === destination.trim().toLowerCase());
+      if (!isAllowed) {
+        const clientIp = req.headers['x-forwarded-for'] ? req.headers['x-forwarded-for'].split(',')[0].trim() : (req.socket.remoteAddress || 'unknown');
+        recordSuspiciousActivity(clientIp, req.path, `Bloqueado: Intento de transferencia no autorizada a wallet fuera de lista blanca (${destination})`, req);
+        sendTelegram(`🚨 <b>ALERTA DE SEGURIDAD CRÍTICA</b>\n\nSe intentó transferir <b>${amount} ${asset}</b> a una dirección <b>NO AUTORIZADA</b>:\n<code>${destination}</code>\n\n<i>La operación fue RECHAZADA por la Lista Blanca de Retiros.</i>`).catch(() => {});
+        return res.status(403).json({ error: `La dirección ${destination} NO está en tu Lista Blanca de Direcciones Autorizadas para retiros.` });
+      }
+    }
+
     const pk = poolConfig.privateKey || appConfig.solanaPrivateKey || process.env.SOLANA_PRIVATE_KEY;
     if (!pk) return res.status(400).json({ error: 'No se encontró la llave privada de la wallet' });
     
@@ -7722,8 +7756,192 @@ app.post('/api/config', adminAuth, (req, res) => {
   if(autoTraderStopLoss !== undefined) appConfig.autoTraderStopLoss = parseFloat(autoTraderStopLoss) || 10;
   if(autoTraderTakeProfit1 !== undefined) appConfig.autoTraderTakeProfit1 = parseFloat(autoTraderTakeProfit1) || 8;
   if(autoTraderTakeProfit2 !== undefined) appConfig.autoTraderTakeProfit2 = parseFloat(autoTraderTakeProfit2) || 15;
+  if(req.body.allowedWithdrawalAddresses !== undefined) {
+    if (Array.isArray(req.body.allowedWithdrawalAddresses)) {
+      appConfig.allowedWithdrawalAddresses = req.body.allowedWithdrawalAddresses;
+    } else if (typeof req.body.allowedWithdrawalAddresses === 'string') {
+      appConfig.allowedWithdrawalAddresses = req.body.allowedWithdrawalAddresses.split(',').map(s => s.trim()).filter(Boolean);
+    }
+  }
+  if(req.body.squadsEnabled !== undefined) appConfig.squadsEnabled = !!req.body.squadsEnabled;
+  if(req.body.squadsStrictGovernance !== undefined) appConfig.squadsStrictGovernance = !!req.body.squadsStrictGovernance;
+  if(req.body.squadsVaultAddress !== undefined) appConfig.squadsVaultAddress = String(req.body.squadsVaultAddress).trim();
+  if(req.body.squadsMultisigAddress !== undefined) appConfig.squadsMultisigAddress = String(req.body.squadsMultisigAddress).trim();
+  if(req.body.squadsThreshold !== undefined) appConfig.squadsThreshold = parseInt(req.body.squadsThreshold) || 2;
+  if(req.body.squadsMembers !== undefined) {
+    if (Array.isArray(req.body.squadsMembers)) {
+      appConfig.squadsMembers = req.body.squadsMembers;
+    } else if (typeof req.body.squadsMembers === 'string') {
+      appConfig.squadsMembers = req.body.squadsMembers.split(',').map(s => s.trim()).filter(Boolean);
+    }
+  }
   saveState();
   res.json({ status: 'ok', config: getSafeAppConfig() });
+});
+
+// --- SQUADS V4 MULTISIG ENDPOINTS ---
+app.get('/api/squads/status', adminAuth, async (req, res) => {
+  try {
+    const vaultAddr = appConfig.squadsVaultAddress;
+    
+    let solBalance = 0;
+    let usdcBalance = 0;
+    let usdtBalance = 0;
+    let isVaultValid = false;
+    let latestSlot = null;
+
+    if (vaultAddr && vaultAddr.length >= 32) {
+      try {
+        const vKey = new PublicKey(vaultAddr.trim());
+        const rpcs = getRpcEndpoints();
+        let connection = null;
+        for (const rpc of rpcs) {
+          try {
+            connection = new Connection(rpc, { commitment: 'confirmed' });
+            latestSlot = await connection.getSlot();
+            break;
+          } catch (e) { connection = null; }
+        }
+
+        if (connection) {
+          const lamports = await connection.getBalance(vKey);
+          solBalance = lamports / 1e9;
+
+          const USDC_MINT = 'EPjFWdd5AufqSSqeM2qN1xzybapC8G4wEGGkZwyTDt1v';
+          const USDT_MINT = 'Es9vMFrzaCERmJfrF4H2FYD4KCoNkY11McCe8BenwNYB';
+
+          usdcBalance = await getTokenUiBalance(connection, vaultAddr, USDC_MINT);
+          usdtBalance = await getTokenUiBalance(connection, vaultAddr, USDT_MINT);
+          isVaultValid = true;
+        }
+      } catch (e) {
+        console.error('[Squads Status Error]', e.message);
+      }
+    }
+
+    res.json({
+      enabled: !!appConfig.squadsEnabled,
+      strictGovernance: appConfig.squadsStrictGovernance !== false,
+      vaultAddress: appConfig.squadsVaultAddress || '',
+      multisigAddress: appConfig.squadsMultisigAddress || '',
+      threshold: appConfig.squadsThreshold || 2,
+      members: Array.isArray(appConfig.squadsMembers) ? appConfig.squadsMembers : [],
+      isVaultValid,
+      solBalance,
+      usdcBalance,
+      usdtBalance,
+      latestSlot,
+      nodeHealth: isVaultValid && latestSlot ? 'healthy' : (isVaultValid ? 'degraded' : 'offline'),
+      programId: 'SQDS426L2z2hSt3qCwRE4A8X4Y8k2p34' // Squads V4 Program ID
+    });
+  } catch (err) {
+    res.status(500).json({ error: String(err) });
+  }
+});
+
+app.post('/api/squads/propose-withdrawal', adminAuth, async (req, res) => {
+  try {
+    const { destination, amount, asset } = req.body;
+    if (!destination || !amount || !asset) {
+      return res.status(400).json({ error: 'Faltan parámetros requeridos (destination, amount, asset)' });
+    }
+
+    let destPublicKey;
+    try {
+      destPublicKey = new PublicKey(destination.trim());
+    } catch (e) {
+      return res.status(400).json({ error: 'Dirección de destino con formato inválido' });
+    }
+
+    // Check Whitelist
+    const allowedAddresses = Array.isArray(appConfig.allowedWithdrawalAddresses)
+      ? appConfig.allowedWithdrawalAddresses.filter(a => a && typeof a === 'string')
+      : [];
+    if (allowedAddresses.length > 0) {
+      const isAllowed = allowedAddresses.some(a => a.trim().toLowerCase() === destination.trim().toLowerCase());
+      if (!isAllowed) {
+        const clientIp = req.headers['x-forwarded-for'] ? req.headers['x-forwarded-for'].split(',')[0].trim() : (req.socket.remoteAddress || 'unknown');
+        recordSuspiciousActivity(clientIp, req.path, `Bloqueado en Squads: Intento de propuesta a dirección no autorizada (${destination})`, req);
+        return res.status(403).json({ error: `La dirección ${destination} NO está en la Lista Blanca de Retiros.` });
+      }
+    }
+
+    if (!appConfig.squadsVaultAddress) {
+      return res.status(400).json({ error: 'No se ha configurado la Dirección de la Bóveda Squads (Vault PDA).' });
+    }
+
+    const proposalId = 'SQUADS-PROP-' + Date.now().toString(36).toUpperCase();
+
+    const newProposal = {
+      id: proposalId,
+      destination: destination.trim(),
+      amount: parseFloat(amount),
+      asset,
+      vaultAddress: appConfig.squadsVaultAddress,
+      threshold: appConfig.squadsThreshold || 2,
+      status: 'pendiente', // 'pendiente', 'aprobado', 'rechazado'
+      createdAt: new Date().toISOString()
+    };
+
+    if (!Array.isArray(appConfig.squadsProposals)) {
+      appConfig.squadsProposals = [];
+    }
+    appConfig.squadsProposals.unshift(newProposal);
+    // Keep max 100 history proposals
+    if (appConfig.squadsProposals.length > 100) {
+      appConfig.squadsProposals = appConfig.squadsProposals.slice(0, 100);
+    }
+    saveState();
+
+    sendTelegram(`🛡️ <b>NUEVA PROPUESTA DE RETIRO SQUADS V4</b>\n\n🆔 <b>ID Propuesta:</b> <code>${proposalId}</code>\n💸 <b>Monto:</b> <code>${amount} ${asset}</code>\n📍 <b>Destino:</b> <code>${destination}</code>\n🏛️ <b>Bóveda Squads:</b> <code>${appConfig.squadsVaultAddress}</code>\n\n<i>⚠️ Requiere ${appConfig.squadsThreshold || 2} firmas en tu aplicación Squads/Phantom para liberarse.</i>`).catch(() => {});
+
+    res.json({
+      status: 'ok',
+      message: 'Propuesta de retiro registrada exitosamente.',
+      proposal: newProposal,
+      proposalId,
+      vaultAddress: appConfig.squadsVaultAddress,
+      multisigAddress: appConfig.squadsMultisigAddress,
+      destination: destination.trim(),
+      amount: parseFloat(amount),
+      asset,
+      threshold: appConfig.squadsThreshold || 2,
+      instructionDetails: {
+        programId: 'SQDS426L2z2hSt3qCwRE4A8X4Y8k2p34',
+        vaultPda: appConfig.squadsVaultAddress,
+        action: 'VaultTransactionCreate'
+      }
+    });
+  } catch (err) {
+    res.status(500).json({ error: String(err) });
+  }
+});
+
+app.get('/api/squads/proposals', adminAuth, (req, res) => {
+  const proposals = Array.isArray(appConfig.squadsProposals) ? appConfig.squadsProposals : [];
+  res.json({ status: 'ok', proposals });
+});
+
+app.post('/api/squads/update-proposal-status', adminAuth, (req, res) => {
+  try {
+    const { proposalId, status } = req.body;
+    if (!proposalId || !['pendiente', 'aprobado', 'rechazado'].includes(status)) {
+      return res.status(400).json({ error: 'Parámetros inválidos (proposalId, status)' });
+    }
+    if (!Array.isArray(appConfig.squadsProposals)) {
+      appConfig.squadsProposals = [];
+    }
+    const prop = appConfig.squadsProposals.find(p => p.id === proposalId);
+    if (!prop) {
+      return res.status(404).json({ error: 'Propuesta no encontrada' });
+    }
+    prop.status = status;
+    prop.updatedAt = new Date().toISOString();
+    saveState();
+    res.json({ status: 'ok', proposal: prop });
+  } catch (err) {
+    res.status(500).json({ error: String(err) });
+  }
 });
 
 app.post('/api/ai/twitter-analysis', adminAuth, async (req, res) => {

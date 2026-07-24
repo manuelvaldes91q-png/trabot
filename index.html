@@ -1566,6 +1566,13 @@ async function loadConfigData() {
       setCheck('cfgUseJitoBundle', currentConfig.useJitoBundle);
       setVal('cfgTgToken', currentConfig.tgBotToken);
       setVal('cfgTgChat', currentConfig.tgChatId);
+      setVal('cfgAllowedWithdrawalAddresses', Array.isArray(currentConfig.allowedWithdrawalAddresses) ? currentConfig.allowedWithdrawalAddresses.join(', ') : (currentConfig.allowedWithdrawalAddresses || ''));
+      setCheck('cfgSquadsEnabled', currentConfig.squadsEnabled);
+      setCheck('cfgSquadsStrictGovernance', currentConfig.squadsStrictGovernance !== false);
+      setVal('cfgSquadsVaultAddress', currentConfig.squadsVaultAddress || '');
+      setVal('cfgSquadsMultisigAddress', currentConfig.squadsMultisigAddress || '');
+      setVal('cfgSquadsThreshold', currentConfig.squadsThreshold || 2);
+      setVal('cfgSquadsMembers', Array.isArray(currentConfig.squadsMembers) ? currentConfig.squadsMembers.join(', ') : (currentConfig.squadsMembers || ''));
       setVal('cfgDextoolsKey', currentConfig.dextoolsApiKey);
       setVal('cfgTwitterKey', currentConfig.twitterBearerToken);
       
@@ -1580,6 +1587,11 @@ async function loadConfigData() {
       setVal('cfgAutoTraderStopLoss', currentConfig.autoTraderStopLoss);
       setVal('cfgAutoTraderTakeProfit1', currentConfig.autoTraderTakeProfit1);
       setVal('cfgAutoTraderTakeProfit2', currentConfig.autoTraderTakeProfit2);
+      
+      toggleSquadsFields(!!currentConfig.squadsEnabled);
+      if (currentConfig.squadsVaultAddress) {
+        refreshSquadsVaultStatus();
+      }
       
       validateSolanaKey();
     }
@@ -1932,6 +1944,15 @@ async function saveConfig() {
     
     if (document.getElementById('cfgTgToken')) payload.tgBotToken = getVal('cfgTgToken');
     if (document.getElementById('cfgTgChat')) payload.tgChatId = getVal('cfgTgChat');
+    if (document.getElementById('cfgAllowedWithdrawalAddresses')) payload.allowedWithdrawalAddresses = getVal('cfgAllowedWithdrawalAddresses');
+    if (document.getElementById('cfgSquadsEnabled')) {
+      payload.squadsEnabled = getCheck('cfgSquadsEnabled');
+      payload.squadsStrictGovernance = getCheck('cfgSquadsStrictGovernance');
+      payload.squadsVaultAddress = getVal('cfgSquadsVaultAddress');
+      payload.squadsMultisigAddress = getVal('cfgSquadsMultisigAddress');
+      payload.squadsThreshold = getVal('cfgSquadsThreshold');
+      payload.squadsMembers = getVal('cfgSquadsMembers');
+    }
     if (document.getElementById('cfgSolRpc')) payload.solanaRpcUrl = getVal('cfgSolRpc');
     if (document.getElementById('cfgSolBase')) payload.solanaBaseToken = getVal('cfgSolBase');
     if (document.getElementById('cfgDextoolsKey')) payload.dextoolsApiKey = getVal('cfgDextoolsKey');
@@ -1995,7 +2016,239 @@ async function testTelegramConnection(btn) {
   }
 }
 
-let lastVpsSolWallet = null;
+function toggleSquadsFields(enabled) {
+  const container = document.getElementById('squadsFieldsContainer');
+  if (container) {
+    container.style.display = enabled ? 'flex' : 'none';
+    if (enabled) {
+      refreshSquadsProposals();
+    }
+  }
+}
+
+async function refreshSquadsVaultStatus(btnEl) {
+  const statusBox = document.getElementById('squadsStatusContent');
+  if (!statusBox) return;
+
+  const btn = btnEl || document.getElementById('btnVerifySquads');
+  let originalBtnHtml = '';
+  if (btn) {
+    originalBtnHtml = btn.innerHTML;
+    btn.disabled = true;
+    btn.innerHTML = '<span style="display:inline-block; animation: spin 0.8s linear infinite">🔄</span> Verificando...';
+  }
+
+  statusBox.innerHTML = `
+    <div style="display:flex; align-items:center; gap:8px; padding:8px 0; color:var(--y)">
+      <div style="width:14px; height:14px; border:2px solid rgba(234,179,8,0.2); border-top-color:#eab308; border-radius:50%; animation: spin 0.8s linear infinite; shrink:0"></div>
+      <span style="font-size:10.5px; font-weight:500">Consultando estado de Bóveda On-Chain en la Red Solana...</span>
+    </div>
+  `;
+
+  try {
+    const res = await myFetch('/api/squads/status');
+    if (!res) throw new Error("Sin respuesta del servidor");
+    
+    if (!res.vaultAddress) {
+      statusBox.innerHTML = '<span style="color:var(--t2)">⚠️ Ingrese la dirección de la Bóveda (Vault PDA) arriba para verificar el estado On-Chain.</span>';
+      return;
+    }
+
+    if (!res.isVaultValid) {
+      statusBox.innerHTML = `<span style="color:var(--r)">❌ No se pudo conectar a la Bóveda On-Chain (${escapeHtml(res.vaultAddress)}). Verifica el RPC o la dirección.</span>`;
+      return;
+    }
+
+    const membersList = res.members && res.members.length > 0 
+      ? res.members.map(m => `<code style="font-size:9.5px">${escapeHtml(m.slice(0,6))}...${escapeHtml(m.slice(-4))}</code>`).join(', ')
+      : 'No especificados';
+
+    const lastCheckedTime = new Date().toLocaleTimeString('es-ES', { hour: '2-digit', minute: '2-digit', second: '2-digit' });
+    const slotFormatted = res.latestSlot ? `#${res.latestSlot.toLocaleString()}` : 'N/A';
+
+    statusBox.innerHTML = `
+      <!-- INDICADOR DE SALUD DEL ÚLTIMO BLOQUE -->
+      <div style="display:flex; align-items:center; justify-content:space-between; background:rgba(16,185,129,0.08); border:1px solid rgba(16,185,129,0.25); border-radius:4px; padding:6px 8px; margin-bottom:8px">
+        <div style="display:flex; align-items:center; gap:6px">
+          <span style="width:8px; height:8px; border-radius:50%; background:#10b981; display:inline-block; box-shadow:0 0 6px #10b981; animation: pulse 2s infinite"></span>
+          <span style="font-size:10px; font-weight:700; color:#10b981; letter-spacing:0.02em">RED SOLANA ACTIVA (SALUD 100%)</span>
+        </div>
+        <div style="font-size:9.5px; color:var(--t2); font-family:var(--mono)">
+          <b>Slot:</b> <span style="color:var(--t1)">${slotFormatted}</span> <span style="color:var(--t2); font-size:8.5px">(${lastCheckedTime})</span>
+        </div>
+      </div>
+
+      <!-- LAYOUT DE 2 COLUMNAS: SALDOS VS GOBERNANZA -->
+      <div style="display:grid; grid-template-columns: 1fr 1fr; gap:10px;">
+        <!-- COLUMNA 1: SALDOS DE LA BÓVEDA -->
+        <div style="background:rgba(255,255,255,0.02); padding:8px 10px; border-radius:5px; border:1px solid var(--bdr); display:flex; flex-direction:column; gap:6px">
+          <div style="font-size:9.5px; font-weight:700; color:#10b981; text-transform:uppercase; letter-spacing:0.04em; display:flex; align-items:center; gap:4px; border-bottom:1px solid var(--bdr); padding-bottom:4px">
+            💰 Saldos de Activos
+          </div>
+          <div>
+            <div style="font-size:9px; color:var(--t2); font-weight:600">SOLANA (SOL)</div>
+            <div style="font-size:13px; font-weight:700; color:#10b981">${res.solBalance ? res.solBalance.toFixed(4) : '0.0000'} SOL</div>
+          </div>
+          <div style="display:flex; gap:12px">
+            <div>
+              <div style="font-size:9px; color:var(--t2); font-weight:600">USDC</div>
+              <div style="font-size:11.5px; font-weight:700; color:var(--b)">$${res.usdcBalance ? res.usdcBalance.toFixed(2) : '0.00'}</div>
+            </div>
+            <div>
+              <div style="font-size:9px; color:var(--t2); font-weight:600">USDT</div>
+              <div style="font-size:11.5px; font-weight:700; color:var(--b)">$${res.usdtBalance ? res.usdtBalance.toFixed(2) : '0.00'}</div>
+            </div>
+          </div>
+        </div>
+
+        <!-- COLUMNA 2: GOBERNANZA Y MIEMBROS -->
+        <div style="background:rgba(255,255,255,0.02); padding:8px 10px; border-radius:5px; border:1px solid var(--bdr); display:flex; flex-direction:column; gap:6px">
+          <div style="font-size:9.5px; font-weight:700; color:#38bdf8; text-transform:uppercase; letter-spacing:0.04em; display:flex; align-items:center; gap:4px; border-bottom:1px solid var(--bdr); padding-bottom:4px">
+            🛡️ Reglas y Miembros
+          </div>
+          <div>
+            <div style="font-size:9px; color:var(--t2); font-weight:600">UMBRAL MULTAFIRMA (M-de-N)</div>
+            <div style="font-size:11px; font-weight:700; color:var(--t1)">Requiere <span style="color:#10b981; font-size:12px">${res.threshold}</span> de <span style="color:var(--t1)">${res.members ? res.members.length : 0}</span> Firmas</div>
+          </div>
+          <div>
+            <div style="font-size:9px; color:var(--t2); font-weight:600; margin-bottom:2px">FIRMANTES AUTORIZADOS</div>
+            <div style="font-size:9.5px; color:var(--t1); line-height:1.4; word-break:break-all">
+              ${membersList}
+            </div>
+          </div>
+        </div>
+      </div>
+    `;
+  } catch (e) {
+    statusBox.innerHTML = `<span style="color:var(--r)">Error al consultar Bóveda: ${escapeHtml(e.message)}</span>`;
+  } finally {
+    if (btn) {
+      btn.disabled = false;
+      btn.innerHTML = originalBtnHtml || '🔄 Verificar On-Chain';
+    }
+  }
+}
+
+async function proposeSquadsWithdrawal() {
+  const dest = document.getElementById('sqWithdrawDest') ? document.getElementById('sqWithdrawDest').value.trim() : '';
+  const amt = document.getElementById('sqWithdrawAmt') ? parseFloat(document.getElementById('sqWithdrawAmt').value) : 0;
+  const asset = document.getElementById('sqWithdrawAsset') ? document.getElementById('sqWithdrawAsset').value : 'SOL';
+
+  if (!dest) {
+    alert('Por favor especifica la wallet de destino para el retiro.');
+    return;
+  }
+  if (!amt || amt <= 0) {
+    alert('Ingresa un monto válido mayor a 0.');
+    return;
+  }
+
+  if (!confirm(`¿Confirmas que deseas crear una Propuesta de Retiro Multafirma Squads V4 por ${amt} ${asset} hacia:\n${dest}?`)) {
+    return;
+  }
+
+  try {
+    const res = await myFetch('/api/squads/propose-withdrawal', {
+      method: 'POST',
+      body: JSON.stringify({ destination: dest, amount: amt, asset: asset })
+    });
+
+    if (res && res.status === 'ok') {
+      alert(`✅ Propuesta Squads Creada con Éxito!\n\nID Propuesta: ${res.proposalId}\nMonto: ${res.amount} ${res.asset}\n\nSe ha enviado una notificación a Telegram. Abre tu Phantom o App Squads para aprobar y ejecutar las firmas.`);
+      if (document.getElementById('sqWithdrawAmt')) document.getElementById('sqWithdrawAmt').value = '';
+      refreshSquadsProposals();
+    } else {
+      alert('⚠️ Error al crear propuesta: ' + (res.error || 'Respuesta desconocida'));
+    }
+  } catch (e) {
+    alert('❌ Error al proponer retiro Squads: ' + e.message);
+  }
+}
+
+async function refreshSquadsProposals() {
+  const container = document.getElementById('squadsProposalsHistory');
+  if (!container) return;
+  container.innerHTML = '<div style="color:var(--y); text-align:center; padding:10px">⏳ Cargando solicitudes de retiro...</div>';
+
+  try {
+    const res = await myFetch('/api/squads/proposals');
+    if (!res || !Array.isArray(res.proposals) || res.proposals.length === 0) {
+      container.innerHTML = '<div style="color:var(--t2); text-align:center; padding:12px; background:rgba(0,0,0,0.2); border-radius:4px; border:1px solid var(--bdr)">No hay solicitudes de retiro registradas aún.</div>';
+      return;
+    }
+
+    let html = `
+      <table style="width:100%; border-collapse:collapse; font-size:9.5px; text-align:left">
+        <thead>
+          <tr style="border-bottom:1px solid var(--bdr); color:var(--t2)">
+            <th style="padding:4px">ID Propuesta</th>
+            <th style="padding:4px">Monto</th>
+            <th style="padding:4px">Wallet Destino</th>
+            <th style="padding:4px">Estado</th>
+            <th style="padding:4px">Fecha</th>
+            <th style="padding:4px; text-align:right">Acciones</th>
+          </tr>
+        </thead>
+        <tbody>
+    `;
+
+    res.proposals.forEach(p => {
+      let badgeStyle = 'background:rgba(234,179,8,0.15); color:#eab308; border:1px solid rgba(234,179,8,0.3)';
+      let statusLabel = '⏳ Pendiente';
+
+      if (p.status === 'aprobado') {
+        badgeStyle = 'background:rgba(16,185,129,0.15); color:#10b981; border:1px solid rgba(16,185,129,0.3)';
+        statusLabel = '✅ Aprobado / Ejecutado';
+      } else if (p.status === 'rechazado') {
+        badgeStyle = 'background:rgba(239,68,68,0.15); color:#ef4444; border:1px solid rgba(239,68,68,0.3)';
+        statusLabel = '❌ Rechazado';
+      }
+
+      const destShort = p.destination ? `${p.destination.slice(0,6)}...${p.destination.slice(-4)}` : 'N/A';
+      const dateStr = p.createdAt ? new Date(p.createdAt).toLocaleString('es-ES', { month:'short', day:'2-digit', hour:'2-digit', minute:'2-digit' }) : 'N/A';
+
+      html += `
+        <tr style="border-bottom:1px solid rgba(255,255,255,0.05)">
+          <td style="padding:5px; font-family:var(--mono); font-weight:600; color:var(--t1)">${escapeHtml(p.id)}</td>
+          <td style="padding:5px; font-weight:700; color:#10b981">${p.amount} ${escapeHtml(p.asset)}</td>
+          <td style="padding:5px; font-family:var(--mono)" title="${escapeHtml(p.destination)}">${escapeHtml(destShort)}</td>
+          <td style="padding:5px">
+            <span class="badge" style="${badgeStyle}; font-size:8.5px; padding:1px 5px">${statusLabel}</span>
+          </td>
+          <td style="padding:5px; color:var(--t2); font-size:8.5px">${dateStr}</td>
+          <td style="padding:5px; text-align:right">
+            ${p.status === 'pendiente' ? `
+              <button class="btn btn-g" style="font-size:8px; padding:2px 5px; margin-right:2px" onclick="changeSquadsPropStatus('${p.id}', 'aprobado')">Aprobar</button>
+              <button class="btn btn-r" style="font-size:8px; padding:2px 5px" onclick="changeSquadsPropStatus('${p.id}', 'rechazado')">Rechazar</button>
+            ` : '<span style="color:var(--t2); font-size:8px">-</span>'}
+          </td>
+        </tr>
+      `;
+    });
+
+    html += '</tbody></table>';
+    container.innerHTML = html;
+  } catch (e) {
+    container.innerHTML = `<div style="color:var(--r); text-align:center; padding:8px">Error al cargar historial: ${escapeHtml(e.message)}</div>`;
+  }
+}
+
+async function changeSquadsPropStatus(proposalId, status) {
+  if (!confirm(`¿Deseas actualizar el estado de la propuesta ${proposalId} a '${status.toUpperCase()}'?`)) return;
+  try {
+    const res = await myFetch('/api/squads/update-proposal-status', {
+      method: 'POST',
+      body: JSON.stringify({ proposalId, status })
+    });
+    if (res && res.status === 'ok') {
+      refreshSquadsProposals();
+    } else {
+      alert('Error: ' + (res.error || 'Respuesta inválida'));
+    }
+  } catch (e) {
+    alert('Error al actualizar estado: ' + e.message);
+  }
+}
 function updateSolanaVpsWalletUI(vpsSolWallet) {
   lastVpsSolWallet = vpsSolWallet;
   const el = document.getElementById('solanaVpsWallet');
@@ -5393,6 +5646,98 @@ addLog('DIP HUNTER v6 listo — Escáner + Monitor 10s + Auto-Ejecución + Edito
               <input type="text" id="cfgTgChat" class="inp" placeholder="-100xxxxxxx" style="width:100%">
             </div>
             <button id="btnTestTg" class="btn btn-b" style="width:100%;font-size:10px;padding:5px 10px;margin-top:2px" onclick="testTelegramConnection(this)">🔌 Probar Mensaje de Telegram</button>
+          </div>
+
+          <!-- SECCIÓN LISTA BLANCA DE RETIROS -->
+          <div style="border-top:1px solid var(--bdr);padding-top:12px;">
+            <div style="font-weight:600;color:var(--g);font-size:11px;margin-bottom:6px;text-transform:uppercase;letter-spacing:0.05em">🔒 Lista Blanca de Direcciones de Retiro</div>
+            <div style="font-size:10px;color:var(--t2);margin-bottom:6px">Direcciones de Solana autorizadas para recibir retiros (separadas por coma). Si configuras alguna, el servidor rechazará cualquier transferencia a direcciones fuera de la lista.</div>
+            <input type="text" id="cfgAllowedWithdrawalAddresses" class="inp" placeholder="Ej: 7Xw3...A8bK, 9Pq1...M5zL" style="width:100%; font-family:var(--mono); font-size:10.5px;">
+          </div>
+
+          <!-- SECCIÓN SQUADS V4 MULTISIG VAULT -->
+          <div style="border-top:1px solid var(--bdr);padding-top:12px;">
+            <div style="display:flex;align-items:center;justify-content:space-between;margin-bottom:6px">
+              <div style="font-weight:600;color:#10b981;font-size:11px;text-transform:uppercase;letter-spacing:0.05em;display:flex;align-items:center;gap:6px">
+                🏛️ Bóveda Squads Protocol V4 (Multisig Treasury)
+              </div>
+              <span class="badge" style="background:rgba(16,185,129,0.15);color:#10b981;border:1px solid rgba(16,185,129,0.3);font-size:9px">Máxima Seguridad On-Chain</span>
+            </div>
+            <div style="font-size:10px;color:var(--t2);line-height:1.4;margin-bottom:10px">
+              Resguarda la tesorería del bot en un Smart Contract Multisig (Squads V4). <b>Aunque un atacante obtenga la clave privada del bot o Phantom, NO PODRÁ retirar fondos</b> sin la aprobación M-de-N de tu billetera principal (ej. Phantom en tu celular / Ledger).
+            </div>
+
+            <div style="margin-bottom:8px;display:flex;align-items:center;gap:8px;background:rgba(16,185,129,0.05);padding:8px;border-radius:4px;border:1px solid rgba(16,185,129,0.2)">
+              <input type="checkbox" id="cfgSquadsEnabled" style="cursor:pointer" onchange="toggleSquadsFields(this.checked)">
+              <label for="cfgSquadsEnabled" style="font-size:11px;color:var(--t1);cursor:pointer;font-weight:600;user-select:none;">Habilitar Tesorería Multafirma Squads V4</label>
+            </div>
+
+            <div id="squadsFieldsContainer" style="display:none; flex-direction:column; gap:8px; margin-bottom:10px">
+              <div style="display:flex;align-items:center;gap:8px;">
+                <input type="checkbox" id="cfgSquadsStrictGovernance" style="cursor:pointer" checked>
+                <label for="cfgSquadsStrictGovernance" style="font-size:10.5px;color:var(--t1);cursor:pointer;user-select:none;">Gobernanza Estricta (Bloquear cualquier retiro directo con la llave privada del bot)</label>
+              </div>
+
+              <div>
+                <div style="font-size:10px;color:var(--t2);margin-bottom:4px">Dirección de la Bóveda (Squads Vault PDA)</div>
+                <input type="text" id="cfgSquadsVaultAddress" class="inp" placeholder="Ej: 5XwZ...q89P (Dirección pública de la Bóveda Squads)" style="width:100%; font-family:var(--mono); font-size:10.5px;">
+              </div>
+
+              <div style="display:grid; grid-template-columns:1fr 1fr; gap:8px;">
+                <div>
+                  <div style="font-size:10px;color:var(--t2);margin-bottom:4px">Cuenta Multisig Squads</div>
+                  <input type="text" id="cfgSquadsMultisigAddress" class="inp" placeholder="Ej: 8Jk2...m12X" style="width:100%; font-family:var(--mono); font-size:10px;">
+                </div>
+                <div>
+                  <div style="font-size:10px;color:var(--t2);margin-bottom:4px">Umbral Firmas (Threshold M-de-N)</div>
+                  <input type="number" id="cfgSquadsThreshold" class="inp" placeholder="2" min="1" max="10" style="width:100%; font-size:10.5px;">
+                </div>
+              </div>
+
+              <div>
+                <div style="font-size:10px;color:var(--t2);margin-bottom:4px">Firmantes Autorizados (Miembros Squads)</div>
+                <input type="text" id="cfgSquadsMembers" class="inp" placeholder="Ej: WalletPhantom...1, WalletHardware...2" style="width:100%; font-family:var(--mono); font-size:10px;">
+              </div>
+
+              <!-- CARD DE ESTADO DE LA BÓVEDA -->
+              <div id="squadsVaultStatusBox" style="background:var(--bg2); border:1px solid var(--bdr); border-radius:6px; padding:10px; margin-top:4px">
+                <div style="display:flex; align-items:center; justify-content:space-between; margin-bottom:6px">
+                  <span style="font-size:10px; font-weight:600; color:var(--t1)">ESTADO ON-CHAIN DE LA BÓVEDA</span>
+                  <button id="btnVerifySquads" class="btn btn-b" style="font-size:9px; padding:3px 8px" onclick="refreshSquadsVaultStatus(this)">🔄 Verificar On-Chain</button>
+                </div>
+                <div id="squadsStatusContent" style="font-size:10.5px; color:var(--t2)">
+                  <i>Cargando datos de la Bóveda...</i>
+                </div>
+              </div>
+
+              <!-- BOTÓN DE PROPUESTA DE RETIRO SQUADS -->
+              <div style="border-top:1px dashed var(--bdr); padding-top:8px; margin-top:4px">
+                <div style="font-size:10px; font-weight:600; color:var(--t1); margin-bottom:4px">📝 Proponer Retiro desde Bóveda Squads</div>
+                <div style="display:grid; grid-template-columns: 2fr 1fr 1fr auto; gap:6px;">
+                  <input type="text" id="sqWithdrawDest" class="inp" placeholder="Wallet Destino (En Lista Blanca)" style="font-family:var(--mono); font-size:10px">
+                  <input type="number" id="sqWithdrawAmt" class="inp" placeholder="Monto" step="0.01" style="font-size:10px">
+                  <select id="sqWithdrawAsset" class="inp" style="font-size:10px">
+                    <option value="SOL">SOL</option>
+                    <option value="USDC">USDC</option>
+                    <option value="USDT">USDT</option>
+                  </select>
+                  <button class="btn btn-g" style="font-size:10px; padding:4px 10px; font-weight:600" onclick="proposeSquadsWithdrawal()">🛡️ Proponer Retiro</button>
+                </div>
+              </div>
+
+              <!-- HISTORIAL DE SOLICITUDES DE RETIRO SQUADS -->
+              <div style="border-top:1px dashed var(--bdr); padding-top:10px; margin-top:8px">
+                <div style="display:flex; align-items:center; justify-content:space-between; margin-bottom:6px">
+                  <div style="font-size:10px; font-weight:600; color:var(--t1); display:flex; align-items:center; gap:6px">
+                    📜 Historial de Solicitudes de Retiro Multafirma
+                  </div>
+                  <button class="btn btn-b" style="font-size:9px; padding:2px 8px" onclick="refreshSquadsProposals()">🔄 Actualizar Historial</button>
+                </div>
+                <div id="squadsProposalsHistory" style="max-height:220px; overflow-y:auto; font-size:10px">
+                  <div style="color:var(--t2); text-align:center; padding:12px">Cargando historial de propuestas...</div>
+                </div>
+              </div>
+            </div>
           </div>
 
           <!-- SECCIÓN DEXTOOLS & TWITTER -->
